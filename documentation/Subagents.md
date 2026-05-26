@@ -1,6 +1,8 @@
 # Subagents
 Subagents is the list of agents can be delegated to perform some specific task. Treat subagents as experts will be delegated to do some specifc task matches to their `role` and `roleDescription`. These agents carries specific definition.
 
+> ***Subagents*** in **RavenADK** are defined as separate concept from tools. What makes them clearly more performant
+
 ## Subagent Work Description
 1. Subagents are made to perform some very specific task(s) by having specific: `role`, `roleDescription`, `systemPrompt`, `model` and `tools`
 2. Subagents inherits from the parent agent: 
