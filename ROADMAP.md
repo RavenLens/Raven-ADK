@@ -70,3 +70,4 @@
 13. RavenHub
 14. TODO tools and events
     - ReAct agent once executes todo tool communicates the updation state and events base on this tools
+15. Add OpenRouter support as LLMs handler that will give hand for LLMs
