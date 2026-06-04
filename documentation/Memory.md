@@ -8,10 +8,10 @@ Finally you've full agency to decide what agent has to remember, what should so 
 
 ## Configuring memory for ReAct Agent
 ```typescript
-    import { ReActAgent } from "raven-adk/agents";
-    import { tool } from "raven-adk/tools";
-    import { SkillMongoDBStore, SkillDiskStore } from "raven-adk/skills/store";
-    import { MemoryChromaDBStore } from "raven-adk/memory/store";
+    import { ReActAgent } from "@ravenlens/raven-adk/agents";
+    import { tool } from "@ravenlens/raven-adk/tools";
+    import { SkillMongoDBStore, SkillDiskStore } from "@ravenlens/raven-adk/skills/store";
+    import { MemoryChromaDBStore } from "@ravenlens/raven-adk/memory/store";
 
     const reactAgent = new ReActAgent({
         systemPrompt: `Your system prompt`,
@@ -56,7 +56,7 @@ Finally you've full agency to decide what agent has to remember, what should so 
         // import { MongoClient } from 'mongodb';
         // const client = new MongoClient(process.env.MONGODB_URI ?? 'mongodb://localhost:27017');
         // await client.connect();
-        // const db = client.db('raven-adk');
+        // const db = client.db('@ravenlens/raven-adk');
         // const skillsCollection = db.collection('skills');
         //
         // Then pass `skillsCollection` into the store configuration:

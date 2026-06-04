@@ -24,7 +24,7 @@ The returned `LLMAnswer` is identical to a normal `invoke()` call, except the AI
 ### OpenAI
 
 ```ts
-import { OpenAI } from "raven-adk";
+import { OpenAI } from "@ravenlens/raven-adk";
 import { z } from "zod";
 
 const model = new OpenAI({
@@ -51,7 +51,7 @@ console.log(aiMessage.structuredOutput);
 ### Anthropic
 
 ```ts
-import { Anthropic } from "raven-adk";
+import { Anthropic } from "@ravenlens/raven-adk";
 import { z } from "zod";
 
 const model = new Anthropic({
@@ -75,7 +75,7 @@ console.log(aiMessage.structuredOutput);
 ### RunPod
 
 ```ts
-import { RunPod } from "raven-adk";
+import { RunPod } from "@ravenlens/raven-adk";
 import { z } from "zod";
 
 const model = new RunPod({
@@ -105,7 +105,7 @@ console.log(aiMessage.structuredOutput);
 `ReActAgent` exposes `invokeStructuredOutput` at the agent level. This is the recommended way to use structured output when your task involves **tools, reasoning loops, or multi-step work** — the agent runs its full ReAct loop to gather information and then produces the final structured object from everything it learned.
 
 ```ts
-import { ReActAgent, OpenAI } from "raven-adk";
+import { ReActAgent, OpenAI } from "@ravenlens/raven-adk";
 import { z } from "zod";
 
 const model = new OpenAI({

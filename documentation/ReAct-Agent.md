@@ -31,13 +31,13 @@ The `ReActAgent` is built on an event-driven architecture. You can listen to var
 ## Example Usage
 
 ```typescript
-import { ReActAgent } from "raven-adk/agents";
-import { tool } from "raven-adk/tools";
-import { OpenAI, Anthropic } from "raven-adk/models";
+import { ReActAgent } from "@ravenlens/raven-adk/agents";
+import { tool } from "@ravenlens/raven-adk/tools";
+import { OpenAI, Anthropic } from "@ravenlens/raven-adk/models";
 import * as z from "zod";
-import { SkillMongoDBStore } from "raven-adk/skills/store";
-import { MemoryChromaDBStore } from "raven-adk/memory/store";
-import { HITLSocketIo } from "raven-adk/tools/hitl";
+import { SkillMongoDBStore } from "@ravenlens/raven-adk/skills/store";
+import { MemoryChromaDBStore } from "@ravenlens/raven-adk/memory/store";
+import { HITLSocketIo } from "@ravenlens/raven-adk/tools/hitl";
 
 const reactAgent = new ReActAgent({
     model: new OpenAI({

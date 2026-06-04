@@ -14,8 +14,8 @@ Subagents is the list of agents can be delegated to perform some specific task. 
 Add the subagents to the `ReActAgent` by giving the `subagents` field
 
 ```typescript
-    import { ReActAgent } from "raven-adk/agents";
-    import { OpenAI, Anthropic } from "raven-adk/models";
+    import { ReActAgent } from "@ravenlens/raven-adk/agents";
+    import { OpenAI, Anthropic } from "@ravenlens/raven-adk/models";
 
     const reactAgent = new ReActAgent({
         model: new OpenAI({

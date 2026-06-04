@@ -1,11 +1,22 @@
 # Raven ADK
+
+[![npm version](https://img.shields.io/npm/v/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
+[![npm downloads](https://img.shields.io/npm/dm/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
+[![License](https://img.shields.io/badge/license-ISC-blue.svg)](https://opensource.org/licenses/ISC)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289da?logo=discord&logoColor=white)](https://discord.gg/eFfVjDj7Xd)
+
 Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor
+
+## Installation
+```bash
+npm install @ravenlens/raven-adk
+```
 
 ## GraphBased
 Use graph with this style to make your own workflow
 
 ```typescript
-import { Graph, GraphMarkers } from "raven-adk/graph";
+import { Graph, GraphMarkers } from "@ravenlens/@ravenlens/raven-adk/graph";
 
 const graphState = { invokeTimes: 0 };
 const graph = new Graph(graphState);
@@ -69,8 +80,8 @@ ReAct Agent is the standalone agent of RavenADK -> it's about to Reason atop of 
 > **ReAct** agent will: Reason, Make Actions, Use tools, Produce Thoughts and at the end produce output.
 
 ```typescript
-    import { ReActAgent } from "raven-adk/agents";
-    import { OpenAI } from "raven-adk/models";
+    import { ReActAgent } from "@ravenlens/raven-adk/agents";
+    import { OpenAI } from "@ravenlens/raven-adk/models";
 
     const reactAgent = new ReActAgent({
         model: new OpenAI({

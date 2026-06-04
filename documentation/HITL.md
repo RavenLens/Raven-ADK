@@ -29,8 +29,8 @@ Use HITL by creating a HITLSocketIo instance and passing it to the ReAct Agent c
 Example:
 
 ```typescript
-import { ReActAgent } from "raven-adk/agents";
-import { HITLSocketIo } from "raven-adk/tools/hitl";
+import { ReActAgent } from "@ravenlens/raven-adk/agents";
+import { HITLSocketIo } from "@ravenlens/raven-adk/tools/hitl";
 
 const hitl = new HITLSocketIo({
     port: 3000,
