@@ -24,6 +24,19 @@
     "url": "https://github.com/RavenLens/Raven-SDK/issues"
   },
   "homepage": "https://github.com/RavenLens/Raven-SDK#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RavenLens/Raven-SDK.git",
+    "directory": "ravenone-related/libs/Raven ADK"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org/",
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -74,10 +87,10 @@
     "openai": "^6.36.0",
     "runpod-sdk": "^1.1.2",
     "socket.io": "^4.8.3",
-    "vitest": "^4.1.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^25.6.2"
+    "@types/node": "^25.6.2",
+    "vitest": "^4.1.5"
   }
 }
