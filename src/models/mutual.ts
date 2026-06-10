@@ -34,7 +34,7 @@ export interface InvokeOptions {
 }
 
 export interface StandardLLMShema {
-    apiName: "Anthropic" | "OpenAI" | { custom: string };
+    apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
     config: LLMConfig;
     invoke(): Promise<LLMAnswer>;
     invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer>;
