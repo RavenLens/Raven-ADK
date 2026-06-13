@@ -2,6 +2,7 @@ import { Graph, GraphMarkers } from "../graph";
 import { Anthropic } from "../models/anthropic";
 import { LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
+import { Google } from "../models/google";
 import { SchemaMemoryStore } from "./memory/stores/schema";
 import { Memory as MemoryInterface } from "./memory/memory";
 import { SchemaSkillStore } from "./skills/stores/schema";
@@ -13,7 +14,7 @@ import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
 import { RunPod } from "../models/runpod";
 import z from "zod";
 
-type AgentModel = OpenAI | Anthropic | RunPod;
+type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
 export type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt" | "tools"> & {
     role: string;
@@ -31,7 +32,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     skills?: Skills;
     /**
      * It's the agent memory he developed for specific user session or for organization
-     */
+    */
     memory?: Memory;
     tools: Tool<any, any>[];
     /** specify this schema to use the Human In The Loop */

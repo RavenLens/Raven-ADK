@@ -55,6 +55,8 @@ export interface ToolMessage {
      * When parse operation wasn't possible the property has assigned null
      */
     arguments: Record<string, any> | null;
+    /** Optional signature for thinking models (like Google Gemini) */
+    thought_signature?: string;
     /** Available when tool has prompted out the output -> Agent will reason atop of it */
     toolOutput?: string;
     /** Determines has happen error meanwhile tool execution */

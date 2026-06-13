@@ -1,109 +1,102 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ReActAgent } from "../src/agent/ReAct.agent";
+import { ReActAgent } from "../../src/agent/ReAct.agent";
+import { Google } from "../../src/models/google";
+import { tool } from "../../src/agent/tools/tools";
+import { AIMessage } from "../../src/agent/state";
 
-const makeModel = (structuredOutput: Record<string, string>) => {
-    const model = {
-        apiName: "OpenAI" as const,
-        config: {
-            model: "gpt-4.1-mini",
-            apiKey: "test-key",
-            messages: [] as any[],
-            tools: [] as any[]
-        },
-        invoke: vi.fn(async (params: any) => {
-            const currentMessages = params?.messages || model.config.messages || [];
-            const aiMessage = {
-                type: "ai" as const,
-                content: "I have gathered all the information needed."
-            };
-            return {
-                messages: [...currentMessages, aiMessage],
-                answer: [aiMessage],
-                tokens: { input: 10, output: 5, reasoning: 0 }
-            };
-        }),
-        invokeStructuredOutput: vi.fn(async (_schema: z.ZodTypeAny, _maxRetries?: number) => {
-            const aiMessage = {
-                type: "ai" as const,
-                content: JSON.stringify(structuredOutput),
-                structuredOutput
-            };
-            return {
-                messages: [...(model.config.messages ?? []), aiMessage],
-                answer: [aiMessage],
-                tokens: { input: 8, output: 4, reasoning: 0 }
-            };
-        })
-    };
+const makeModel = (structuredOutput: any) => {
+    const model = new Google({
+        model: "gemini-3-flash-preview",
+        apiKey: "test-key"
+    });
+
+    vi.spyOn(model, "invoke").mockImplementation(async (options) => {
+        const currentMessages = options?.messages || model.config.messages || [];
+        const aiMessage = {
+            type: "ai" as const,
+            content: "I have gathered all the information needed."
+        };
+        return {
+            messages: [...currentMessages, aiMessage],
+            answer: [aiMessage],
+            tokens: { input: 10, output: 5, reasoning: 0 }
+        };
+    });
+
+    vi.spyOn(model, "invokeStructuredOutput").mockImplementation(async (_schema: z.ZodTypeAny, _maxRetries?: number) => {
+        const aiMessage = {
+            type: "ai" as const,
+            content: JSON.stringify(structuredOutput),
+            structuredOutput
+        };
+        return {
+            messages: [...(model.config.messages ?? []), aiMessage],
+            answer: [aiMessage],
+            tokens: { input: 8, output: 4, reasoning: 0 }
+        };
+    });
+
     return model;
 };
 
 describe("ReActAgent subagents", () => {
     it("can call a subagent using [[RAVEN_CALL_SUBAGENT]]", async () => {
         let callCount = 0;
-        const mainModel = {
-            apiName: "OpenAI" as const,
-            config: {
-                model: "gpt-4o",
-                apiKey: "test-key",
-                messages: [] as any[],
-                tools: [] as any[]
-            },
-            invoke: vi.fn(async (params: any) => {
-                const currentMessages = params?.messages || mainModel.config.messages || [];
-                callCount++;
-                if (callCount === 1) {
-                    // First invoke, return subagent call
-                    const aiMessage = {
-                        type: "ai" as const,
-                        content: "[[RAVEN_CALL_SUBAGENT]] Researcher | Find information about Mars."
-                    };
-                    return {
-                        messages: [...currentMessages, aiMessage],
-                        answer: [aiMessage],
-                        tokens: { input: 10, output: 5, reasoning: 0 }
-                    };
-                } else {
-                    // Third invoke (after subagent returns), conclude
-                    const aiMessage = {
-                        type: "ai" as const,
-                        content: "The researcher found the info. Mars is a planet."
-                    };
-                    return {
-                        messages: [...currentMessages, aiMessage],
-                        answer: [aiMessage],
-                        tokens: { input: 10, output: 5, reasoning: 0 }
-                    };
-                }
-            })
-        };
+        const mainModel = new Google({
+            model: "gemini-3-flash-preview",
+            apiKey: "test-key"
+        });
 
-        const subModel = {
-            apiName: "OpenAI" as const,
-            config: {
-                model: "gpt-4o",
-                apiKey: "test-key",
-                messages: [] as any[],
-                tools: [] as any[]
-            },
-            invoke: vi.fn(async (params: any) => {
-                const currentMessages = params?.messages || subModel.config.messages || [];
-                // Subagent invoke
+        vi.spyOn(mainModel, "invoke").mockImplementation(async (options) => {
+            const currentMessages = options?.messages || mainModel.config.messages || [];
+            callCount++;
+            if (callCount === 1) {
+                // First invoke, return subagent call
                 const aiMessage = {
                     type: "ai" as const,
-                    content: "Mars is the fourth planet from the Sun."
+                    content: "[[RAVEN_CALL_SUBAGENT]] Researcher | Find information about Mars."
                 };
                 return {
                     messages: [...currentMessages, aiMessage],
                     answer: [aiMessage],
-                    tokens: { input: 20, output: 10, reasoning: 0 }
+                    tokens: { input: 10, output: 5, reasoning: 0 }
                 };
-            })
-        };
+            } else {
+                // Third invoke (after subagent returns), conclude
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "The researcher found the info. Mars is a planet."
+                };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            }
+        });
+
+        const subModel = new Google({
+            model: "gemini-3-flash-preview",
+            apiKey: "test-key"
+        });
+
+        vi.spyOn(subModel, "invoke").mockImplementation(async (options) => {
+            const currentMessages = options?.messages || subModel.config.messages || [];
+            // Subagent invoke
+            const aiMessage = {
+                type: "ai" as const,
+                content: "Mars is the fourth planet from the Sun."
+            };
+            return {
+                messages: [...currentMessages, aiMessage],
+                answer: [aiMessage],
+                tokens: { input: 20, output: 10, reasoning: 0 }
+            };
+        });
 
         const agent = new ReActAgent({
-            model: mainModel as any,
+            model: mainModel,
             systemPrompt: "You are the main agent.",
             messages: [{ type: "user", content: "Tell me about Mars." }],
             tools: [],
@@ -111,7 +104,7 @@ describe("ReActAgent subagents", () => {
             subagents: [{
                 role: "Researcher",
                 roleDescription: "Searches for info",
-                model: subModel as any,
+                model: subModel,
                 systemPrompt: "You are a researcher.",
                 tools: []
             }]
@@ -144,7 +137,7 @@ describe("ReActAgent structured output", () => {
         const model = makeModel(structuredOutput);
 
         const agent = new ReActAgent({
-            model: model as any,
+            model: model,
             systemPrompt: "You are a structured-output agent.",
             messages: [{ type: "user", content: "Return the target city and country." }],
             tools: [],
@@ -166,10 +159,10 @@ describe("ReActAgent structured output", () => {
 
     it("concludeWithStructuredOutput uses retriesCount from graph state", async () => {
         const structuredOutput = { name: "Alice", age: 30 };
-        const model = makeModel(structuredOutput as any);
+        const model = makeModel(structuredOutput);
 
         const agent = new ReActAgent({
-            model: model as any,
+            model: model,
             systemPrompt: "Extract structured data.",
             messages: [{ type: "user", content: "Who is the person mentioned?" }],
             tools: [],
@@ -189,16 +182,22 @@ describe("ReActAgent structured output", () => {
         // the final message carries structuredOutput
         const lastMessage = result.messages.at(-1);
         expect(lastMessage?.type).toBe("ai");
-        expect((lastMessage as any).structuredOutput).toEqual(structuredOutput);
+        expect((lastMessage as AIMessage).structuredOutput).toEqual(structuredOutput);
     });
 
     it("preserves model config after concludeWithStructuredOutput", async () => {
         const structuredOutput = { status: "done" };
         const model = makeModel(structuredOutput);
 
-        const originalTools = [{ name: "my_tool" }] as any[];
+        const originalTools = [
+            tool(async () => "result", {
+                toolName: "my_tool",
+                toolDescription: "A test tool",
+                toolArguments: z.object({})
+            })
+        ];
         const agent = new ReActAgent({
-            model: model as any,
+            model: model,
             systemPrompt: "Agent with tools.",
             messages: [{ type: "user", content: "Do the thing." }],
             tools: originalTools,

@@ -10,7 +10,7 @@ import type {
     Candidate
 } from "@google/genai";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
-import { AIMessage, ToolMessage } from "../agent/state";
+import { AIMessage, ReasoningMessage, ToolMessage } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
@@ -86,7 +86,8 @@ export class Google implements StandardLLMShema {
         const contents: Content[] = [];
         const messages = this.config.messages ?? [];
 
-        for (const message of messages) {
+        for (let i = 0; i < messages.length; i++) {
+            const message = messages[i];
             if (message.type === "system") continue;
 
             switch (message.type) {
@@ -97,7 +98,10 @@ export class Google implements StandardLLMShema {
                     });
                     break;
                 case "ai":
-                    const parts: Part[] = [{ text: message.content ?? "" }];
+                    const parts: Part[] = [];
+                    if (message.content) {
+                        parts.push({ text: message.content });
+                    }
                     if (message.calledTools) {
                         for (const tool of message.calledTools) {
                             parts.push({
@@ -105,23 +109,51 @@ export class Google implements StandardLLMShema {
                                     name: tool.tool_name,
                                     args: tool.arguments ?? {},
                                     id: tool.tool_id
-                                }
-                            });
+                                },
+                                thought_signature: tool.thought_signature,
+                                thoughtSignature: tool.thought_signature
+                            } as any);
                         }
                     }
-                    contents.push({
-                        role: "model",
-                        parts: parts
-                    });
+                    if (parts.length > 0) {
+                        contents.push({
+                            role: "model",
+                            parts: parts
+                        });
+                    }
                     break;
                 case "thinking":
+                    const thinkingParts: Part[] = [{ 
+                        text: message.content,
+                        thought: true,
+                        thoughtSignature: message.signature
+                    } as any];
+
+                    // Look ahead for AI message to combine into a single model turn
+                    if (i + 1 < messages.length && messages[i+1].type === "ai") {
+                        const nextMsg = messages[i+1] as AIMessage;
+                        if (nextMsg.content) {
+                            thinkingParts.push({ text: nextMsg.content });
+                        }
+                        if (nextMsg.calledTools) {
+                            for (const tool of nextMsg.calledTools) {
+                                thinkingParts.push({
+                                    functionCall: {
+                                        name: tool.tool_name,
+                                        args: tool.arguments ?? {},
+                                        id: tool.tool_id
+                                    },
+                                    thought_signature: tool.thought_signature,
+                                    thoughtSignature: tool.thought_signature
+                                } as any);
+                            }
+                        }
+                        i++; // Skip next message
+                    }
+
                     contents.push({
                         role: "model",
-                        parts: [{ 
-                            text: message.content,
-                            thought: true,
-                            thoughtSignature: message.signature
-                        }]
+                        parts: thinkingParts
                     });
                     break;
                 case "tool":
@@ -175,17 +207,34 @@ export class Google implements StandardLLMShema {
 
     private parseResponseToAnswer(response: GenerateContentResponse): LLMAnswer {
         const text = response.text ?? "";
-        const functionCalls = response.functionCalls ?? [];
+        
+        // Extract reasoning (thoughts) if available
+        const thoughts: ReasoningMessage[] = [];
+        const calledTools: ToolMessage[] = [];
+        let lastThoughtSignature: string | undefined;
 
-        const calledTools: ToolMessage[] = functionCalls.map((fc: FunctionCall) => {
-            return {
-                type: "tool",
-                tool_id: fc.id ?? "",
-                tool_name: fc.name,
-                content: JSON.stringify(fc.args),
-                arguments: fc.args as Record<string, any>
-            } satisfies ToolMessage;
-        });
+        if (response.candidates?.[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.text && (part as any).thought) {
+                    lastThoughtSignature = (part as any).thought_signature ?? (part as any).thoughtSignature;
+                    thoughts.push({
+                        type: "thinking",
+                        content: part.text,
+                        signature: lastThoughtSignature
+                    });
+                } else if (part.functionCall) {
+                    const partSignature = (part as any).thought_signature ?? (part as any).thoughtSignature;
+                    calledTools.push({
+                        type: "tool",
+                        tool_id: part.functionCall.id ?? "",
+                        tool_name: part.functionCall.name,
+                        content: JSON.stringify(part.functionCall.args),
+                        arguments: part.functionCall.args as Record<string, any>,
+                        thought_signature: partSignature ?? lastThoughtSignature
+                    });
+                }
+            }
+        }
 
         const aiAnswer: AIMessage = {
             type: "ai",
@@ -193,7 +242,8 @@ export class Google implements StandardLLMShema {
             calledTools: calledTools.length > 0 ? calledTools : undefined
         };
 
-        const answer: (AIMessage | ToolMessage)[] = [
+        const answer: (AIMessage | ToolMessage | ReasoningMessage)[] = [
+            ...thoughts,
             aiAnswer,
             ...calledTools
         ];
@@ -201,7 +251,8 @@ export class Google implements StandardLLMShema {
         return {
             messages: [
                 ...(this.config.messages ?? []),
-                ...answer
+                ...thoughts,
+                aiAnswer
             ],
             answer,
             tokens: {

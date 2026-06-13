@@ -43,11 +43,19 @@
 6. Improve Skills
     - Give instruction what skill is valulable to the `SkillSharedConfig`
     - Make the system to evaluate whether skill ReAct Agent would like to create is what the `instruction` for skill appreciates when specified, when not specified whether is this skill greate and whether does the similar same skill exists
-7. Add support to the:
-    - Google models - with Gemini models
+7. Add support for the:
+    - Google models - with Gemini models (v)
+    - Compressing standards
+        - Make documentation for this
+        - Implement the methods:
+            - Compressing
+            - Storing aside of agent
+    - Playwright support tools for browsing
+        - Make the screens
+        - Read the webpage text
+    - Coding Sandboxes support
     - RLMs - 
     - InfyAgent - Offloading the context to external files and reading the last 10 files and rest to read on demand with regexp, sequence read tools and more
-    - Sandboxes support
 7. Agentic RAG support
     - For typical chatting with ai
     - For [ReAct Agent](./documentation/ReAct-Agent.md)
