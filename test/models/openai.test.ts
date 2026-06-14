@@ -1,11 +1,13 @@
 import "dotenv/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { tool } from "../src/agent/tools/tools";
-import { OpenAI } from "../src/models/openai";
+import { tool } from "../../src/agent/tools/tools";
+import { OpenAI } from "../../src/models/openai";
 
-const { openaiResponsesCreateMock, openaiCtorMock } = vi.hoisted(() => ({
+const { openaiResponsesCreateMock, openaiChatCreateMock, openaiCompletionsCreateMock, openaiCtorMock } = vi.hoisted(() => ({
     openaiResponsesCreateMock: vi.fn(),
+    openaiChatCreateMock: vi.fn(),
+    openaiCompletionsCreateMock: vi.fn(),
     openaiCtorMock: vi.fn()
 }));
 
@@ -13,6 +15,14 @@ vi.mock("openai", () => ({
     OpenAI: class {
         responses = {
             create: openaiResponsesCreateMock
+        };
+        chat = {
+            completions: {
+                create: openaiChatCreateMock
+            }
+        };
+        completions = {
+            create: openaiCompletionsCreateMock
         };
 
         constructor(config: unknown) {
@@ -24,6 +34,8 @@ vi.mock("openai", () => ({
 describe("OpenAI model wrapper", () => {
     beforeEach(() => {
         openaiResponsesCreateMock.mockReset();
+        openaiChatCreateMock.mockReset();
+        openaiCompletionsCreateMock.mockReset();
         openaiCtorMock.mockReset();
     });
 
@@ -321,5 +333,69 @@ describe("OpenAI model wrapper", () => {
                 country: "France"
             }
         });
+    });
+
+    it("falls back to legacy chat completions for non-OpenAI baseURL", async () => {
+        openaiChatCreateMock.mockResolvedValueOnce({
+            id: "chat_1",
+            choices: [{
+                message: { role: "assistant", content: "Chat response" },
+                finish_reason: "stop",
+                index: 0
+            }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+            object: "chat.completion",
+            created: 1,
+            model: "other-model"
+        });
+
+        const model = new OpenAI({
+            model: "other-model",
+            apiKey: "test-key",
+            baseURL: "https://api.runpod.ai/v2/foo/openai/v1",
+            messages: [{ type: "user", content: "Hi" }]
+        });
+
+        const result = await model.invoke();
+
+        expect(openaiChatCreateMock).toHaveBeenCalledTimes(1);
+        expect(openaiChatCreateMock).toHaveBeenCalledWith(expect.objectContaining({
+            model: "other-model",
+            messages: [{ role: "user", content: "Hi" }],
+            stream: false
+        }));
+        expect(result.answer[0].content).toBe("Chat response");
+    });
+
+    it("falls back to completions for base models", async () => {
+        openaiCompletionsCreateMock.mockResolvedValueOnce({
+            id: "cmpl_1",
+            choices: [{
+                text: " Completion response",
+                finish_reason: "length",
+                index: 0
+            }],
+            usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+            object: "text_completion",
+            created: 1,
+            model: "llama-3-base"
+        });
+
+        const model = new OpenAI({
+            model: "llama-3-base",
+            apiKey: "test-key",
+            baseURL: "https://api.runpod.ai/v2/foo/openai/v1",
+            messages: [{ type: "user", content: "Hi" }]
+        });
+
+        const result = await model.invoke();
+
+        expect(openaiCompletionsCreateMock).toHaveBeenCalledTimes(1);
+        expect(openaiCompletionsCreateMock).toHaveBeenCalledWith(expect.objectContaining({
+            model: "llama-3-base",
+            prompt: "User: Hi",
+            stream: false
+        }));
+        expect(result.answer[0].content).toBe("Completion response");
     });
 });

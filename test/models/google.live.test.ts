@@ -1,8 +1,8 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { Google } from "../src/models/google";
-import { AIMessage } from "../src/agent/state";
+import { Google } from "../../src/models/google";
+import { AIMessage } from "../../src/agent/state";
 import { GoogleGenAI } from "@google/genai";
 
 const googleApiKey = (process.env.GEMINI_API_KEY_RAVENADK || process.env.GOOGLE_API_KEY)?.trim();

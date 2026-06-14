@@ -1,6 +1,7 @@
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
+import type * as ChatAPI from "openai/resources/chat/completions";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
 import { AIMessage, ToolMessage } from "../agent/state";
 import { ReasoningEffort } from "openai/resources";
@@ -8,7 +9,12 @@ import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
 export interface OpenAIConfig extends LLMConfig {
-    reasoningEffort?: ReasoningEffort | null
+    reasoningEffort?: ReasoningEffort | null;
+    /** 
+     * Use legacy completions API instead of chat completions. 
+     * Useful for base models that don't support chat templates.
+     */
+    useCompletionsApi?: boolean;
 }
 
 interface OpenAIEvents {
@@ -33,6 +39,14 @@ export class OpenAI implements StandardLLMShema {
             apiKey: this.config.apiKey,
             baseURL: this.baseURL
         })
+    }
+
+    private get isLegacy(): boolean {
+        return !!this.baseURL && !this.baseURL.includes("api.openai.com");
+    }
+
+    private get useCompletions(): boolean {
+        return !!(this.config.useCompletionsApi || this.config.model.toLowerCase().includes("-base"));
     }
 
     onEvent<EventName extends keyof OpenAIEvents>(eventName: EventName, eventListener: OpenAIEvents[EventName]): this {
@@ -103,6 +117,67 @@ export class OpenAI implements StandardLLMShema {
         }) ?? []
     }
 
+    private prepareChatInput(): ChatAPI.ChatCompletionMessageParam[] {
+        return this.config.messages?.map((message => {
+            switch(message.type) {
+                case "system":
+                    return {
+                        role: "system",
+                        content: message.content
+                    } satisfies ChatAPI.ChatCompletionSystemMessageParam
+                case "user":
+                    return {
+                        role: "user",
+                        content: message.content
+                    } satisfies ChatAPI.ChatCompletionUserMessageParam
+                case "ai":
+                    return {
+                        role: "assistant",
+                        content: message.content ?? "",
+                        tool_calls: message.calledTools?.map(tool => ({
+                            id: tool.tool_id,
+                            type: "function",
+                            function: {
+                                name: tool.tool_name,
+                                arguments: tool.content
+                            }
+                        }))
+                    } satisfies ChatAPI.ChatCompletionAssistantMessageParam
+                case "thinking":
+                    return {
+                        role: "assistant",
+                        content: `Assistant thoughts: ${message.content}`
+                    } satisfies ChatAPI.ChatCompletionAssistantMessageParam
+                case "tool":
+                    return {
+                        role: "tool",
+                        tool_call_id: message.tool_id,
+                        content: message.content
+                    } satisfies ChatAPI.ChatCompletionToolMessageParam
+            }
+        })) ?? [];
+    }
+
+    private prepareChatTools(): ChatAPI.ChatCompletionTool[] {
+        return this.config.tools?.map(tool => {
+            return {
+                type: "function",
+                function: {
+                    name: tool.toolConfig.toolName,
+                    description: parseToolDescription(tool.toolConfig),
+                    parameters: (z as any).toJSONSchema(tool.toolConfig.toolArguments)
+                }
+            } satisfies ChatAPI.ChatCompletionTool
+        }) ?? []
+    }
+
+    private prepareCompletionInput(): string {
+        return this.config.messages?.map(message => {
+            const rolePrefix = message.type === "user" ? "User: " : message.type === "ai" ? "Assistant: " : "System: ";
+            return `${rolePrefix}${message.content}`;
+        }).join("\n") ?? "";
+    }
+
     private prepareCreatePayload(): Omit<ResponsesAPI.ResponseCreateParamsBase, "stream"> {
         return {
             model: this.config.model,
@@ -156,6 +231,78 @@ export class OpenAI implements StandardLLMShema {
         };
     }
 
+    private parseChatResponseToAnswer(response: ChatAPI.ChatCompletion): LLMAnswer {
+        const choice = response.choices[0];
+        const answerContentText = choice.message.content?.trim() ? choice.message.content : null;
+        const toolCalls = choice.message.tool_calls ?? [];
+
+        // Map output for answer
+        const calledToolsMessage = toolCalls.map(toolCall => {
+            return {
+                type: "tool",
+                tool_id: toolCall.id,
+                tool_name: toolCall.function.name,
+                content: toolCall.function.arguments,
+                arguments: parseToolCallContentToParams(toolCall.function.arguments)
+            } satisfies ToolMessage;
+        });
+
+        const aiAnswer: AIMessage | null = answerContentText ? {
+            type: "ai",
+            content: answerContentText,
+            calledTools: calledToolsMessage
+        } : null;
+
+        const answer: (AIMessage | ToolMessage)[] = [
+            ...(aiAnswer ? [aiAnswer] : []),
+            ...calledToolsMessage
+        ];
+
+        return {
+            messages: [
+                // Standalone messages
+                ...(this.config.messages ?? []),
+                // AI answer
+                ...answer
+            ],
+            answer,
+            tokens: {
+                input: response.usage?.prompt_tokens ?? 0,
+                output: response.usage?.completion_tokens ?? 0,
+                reasoning: (response.usage as any)?.completion_tokens_details?.reasoning_tokens ?? 0
+            }
+        };
+    }
+
+    private parseCompletionResponseToAnswer(response: any): LLMAnswer {
+        const choice = response.choices[0];
+        const trimmedText = choice.text?.trim();
+        const answerContentText = trimmedText ? trimmedText : null;
+
+        const aiAnswer: AIMessage | null = answerContentText ? {
+            type: "ai",
+            content: answerContentText,
+            calledTools: []
+        } : null;
+
+        const answer: (AIMessage | ToolMessage)[] = aiAnswer ? [aiAnswer] : [];
+
+        return {
+            messages: [
+                // Standalone messages
+                ...(this.config.messages ?? []),
+                // AI answer
+                ...answer
+            ],
+            answer,
+            tokens: {
+                input: response.usage?.prompt_tokens ?? 0,
+                output: response.usage?.completion_tokens ?? 0,
+                reasoning: 0
+            }
+        };
+    }
+
     private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>) {
         for await (const event of stream) {
             this.emitEvent("stream", event);
@@ -169,6 +316,32 @@ export class OpenAI implements StandardLLMShema {
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<ResponsesAPI.ResponseStreamEvent>> {
         if (options?.messages) {
             this.config.messages = options.messages;
+        }
+
+        if (this.isLegacy) {
+            if (options?.stream) {
+                // For now, we don't support streaming events for legacy chat completions 
+                // because the types are quite different and require more extensive mapping.
+                throw new Error("Streaming is not yet supported for legacy OpenAI compatible providers in Raven ADK.");
+            }
+
+            if (this.useCompletions) {
+                const response = await this.openai.completions.create({
+                    model: this.config.model,
+                    prompt: this.prepareCompletionInput(),
+                    stream: false
+                });
+                return this.parseCompletionResponseToAnswer(response);
+            }
+
+            const response = await this.openai.chat.completions.create({
+                model: this.config.model,
+                messages: this.prepareChatInput(),
+                tools: this.prepareChatTools().length > 0 ? this.prepareChatTools() : undefined,
+                stream: false
+            });
+
+            return this.parseChatResponseToAnswer(response);
         }
         
         const basePayload = this.prepareCreatePayload();

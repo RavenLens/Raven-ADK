@@ -239,6 +239,11 @@ export class RunPod implements StandardLLMShema {
 					return choiceMessage.content;
 				}
 			}
+
+			if (Array.isArray(choice.tokens)) {
+				const tokens = choice.tokens as unknown[];
+				return tokens.map((t) => (typeof t === "string" ? t : JSON.stringify(t))).join("");
+			}
 		}
 
 		for (const nestedKey of ["output", "data", "result", "completion", "response", "stream"] as const) {
