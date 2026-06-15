@@ -21,6 +21,29 @@ export type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt"
     roleDescription: string;
 }
 
+export interface ReActAgentPluginSpec {
+    /** It's a plugin name */
+    name: string;
+    /** 
+     * It's a place where agent is going to be execute
+     * TODO: Deliver more plugin execution places: after_tool_execution, "before_tool_execution"
+    */
+    executionWay: "before_agent_run" | "after_agent_run";
+    /**
+     * Runs the plugin logic 
+     * @returns Execution status and changed/unchanged state of agent is assigned in place of prior state, When success is `false` then doesn't use a result to override the agent state
+    */
+    execute<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore>(agentConfig: ReActAgentConfig<Skills, Memory>, graphState: AgentMessagesGraphState): Promise<{
+        /** Status of plugin execution */
+        status: boolean;
+        /** Result of plugin execution. Overrides original 'entry' state only when `status === true` */
+        result?: {
+            agentConfig?: ReActAgentConfig<Skills, Memory>;
+            graphState?: AgentMessagesGraphState;
+        };
+    }>;
+}
+
 export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
     model: AgentModel;
     systemPrompt: string;
@@ -34,6 +57,8 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
      * It's the agent memory he developed for specific user session or for organization
     */
     memory?: Memory;
+    /** It's list with agent plugins are going to be execute and can */
+    plugins?: ReActAgentPluginSpec[];
     tools: Tool<any, any>[];
     /** specify this schema to use the Human In The Loop */
     hitl?: HITLSocketIo;
@@ -55,6 +80,8 @@ interface ReActAgentEvents {
     result_producing_start: () => void | Promise<void>;
     concluding_start: () => void | Promise<void>;
     concluding_end: (conclusion: string) => void | Promise<void>;
+    plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
+    plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => void | Promise<void>;
 }
 
 interface ReActAgentInvokeResult {
@@ -1018,20 +1045,49 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         };
     }
 
+    /** It's responsible to run agent plugins have the specific execution way */
+    private async runPlugins(executionWay: NonNullable<ReActAgentConfig<any, any>["plugins"]>[number]["executionWay"]) {
+        const pluginsToRun = this.agentConfig.plugins?.filter(plugin => plugin.executionWay === executionWay);
+        if (pluginsToRun?.length) {
+            for (const plugin of pluginsToRun) {
+                this.emitEvent("plugin_invoking", plugin.name, plugin.executionWay);
+                
+                const runResult = await plugin.execute(this.agentConfig, this.AgentGraph.graphState);
+                
+                this.emitEvent("plugin_result", plugin.name, plugin.executionWay, runResult);
+
+                if (runResult.status) {
+                    if (runResult.result?.agentConfig) this.agentConfig = runResult.result.agentConfig;
+                    if (runResult.result?.graphState) this.AgentGraph.graphState = runResult.result.graphState;
+                }
+            }
+        }
+    }
+    
     /**
      * 
      * @param withGraphState - is the optional parameter with what the graph will start
      * @returns 
      */
     private async runGraph(withGraphState?: Record<string, any>): Promise<ReActAgentInvokeResult> {
-        this.ensureWrappedSystemPrompt();
-        this.synchronizeModelConfig();
+        // Initialize graph state first so plugins can modify it
         this.AgentGraph.graphState = withGraphState ?? {};
 
-        await this.AgentGraph.start();
-
+        // Runs Plugins
+        await this.runPlugins("before_agent_run");
+        
+        this.ensureWrappedSystemPrompt();
         this.synchronizeModelConfig();
 
+        // Run Agent
+        await this.AgentGraph.start();
+
+        // Sync
+        this.synchronizeModelConfig();
+
+        // Runs plugins
+        await this.runPlugins("after_agent_run");
+        
         return {
             messages: this.agentConfig.messages,
             state: this.AgentGraph.getState()

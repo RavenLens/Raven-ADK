@@ -50,9 +50,21 @@
         - Implement the methods:
             - Compressing
             - Storing aside of agent
-    - Playwright support tools for browsing
-        - Make the screens
-        - Read the webpage text
+    - Playwright support tools for browsing (v)
+        - Make the screens (v)
+        - Read the webpage text (v)
+        - Add AutoClose plugin & Documentation (v)
+        - Don't save snapshot on disk file as default but let a model to handle this instead
+            - Add saving as separate option
+    - Add concept of plugins to ReAct agent and:
+        - make them executable according to place (v)
+        - Make ReAct Agent places invoke - invoke from place from where agent has to be executed (v)
+        - Add AutoClose plugin to browser tools (v)
+            - Add to logic (v)
+            - Add to documentation (v)
+        - Deliver more execution places and make compression so called "compaction" to be compatible
+    - Add support for media in the message
+        - Images
     - Coding Sandboxes support
     - RLMs - 
     - InfyAgent - Offloading the context to external files and reading the last 10 files and rest to read on demand with regexp, sequence read tools and more

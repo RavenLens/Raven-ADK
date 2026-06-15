@@ -54,9 +54,27 @@ Instruct your agent to follow a structured workflow:
 4. **Cleanup**: Always close the browser when the task is finished.
 
 ### 2. Resource Management (Automatic Cleanup)
-Playwright instances consume significant memory. It is crucial to ensure the agent closes the browser. The `BrowserToolsBucket` system prompt explicitly instructs the agent to do this. You can reinforce this in your custom system prompt:
+Playwright instances consume significant memory. It is crucial to ensure the agent closes the browser. There are two ways to handle this:
+
+#### Option A: Instructions (Soft Cleanup)
+The `BrowserToolsBucket` system prompt explicitly instructs the agent to do this. You can reinforce this in your custom system prompt:
 
 > "Always call `close_browser` once you have extracted all the information you need and are ready to provide your final answer."
+
+#### Option B: Plugin (Hard Cleanup - Recommended)
+You can use the `ReActPluginBrowserAutoClose` plugin to ensure the browser is closed at the end of the agent's run, regardless of whether the agent explicitly called the tool.
+
+```typescript
+import { ReActAgent } from "@raven/adk";
+import { BrowserToolsBucket, ReActPluginBrowserAutoClose } from "@raven/adk/tools/general/browser";
+
+const agent = new ReActAgent({
+    model: myModel,
+    systemPrompt: "...",
+    tools: [...BrowserToolsBucket.tools],
+    plugins: [ReActPluginBrowserAutoClose]
+});
+```
 
 ### 3. Visual Analysis
 For complex UIs or debugging, use `take_snapshot` followed by `get_snapshot_base64`. If your model supports vision, you can provide the base64 string to help the agent understand the page's layout.

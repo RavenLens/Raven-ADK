@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as z from 'zod';
 import { Tool, tool } from '../tools';
+import { ReActAgentPluginSpec } from '../../ReAct.agent';
 
 /**
  * Configuration for browser operations
@@ -497,4 +498,20 @@ If open and you're done, call \`close_browser\` to clean up.
         closeBrowserTool,
         isBrowserOpenTool
     ]
+}
+
+export const ReActPluginBrowserAutoClose: ReActAgentPluginSpec = {
+    name: "Browser-AutoClose",
+    executionWay: "after_agent_run",
+    async execute(agentConfig, graphState) {
+        // Only close if it was actually opened
+        if (globalBrowserTool) {
+            await globalBrowserTool.close();
+            globalBrowserTool = null;
+        }
+        
+        return {
+            status: false
+        }
+    },
 }
