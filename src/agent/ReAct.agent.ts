@@ -227,11 +227,19 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
 
                 // Resolve tools -> redirect to same node once again
                 if (state.callTools?.tools.length) {
+                    const toolIds = new Set(state.callTools.tools.map(t => t.tool_id));
+                    
+                    // Filter out existing tool call messages to avoid duplication
+                    this.agentConfig.messages = this.agentConfig.messages.filter(msg => 
+                        !(msg.type === "tool" && toolIds.has(msg.tool_id))
+                    );
+
                     this.agentConfig.messages = [
                         ...this.agentConfig.messages,
                         ...state.callTools.tools.map(toolMessage => ({
                             ...toolMessage,
-                            content: toolMessage.toolOutput ?? toolMessage.content
+                            // Preserve the original content (arguments) and the toolOutput separately
+                            // This ensures model Turn History remains valid for OpenAI Responses API
                         }))
                     ];
 

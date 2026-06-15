@@ -75,34 +75,53 @@ export class OpenAI implements StandardLLMShema {
 
     /** Parse messages and return in Responses API format */
     private prepareInput(): ResponsesAPI.ResponseInputItem[] {
-        return this.config.messages?.map((message => { // Parse messages to openai compatible format
+        const MAX_TOKEN_SIZE = 1000000; // ~1MB limit for individual fields
+        const truncate = (str: string) => str.length > MAX_TOKEN_SIZE ? str.slice(0, MAX_TOKEN_SIZE) + "... [Truncated due to size limits]" : str;
+
+        return this.config.messages?.flatMap((message => { // Parse messages to openai compatible format
             switch(message.type) {
                 case "system":
-                    return {
+                    return [{
                         role: "system",
                         content: message.content
-                    } satisfies ResponsesAPI.EasyInputMessage
+                    } satisfies ResponsesAPI.EasyInputMessage]
                 case "user":
-                    return {
+                    return [{
                         role: "user",
                         content: message.content
-                    } satisfies ResponsesAPI.EasyInputMessage
+                    } satisfies ResponsesAPI.EasyInputMessage]
                 case "ai":
-                    return {
+                    return [{
                         role: "assistant",
                         content: message.content ?? ""
-                    } satisfies ResponsesAPI.EasyInputMessage
+                    } satisfies ResponsesAPI.EasyInputMessage]
                 case "thinking":
-                    return {
+                    return [{
                         role: "assistant",
                         content: `Assistant thoughts: ${message.content}`
-                    } satisfies ResponsesAPI.EasyInputMessage
+                    } satisfies ResponsesAPI.EasyInputMessage]
                 case "tool":
-                    return {
-                        type: "custom_tool_call_output",
+                    // The 'input' field for a call should be the original arguments (JSON string)
+                    const call: ResponsesAPI.ResponseCustomToolCall = {
+                        type: "custom_tool_call",
                         call_id: message.tool_id,
-                        output: message.content
-                    } satisfies ResponsesAPI.ResponseCustomToolCallOutput
+                        name: message.tool_name ?? "",
+                        input: truncate(message.content)
+                    };
+
+                    // If it has output or error, we send both the call and the output
+                    if (message.toolOutput !== undefined || message.toolError !== undefined) {
+                        return [
+                            call,
+                            {
+                                type: "custom_tool_call_output",
+                                call_id: message.tool_id,
+                                output: truncate(message.toolOutput ?? message.toolError ?? "")
+                            } satisfies ResponsesAPI.ResponseCustomToolCallOutput
+                        ];
+                    }
+
+                    return [call];
             }
         })) ?? [];
     }
@@ -152,7 +171,7 @@ export class OpenAI implements StandardLLMShema {
                     return {
                         role: "tool",
                         tool_call_id: message.tool_id,
-                        content: message.content
+                        content: message.toolOutput ?? message.toolError ?? message.content
                     } satisfies ChatAPI.ChatCompletionToolMessageParam
             }
         })) ?? [];
