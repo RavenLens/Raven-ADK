@@ -102,7 +102,70 @@ This subsection describe how the agent memory work.
 
 
 ### Built-In Stores
-- Local disk store: [`SkillDiskStore`](./src/agent/skills/stores/diskStore.ts)
-- MongoDB store: [`SkillMongoDBStore`](./src/agent/skills/stores/mongodbStore.ts)
+- ChromaDB store: [`MemoryChromaDBStore`](../src/agent/memory/stores/chromadb.ts)
 
-You can also build custom stores by implementing [`SchemaSkillStore`](./src/agent/skills/stores/schema.ts).
+## Creating custom memory store
+You can build your own memory store by implementing the `SchemaMemoryStore` interface. This allows you to use any database or storage system of your choice (e.g., PostgreSQL with pgvector, Pinecone, or even a simple file-based system).
+
+```typescript
+import { 
+    SchemaMemoryStore, 
+    SchemaMemoryConfig, 
+    MemoryRecord, 
+    MemoryFetchResult, 
+    FetchBySemantic, 
+    MemoryFetch 
+} from "@ravenlens/raven-adk/memory/store";
+
+export class MyCustomMemoryStore implements SchemaMemoryStore {
+    config: SchemaMemoryConfig;
+
+    constructor(config: SchemaMemoryConfig) {
+        this.config = config;
+    }
+
+    /**
+     * Fetches the memory from your database.
+     * @param fetchBy - The fetch configuration (Semantic or Explore).
+     */
+    async fetchMemory(fetchBy: FetchBySemantic | MemoryFetch.Explore): Promise<MemoryFetchResult> {
+        if (typeof fetchBy !== "number" && fetchBy.by === MemoryFetch.Sematic) {
+            console.log("Fetching semantically using keywords:", fetchBy.words);
+            // Implement your semantic search logic here
+        } else {
+            console.log("Exploring knowledge graph...");
+            // Implement your exploration logic here
+        }
+        
+        return undefined; // Return MemoryRecord | MemoryRecord[] | undefined
+    }
+
+    /**
+     * Saves a memory record to your database.
+     * @param records - The memory record to save.
+     */
+    async saveMemory(records: MemoryRecord): Promise<boolean> {
+        console.log("Saving memory record:", records.title);
+        // Implement your save logic here
+        return true;
+    }
+}
+```
+
+To use your custom store, simply pass it to the `ReActAgent` configuration:
+
+```typescript
+const reactAgent = new ReActAgent({
+    // ... other config
+    memory: new MyCustomMemoryStore({
+        hasToRemember: "User name and preferences",
+        session: "user-123"
+    })
+});
+```
+
+### Built-In Skill Stores (Reference)
+- Local disk store: [`SkillDiskStore`](../src/agent/skills/stores/diskStore.ts)
+- MongoDB store: [`SkillMongoDBStore`](../src/agent/skills/stores/mongodbStore.ts)
+
+You can also build custom skill stores by implementing [`SchemaSkillStore`](../src/agent/skills/stores/schema.ts).

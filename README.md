@@ -4,10 +4,29 @@
 [![npm downloads](https://img.shields.io/npm/dm/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
 [![License](https://img.shields.io/badge/license-ISC-blue.svg)](https://opensource.org/licenses/ISC)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289da?logo=discord&logoColor=white)](https://discord.gg/eFfVjDj7Xd)
+[![Webpage](https://img.shields.io/badge/webpage-visit-blue.svg?logo=google-chrome&logoColor=white)](https://www.ravenalliance.tech)
 
 > Package is in active developement
 
-Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor
+Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor.
+
+#### RavenADK as default supports these SOTA Agentic patterns:
+- ReAct Agent
+- Skills
+    - Exploring and applying
+    - Dynamic Skills solutions
+    - Scripts Execution
+- Memory
+    - Memory exploring and writing (it does build memory about interactions)
+    - Memory stores:
+        - ChromaDB
+        - Expand by writing your own memory store - [check tutorial](./documentation/Memory.md#creating-custom-memory-store)
+- MCP - Model context protocol is to your disposition - [check it](./documentation/MCP.md)
+- Events - Listen agent events and transfer this to UI/TUI to show user what your agent is doing
+- HITL - sometimes actions are risky or agent needs more information and it can ask you for that - [check](./documentation/HITL.md)
+- Builting tools
+    - Browser - run serverless browser on your device - [check](./documentation/tools/Browsing.md)
+<!-- TODO: Add compression showcase and achivements from roadmap -->
 
 ## Installation
 ```bash
@@ -101,9 +120,14 @@ ReAct Agent is the standalone agent of RavenADK -> it's about to Reason atop of 
 
 > [Check full ReAct Agent documentation](./documentation/ReAct-Agent.md)
 
-#### Skills
+### Skills
 Skills of RavenADK are compliant with open [skills standard](https://agentskills.io/home) what is use by e.g: Claude Code, MS Copilot and likelly more
-[Read more about RavenADK skills](./documentation/Skills.md)
+[Read more about RavenADK skills](./documentation/Skills.md). Additional skill features:
+
+- Agent can execute skill scripts
+- Skills can be downloaded from outside of the Agent - from some skill hub (beware of malicious scripts within some community skills)
+- Agent can automatically create new skills if option is turn on
+
 
 ## Documentation
 [Check Documentation](https://app.gitbook.com/invite/ntFRoMEZ2t1Dk0CcVggr/MrsYwAwWVVYKPpgcNpjk)

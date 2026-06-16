@@ -65,9 +65,17 @@
         - Deliver more execution places and make compression so called "compaction" to be compatible
     - Add support for media in the message
         - Images
-    - Coding Sandboxes support
+    - Add skills and memory improvement (Hermes inspired)
+        - Create tree with skills, memory concluded as file with constrained (hard limit) size and added to each prompt
+            - Instruct agent to use its tools to explote these skills / memory as needed base on prompt
+            - Above that skills and memory has to include some conclusions of the most important informations to reduce tokens usage
+            - This gives model instantenous awareness about how to use a skill/memory and more awareness
+    - Coding Sandboxes support like - ship these as tools that allow agent to execute some tools and scripts
+        - https://www.daytona.io/
+        - local
+        - https://vercel.com/docs/sandbox
     - RLMs - 
-    - InfyAgent - Offloading the context to external files and reading the last 10 files and rest to read on demand with regexp, sequence read tools and more
+    - InfyAgent - Offloading the context to external files and reading the last 10 files and rest to read on demand with regexp, sequence read tools and more, delegate subtasks to be done by subagents for better overall agent results
 7. Agentic RAG support
     - For typical chatting with ai
     - For [ReAct Agent](./documentation/ReAct-Agent.md)
@@ -79,6 +87,7 @@
         - Time
         - Skills
         and more
+8.5. Connect with Hermes Agent
 9. Prebuilt tools
     - Network search for:
         - local - the exploration for desktop apps with playwright
