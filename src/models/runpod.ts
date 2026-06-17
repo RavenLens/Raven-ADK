@@ -1,6 +1,6 @@
 import runpodSdk from "runpod-sdk";
 import * as z from "zod";
-import { AIMessage } from "../agent/state";
+import { AIMessage, ResponseInputVideo } from "../agent/state";
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
@@ -94,9 +94,22 @@ export class RunPod implements StandardLLMShema {
 						content: message.content
 					};
 				case "user":
+					let content = message.content;
+					if (message.imageInput) {
+						content += `\n[Image Input: ${message.imageInput.image_url ? message.imageInput.image_url.substring(0, 100) : "base64"}]`;
+					}
+					if (message.audioInput) {
+						content += `\n[Audio Input: format=${message.audioInput.input_audio?.format || "unknown"}]`;
+					}
+					if (message.fileInput) {
+						content += `\n[File Input: ${message.fileInput.filename || "file"}]`;
+					}
+					if (message.videoInput) {
+						content += `\n[Video Input: ${message.videoInput.video_url || "video data"}]`;
+					}
 					return {
 						role: "user",
-						content: message.content
+						content
 					};
 				case "ai":
 					return {
@@ -109,11 +122,15 @@ export class RunPod implements StandardLLMShema {
 						content: `Assistant thoughts: ${message.content}`
 					};
 				case "tool":
+					const runpodToolContent = message.toolOutput ?? message.content;
+					const truncatedRunpodToolContent = runpodToolContent.length > 60000
+						? runpodToolContent.slice(0, 60000) + "... [Truncated due to size limits]"
+						: runpodToolContent;
 					return {
 						role: "user",
 						content: [
 							`Tool response from ${message.tool_name ?? message.tool_id}:`,
-							message.toolOutput ?? message.content
+							truncatedRunpodToolContent
 						].join("\n")
 					};
 			}
@@ -126,13 +143,30 @@ export class RunPod implements StandardLLMShema {
 				case "system":
 					return `System: ${message.content}`;
 				case "user":
-					return `User: ${message.content}`;
+					let userPrompt = `User: ${message.content}`;
+					if (message.imageInput) {
+						userPrompt += `\n[Image Input: ${message.imageInput.image_url ? message.imageInput.image_url.substring(0, 100) : "base64"}]`;
+					}
+					if (message.audioInput) {
+						userPrompt += `\n[Audio Input: format=${message.audioInput.input_audio?.format || "unknown"}]`;
+					}
+					if (message.fileInput) {
+						userPrompt += `\n[File Input: ${message.fileInput.filename || "file"}]`;
+					}
+					if (message.videoInput) {
+						userPrompt += `\n[Video Input: ${message.videoInput.video_url || "video data"}]`;
+					}
+					return userPrompt;
 				case "ai":
 					return `Assistant: ${message.content ?? ""}`;
 				case "thinking":
 					return `Assistant thoughts: ${message.content}`;
 				case "tool":
-					return `Tool ${message.tool_name ?? message.tool_id}: ${message.toolOutput ?? message.content}`;
+					const toolText = message.toolOutput ?? message.content;
+					const truncatedToolText = toolText.length > 60000
+						? toolText.slice(0, 60000) + "... [Truncated due to size limits]"
+						: toolText;
+					return `Tool ${message.tool_name ?? message.tool_id}: ${truncatedToolText}`;
 			}
 		})
 		.join("\n\n")
@@ -339,10 +373,34 @@ export class RunPod implements StandardLLMShema {
 		const output = responseRecord.output ?? response;
 		const answerText = this.extractText(output).trim();
 
+		let fileInput: any = null;
+		let audioOutput: any = null;
+
+		if (output && typeof output === "object") {
+			const outputRecord = output as Record<string, any>;
+			if (outputRecord.audio) {
+				audioOutput = {
+					type: "output_audio",
+					data: typeof outputRecord.audio === "string" ? outputRecord.audio : (outputRecord.audio.data || ""),
+					transcript: outputRecord.audio.transcript || ""
+				};
+			}
+			if (outputRecord.file) {
+				fileInput = {
+					type: "input_file",
+					file_data: typeof outputRecord.file === "string" ? outputRecord.file : (outputRecord.file.data || ""),
+					filename: outputRecord.file.filename || "file"
+				};
+			}
+		}
+
 		const aiAnswer: AIMessage = {
 			type: "ai",
 			content: answerText.length > 0 ? answerText : this.stringifyValue(output)
 		};
+
+		if (fileInput) aiAnswer.fileInput = fileInput;
+		if (audioOutput) aiAnswer.audioOutput = audioOutput;
 
 		return {
 			messages: [

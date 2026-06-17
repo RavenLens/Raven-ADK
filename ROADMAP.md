@@ -105,3 +105,6 @@
 14. TODO tools and events
     - ReAct agent once executes todo tool communicates the updation state and events base on this tools
 15. Add OpenRouter support as LLMs handler that will give hand for LLMs
+16. Frontend Libraries
+    - Add Svelte ui package to handle the ui - it's the component library base on a Shadcdn
+    - Add React same version

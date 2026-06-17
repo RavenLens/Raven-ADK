@@ -144,6 +144,21 @@ export class BrowserTool {
   }
 
   /**
+   * Take a screenshot/snapshot of the current page as a Buffer (no disk write)
+   */
+  async takeSnapshotBuffer(): Promise<Buffer> {
+    if (!this.page) {
+      throw new Error('No page is currently open. Call openWebpage() first.');
+    }
+
+    try {
+      return await this.page.screenshot({ fullPage: true });
+    } catch (error) {
+      throw new Error(`Failed to take snapshot: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * Take a screenshot/snapshot of the current page
    */
   async takeSnapshot(filename?: string): Promise<string> {
@@ -348,17 +363,13 @@ export const readPageContentTool = tool(
 export const takeSnapshotTool = tool(
   async (args) => {
     const browserTool = await getGlobalBrowserTool();
-    const snapshotPath = await browserTool.takeSnapshot(args.filename);
-    return JSON.stringify({ success: true, path: snapshotPath });
+    const buffer = await browserTool.takeSnapshotBuffer();
+    return `data:image/png;base64,${buffer.toString("base64")}`;
   },
   {
     toolName: 'take_snapshot',
-    toolDescription: 'Take a screenshot/snapshot of the currently open webpage',
+    toolDescription: 'Take a screenshot/snapshot of the currently open webpage without saving to disk and return it as a base64-encoded image data URL',
     toolArguments: SnapshotArgsSchema,
-    toolOutputSchema: z.object({
-      success: z.boolean(),
-      path: z.string(),
-    }),
   }
 );
 

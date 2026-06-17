@@ -764,42 +764,75 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         return instruction.length > 0 ? instruction : null;
     }
 
-    // Remove raw recall command from the transcript so user-visible history stays clean.
-    private stripRecallDirectiveFromTail(): void {
-        const lastMessage = this.agentConfig.messages.at(-1);
-
-        if (lastMessage?.type !== "ai" || !lastMessage.content?.trim()) {
-            return;
-        }
-
-        if (!lastMessage.content.trim().startsWith(RECALL_MAIN_NODE_PREFIX)) {
-            return;
-        }
-
-        this.agentConfig.messages = this.agentConfig.messages.slice(0, -1);
-    }
-
-    // Generate the final conclusion with a dedicated LLM summary call over the full transcript.
-    private async concludeAndAppendConclusionMessage(): Promise<void> {
-        this.emitEvent("concluding_start");
-        
-        const transcript = this.agentConfig.messages
+    private generateTranscript(): string {
+        return this.agentConfig.messages
             .map((message, index) => {
                 const label = `${index + 1}. ${message.type}`;
 
                 if (message.type === "tool") {
                     const toolName = message.tool_name ?? message.tool_id;
                     const output = message.toolOutput ?? message.content;
-                    return `${label} | ${toolName}: ${output}`;
+                    let displayOutput = output;
+                    if (output && output.startsWith("data:image/")) {
+                        displayOutput = `[Image Data: ${output.substring(0, 100)}...]`;
+                    } else if (output && output.length > 5000) {
+                        displayOutput = output.substring(0, 5000) + "... [Truncated for transcript]";
+                    }
+                    return `${label} | ${toolName}: ${displayOutput}`;
                 }
 
                 if (message.type === "thinking") {
-                    return `${label} | ${message.content}`;
+                    const content = message.content;
+                    const displayContent = content.length > 5000 ? content.substring(0, 5000) + "... [Truncated for transcript]" : content;
+                    return `${label} | ${displayContent}`;
+                }
+
+                if (message.type === "user") {
+                    const content = message.content;
+                    const displayContent = content.length > 5000 ? content.substring(0, 5000) + "... [Truncated for transcript]" : content;
+                    const parts = [displayContent];
+                    if (message.imageInput) {
+                        parts.push(`[Image Input: ${message.imageInput.image_url ? message.imageInput.image_url.substring(0, 100) : "base64"}...]`);
+                    }
+                    if (message.audioInput) {
+                        parts.push(`[Audio Input: format=${message.audioInput.input_audio?.format || "unknown"}]`);
+                    }
+                    if (message.fileInput) {
+                        parts.push(`[File Input: ${message.fileInput.filename || "file"}]`);
+                    }
+                    if (message.videoInput) {
+                        parts.push(`[Video Input: ${message.videoInput.video_url || "video data"}]`);
+                    }
+                    return `${label} | ${parts.join(" ")}`;
+                }
+
+                if (message.type === "ai") {
+                    const content = message.content ?? "";
+                    const displayContent = content.length > 5000 ? content.substring(0, 5000) + "... [Truncated for transcript]" : content;
+                    const parts = [displayContent];
+                    if (message.fileInput) {
+                        parts.push(`[File Output: ${message.fileInput.filename || "file"}]`);
+                    }
+                    if (message.audioInput) {
+                        parts.push(`[Audio Input Output]`);
+                    }
+                    if (message.audioOutput) {
+                        parts.push(`[Audio Output: transcript=${message.audioOutput.transcript || "none"}]`);
+                    }
+                    return `${label} | ${parts.join(" ")}`;
                 }
 
                 return `${label} | ${message.content}`;
             })
             .join("\n");
+    }
+
+    // Generate the final conclusion with a dedicated LLM summary call over the full transcript.
+    private async concludeAndAppendConclusionMessage(): Promise<void> {
+        this.emitEvent("concluding_start");
+        
+        // FIXME: Since transcript is truncated instead of it as evidence use prior messages
+        const transcript = this.generateTranscript();
 
         const previousTools = this.agentConfig.model.config.tools;
         const previousMessages = this.agentConfig.model.config.messages;
@@ -857,23 +890,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
 
         const { zodSchema, retriesCount } = produceConfig;
 
-        const transcript = this.agentConfig.messages
-            .map((message, index) => {
-                const label = `${index + 1}. ${message.type}`;
-
-                if (message.type === "tool") {
-                    const toolName = message.tool_name ?? message.tool_id;
-                    const output = message.toolOutput ?? message.content;
-                    return `${label} | ${toolName}: ${output}`;
-                }
-
-                if (message.type === "thinking") {
-                    return `${label} | ${message.content}`;
-                }
-
-                return `${label} | ${message.content}`;
-            })
-            .join("\n");
+        const transcript = this.generateTranscript();
 
         const previousTools = this.agentConfig.model.config.tools;
         const previousMessages = this.agentConfig.model.config.messages;

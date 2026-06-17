@@ -3,7 +3,7 @@ import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
 import type * as ChatAPI from "openai/resources/chat/completions";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
-import { AIMessage, ToolMessage } from "../agent/state";
+import { AIMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
@@ -75,10 +75,10 @@ export class OpenAI implements StandardLLMShema {
 
     /** Parse messages and return in Responses API format */
     private prepareInput(): ResponsesAPI.ResponseInputItem[] {
-        const MAX_TOKEN_SIZE = 1000000; // ~1MB limit for individual fields
+        const MAX_TOKEN_SIZE = 60000; // ~60KB limit for individual fields
         const truncate = (str: string) => str.length > MAX_TOKEN_SIZE ? str.slice(0, MAX_TOKEN_SIZE) + "... [Truncated due to size limits]" : str;
 
-        return this.config.messages?.flatMap((message => { // Parse messages to openai compatible format
+        const inputItems = this.config.messages?.flatMap((message): any[] => { // Parse messages to openai compatible format
             switch(message.type) {
                 case "system":
                     return [{
@@ -86,6 +86,25 @@ export class OpenAI implements StandardLLMShema {
                         content: message.content
                     } satisfies ResponsesAPI.EasyInputMessage]
                 case "user":
+                    if (message.imageInput || message.audioInput || message.fileInput || message.videoInput) {
+                        const contentParts: any[] = [{ type: "text", text: message.content }];
+                        if (message.imageInput) {
+                            contentParts.push(message.imageInput);
+                        }
+                        if (message.audioInput) {
+                            contentParts.push(message.audioInput);
+                        }
+                        if (message.fileInput) {
+                            contentParts.push(message.fileInput);
+                        }
+                        if (message.videoInput) {
+                            contentParts.push(message.videoInput);
+                        }
+                        return [{
+                            role: "user",
+                            content: contentParts
+                        } satisfies ResponsesAPI.EasyInputMessage]
+                    }
                     return [{
                         role: "user",
                         content: message.content
@@ -123,7 +142,9 @@ export class OpenAI implements StandardLLMShema {
 
                     return [call];
             }
-        })) ?? [];
+        });
+
+        return (inputItems as ResponsesAPI.ResponseInputItem[]) ?? [];
     }
 
     private prepareTools(): ResponsesAPI.CustomTool[] {
@@ -137,7 +158,7 @@ export class OpenAI implements StandardLLMShema {
     }
 
     private prepareChatInput(): ChatAPI.ChatCompletionMessageParam[] {
-        return this.config.messages?.map((message => {
+        return this.config.messages?.map(((message): any => {
             switch(message.type) {
                 case "system":
                     return {
@@ -145,6 +166,47 @@ export class OpenAI implements StandardLLMShema {
                         content: message.content
                     } satisfies ChatAPI.ChatCompletionSystemMessageParam
                 case "user":
+                    if (message.imageInput || message.audioInput || message.fileInput || message.videoInput) {
+                        const contentParts: any[] = [{ type: "text", text: message.content }];
+                        if (message.imageInput) {
+                            contentParts.push({
+                                type: "image_url",
+                                image_url: {
+                                    url: message.imageInput.image_url ?? "",
+                                    detail: message.imageInput.detail
+                                }
+                            });
+                        }
+                        if (message.audioInput) {
+                            contentParts.push({
+                                type: "input_audio",
+                                input_audio: {
+                                    data: message.audioInput.input_audio.data,
+                                    format: message.audioInput.input_audio.format
+                                }
+                            });
+                        }
+                        if (message.fileInput) {
+                            contentParts.push({
+                                type: "file" as any,
+                                file_url: message.fileInput.file_url,
+                                file_data: message.fileInput.file_data,
+                                filename: message.fileInput.filename
+                            });
+                        }
+                        if (message.videoInput) {
+                            contentParts.push({
+                                type: "video" as any,
+                                video_url: message.videoInput.video_url,
+                                video_data: message.videoInput.video_data,
+                                mimeType: message.videoInput.mimeType
+                            });
+                        }
+                        return {
+                            role: "user",
+                            content: contentParts
+                        } satisfies ChatAPI.ChatCompletionUserMessageParam;
+                    }
                     return {
                         role: "user",
                         content: message.content
@@ -157,7 +219,7 @@ export class OpenAI implements StandardLLMShema {
                             id: tool.tool_id,
                             type: "function",
                             function: {
-                                name: tool.tool_name,
+                                name: tool.tool_name ?? tool.tool_id,
                                 arguments: tool.content
                             }
                         }))
@@ -168,10 +230,14 @@ export class OpenAI implements StandardLLMShema {
                         content: `Assistant thoughts: ${message.content}`
                     } satisfies ChatAPI.ChatCompletionAssistantMessageParam
                 case "tool":
+                    const toolContent = message.toolOutput ?? message.toolError ?? message.content;
+                    const truncatedToolContent = toolContent.length > 60000
+                        ? toolContent.slice(0, 60000) + "... [Truncated due to size limits]"
+                        : toolContent;
                     return {
                         role: "tool",
                         tool_call_id: message.tool_id,
-                        content: message.toolOutput ?? message.toolError ?? message.content
+                        content: truncatedToolContent
                     } satisfies ChatAPI.ChatCompletionToolMessageParam
             }
         })) ?? [];
@@ -223,11 +289,34 @@ export class OpenAI implements StandardLLMShema {
             } satisfies ToolMessage;
         });
 
-        const aiAnswer: AIMessage | null = answerContentText ? {
-            type: "ai",
-            content: answerContentText,
-            calledTools: calledToolsMessage
-        } : null;
+        let fileInput: any = null;
+        let audioInput: any = null;
+        let audioOutput: any = null;
+
+        if (response.output) {
+            for (const item of response.output) {
+                const itemAny = item as any;
+                if (itemAny.type === "output_audio" || itemAny.type === "audio") {
+                    audioOutput = itemAny;
+                } else if (itemAny.type === "input_audio") {
+                    audioInput = itemAny;
+                } else if (itemAny.type === "input_file" || itemAny.type === "file") {
+                    fileInput = itemAny;
+                }
+            }
+        }
+
+        let aiAnswer: AIMessage | null = null;
+        if (answerContentText || fileInput || audioInput || audioOutput) {
+            aiAnswer = {
+                type: "ai",
+                content: answerContentText,
+                calledTools: calledToolsMessage
+            };
+            if (fileInput) aiAnswer.fileInput = fileInput;
+            if (audioInput) aiAnswer.audioInput = audioInput;
+            if (audioOutput) aiAnswer.audioOutput = audioOutput;
+        }
 
         const answer: (AIMessage | ToolMessage)[] = [
             ...(aiAnswer ? [aiAnswer] : []),
@@ -256,21 +345,34 @@ export class OpenAI implements StandardLLMShema {
         const toolCalls = choice.message.tool_calls ?? [];
 
         // Map output for answer
-        const calledToolsMessage = toolCalls.map(toolCall => {
+        const calledToolsMessage = toolCalls.map((toolCall: any) => {
             return {
                 type: "tool",
                 tool_id: toolCall.id,
-                tool_name: toolCall.function.name,
-                content: toolCall.function.arguments,
-                arguments: parseToolCallContentToParams(toolCall.function.arguments)
+                tool_name: toolCall.function?.name,
+                content: toolCall.function?.arguments,
+                arguments: parseToolCallContentToParams(toolCall.function?.arguments)
             } satisfies ToolMessage;
         });
 
-        const aiAnswer: AIMessage | null = answerContentText ? {
-            type: "ai",
-            content: answerContentText,
-            calledTools: calledToolsMessage
-        } : null;
+        let audioOutput: any = null;
+        if ((choice.message as any).audio) {
+            audioOutput = {
+                type: "output_audio",
+                data: (choice.message as any).audio.data,
+                transcript: (choice.message as any).audio.transcript || ""
+            };
+        }
+
+        let aiAnswer: AIMessage | null = null;
+        if (answerContentText || audioOutput) {
+            aiAnswer = {
+                type: "ai",
+                content: answerContentText,
+                calledTools: calledToolsMessage
+            };
+            if (audioOutput) aiAnswer.audioOutput = audioOutput;
+        }
 
         const answer: (AIMessage | ToolMessage)[] = [
             ...(aiAnswer ? [aiAnswer] : []),

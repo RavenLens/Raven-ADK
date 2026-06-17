@@ -10,7 +10,7 @@ import type {
     Candidate
 } from "@google/genai";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
-import { AIMessage, ReasoningMessage, ToolMessage } from "../agent/state";
+import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
@@ -82,6 +82,14 @@ export class Google implements StandardLLMShema {
         });
     }
 
+    private parseBase64DataUrl(dataUrl: string): { media_type: string; data: string } | null {
+        const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+            return { media_type: match[1], data: match[2] };
+        }
+        return null;
+    }
+
     private prepareContents(): Content[] {
         const contents: Content[] = [];
         const messages = this.config.messages ?? [];
@@ -92,9 +100,71 @@ export class Google implements StandardLLMShema {
 
             switch (message.type) {
                 case "user":
+                    const userParts: Part[] = [{ text: message.content }];
+
+                    if (message.imageInput) {
+                        const url = message.imageInput.image_url;
+                        if (url && url.startsWith("data:")) {
+                            const parsed = this.parseBase64DataUrl(url);
+                            if (parsed) {
+                                userParts.push({
+                                    inlineData: {
+                                        mimeType: parsed.media_type,
+                                        data: parsed.data
+                                    }
+                                });
+                            }
+                        } else if (url) {
+                            userParts.push({ text: `[Image URL: ${url}]` });
+                        }
+                    }
+
+                    if (message.audioInput && message.audioInput.input_audio) {
+                        userParts.push({
+                            inlineData: {
+                                mimeType: `audio/${message.audioInput.input_audio.format || "wav"}`,
+                                data: message.audioInput.input_audio.data
+                            }
+                        });
+                    }
+
+                    if (message.fileInput) {
+                        const data = message.fileInput.file_data;
+                        if (data && data.startsWith("data:")) {
+                            const parsed = this.parseBase64DataUrl(data);
+                            if (parsed) {
+                                userParts.push({
+                                    inlineData: {
+                                        mimeType: parsed.media_type,
+                                        data: parsed.data
+                                    }
+                                });
+                            }
+                        } else {
+                            userParts.push({ text: `[File input: ${message.fileInput.filename || "file"}]` });
+                        }
+                    }
+
+                    if (message.videoInput) {
+                        const data = message.videoInput.video_data;
+                        if (data && data.startsWith("data:")) {
+                            const parsed = this.parseBase64DataUrl(data);
+                            if (parsed) {
+                                userParts.push({
+                                    inlineData: {
+                                        mimeType: parsed.media_type,
+                                        data: parsed.data
+                                    }
+                                });
+                            }
+                        } else if (message.videoInput.video_url) {
+                            userParts.push({ text: `[Video: ${message.videoInput.video_url}]` });
+                        }
+                    }
+
                     contents.push({
                         role: "user",
-                        parts: [{ text: message.content }]
+                        parts: userParts
                     });
                     break;
                 case "ai":
@@ -157,12 +227,16 @@ export class Google implements StandardLLMShema {
                     });
                     break;
                 case "tool":
+                    const googleToolContent = message.content;
+                    const truncatedGoogleToolContent = googleToolContent.length > 60000
+                        ? googleToolContent.slice(0, 60000) + "... [Truncated due to size limits]"
+                        : googleToolContent;
                     contents.push({
                         role: "user",
                         parts: [{
                             functionResponse: {
                                 name: message.tool_name ?? "unknown",
-                                response: { result: message.content },
+                                response: { result: truncatedGoogleToolContent },
                                 id: message.tool_id
                             }
                         }]
@@ -213,6 +287,9 @@ export class Google implements StandardLLMShema {
         const calledTools: ToolMessage[] = [];
         let lastThoughtSignature: string | undefined;
 
+        let fileInput: any = null;
+        let audioOutput: any = null;
+
         if (response.candidates?.[0]?.content?.parts) {
             for (const part of response.candidates[0].content.parts) {
                 if (part.text && (part as any).thought) {
@@ -232,6 +309,22 @@ export class Google implements StandardLLMShema {
                         arguments: part.functionCall.args as Record<string, any>,
                         thought_signature: partSignature ?? lastThoughtSignature
                     });
+                } else if (part.inlineData && part.inlineData.mimeType && part.inlineData.data) {
+                    const mime = part.inlineData.mimeType;
+                    const b64 = part.inlineData.data;
+                    if (mime.startsWith("audio/")) {
+                        audioOutput = {
+                            type: "output_audio",
+                            data: b64,
+                            transcript: ""
+                        };
+                    } else {
+                        fileInput = {
+                            type: "input_file",
+                            file_data: `data:${mime};base64,${b64}`,
+                            filename: `file.${mime.split("/")[1] || "bin"}`
+                        };
+                    }
                 }
             }
         }
@@ -241,6 +334,9 @@ export class Google implements StandardLLMShema {
             content: text,
             calledTools: calledTools.length > 0 ? calledTools : undefined
         };
+
+        if (fileInput) aiAnswer.fileInput = fileInput;
+        if (audioOutput) aiAnswer.audioOutput = audioOutput;
 
         const answer: (AIMessage | ToolMessage | ReasoningMessage)[] = [
             ...thoughts,

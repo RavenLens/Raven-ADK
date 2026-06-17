@@ -1,4 +1,4 @@
-import { ChatCompletionAssistantMessageParam, ChatCompletionAudio } from "openai/resources.js";
+import { ResponseInputAudio, ResponseInputFile, ResponseInputImage, ResponseOutputAudio,  } from "openai/resources/responses/responses.js";
 import { GraphNodeExecutionResult } from "../graph";
 import { LLMAnswer } from "../models/mutual";
 import z from "zod";
@@ -16,6 +16,17 @@ export interface SystemMessage {
 export interface UserMessage {
     type: "user";
     content: string;
+    imageInput?: ResponseInputImage;
+    audioInput?: ResponseInputAudio;
+    fileInput?: ResponseInputFile;
+    videoInput?: ResponseInputVideo;
+}
+
+export interface ResponseInputVideo {
+    type: 'input_video';
+    video_url?: string;
+    video_data?: string;
+    mimeType?: string;
 }
 
 /** Is the ready ai answer */
@@ -24,8 +35,9 @@ export interface AIMessage {
     content?: string | null;
     /** Included only for structured output calls */
     structuredOutput?: unknown;
-    audioInput?: ChatCompletionAssistantMessageParam.Audio | null;
-    audioOutput?: ChatCompletionAudio | null;
+    fileInput?: ResponseInputFile | null;
+    audioInput?: ResponseInputAudio | null;
+    audioOutput?: ResponseOutputAudio | null;
     /** Attached when ai had in message the tool call */
     calledTools?: ToolMessage[];
 }

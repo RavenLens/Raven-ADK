@@ -2,7 +2,7 @@ import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual"
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
 import { MessageParam, Tool, ToolUseBlock } from "@anthropic-ai/sdk/resources/messages";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
-import { AIMessage, ReasoningMessage, ToolMessage } from "../agent/state";
+import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
@@ -34,11 +34,90 @@ export class Anthropic implements StandardLLMShema {
         })
     }
 
+    private parseBase64DataUrl(dataUrl: string): { media_type: string; data: string } | null {
+        const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (match) {
+            return { media_type: match[1], data: match[2] };
+        }
+        return null;
+    }
+
     private prepareMessages(): MessageParam[] {
         return this.config.messages?.filter((message) => message.type !== "system")
             .map((message) => {
             switch (message.type) {
                 case "user":
+                    if (message.imageInput || message.audioInput || message.fileInput || message.videoInput) {
+                        const contentParts: any[] = [{ type: "text", text: message.content }];
+
+                        if (message.imageInput) {
+                            const url = message.imageInput.image_url;
+                            if (url && url.startsWith("data:")) {
+                                const parsed = this.parseBase64DataUrl(url);
+                                if (parsed) {
+                                    contentParts.push({
+                                        type: "image",
+                                        source: {
+                                            type: "base64",
+                                            media_type: parsed.media_type as any,
+                                            data: parsed.data
+                                        }
+                                    });
+                                }
+                            } else if (url) {
+                                contentParts.push({
+                                    type: "text",
+                                    text: `[Image URL: ${url}]`
+                                });
+                            }
+                        }
+
+                        if (message.audioInput) {
+                            contentParts.push({
+                                type: "text",
+                                text: `[Audio input: ${message.audioInput.input_audio?.format || "audio"}]`
+                            });
+                        }
+
+                        if (message.fileInput) {
+                            const data = message.fileInput.file_data;
+                            if (data && data.startsWith("data:")) {
+                                const parsed = this.parseBase64DataUrl(data);
+                                if (parsed && parsed.media_type === "application/pdf") {
+                                    contentParts.push({
+                                        type: "document",
+                                        source: {
+                                            type: "base64",
+                                            media_type: "application/pdf" as any,
+                                            data: parsed.data
+                                        }
+                                    } as any);
+                                } else if (parsed) {
+                                    contentParts.push({
+                                        type: "text",
+                                        text: `[File input: ${message.fileInput.filename || "file"}, type=${parsed.media_type}]`
+                                    });
+                                }
+                            } else {
+                                contentParts.push({
+                                    type: "text",
+                                    text: `[File input: ${message.fileInput.filename || "file"}]`
+                                });
+                            }
+                        }
+
+                        if (message.videoInput) {
+                            contentParts.push({
+                                type: "text",
+                                text: `[Video input: ${message.videoInput.video_url || "video data"}]`
+                            });
+                        }
+
+                        return {
+                            role: "user",
+                            content: contentParts
+                        } satisfies MessageParam;
+                    }
                     return {
                         role: "user",
                         content: message.content
@@ -69,13 +148,17 @@ export class Anthropic implements StandardLLMShema {
                         ]
                     } satisfies MessageParam
                 case "tool":
+                    const anthropicToolContent = message.content;
+                    const truncatedAnthropicToolContent = anthropicToolContent.length > 60000
+                        ? anthropicToolContent.slice(0, 60000) + "... [Truncated due to size limits]"
+                        : anthropicToolContent;
                     return {
                         role: "user",
                         content: [
                             {
                                 type: "tool_result",
                                 tool_use_id: message.tool_id,
-                                content: message.content
+                                content: truncatedAnthropicToolContent
                             }
                         ]
                     } satisfies MessageParam;
@@ -170,13 +253,35 @@ export class Anthropic implements StandardLLMShema {
                 content: content.thinking,
                 signature: content.signature
             })) : null;
-        const aiAnswer: AIMessage | null = answerContentText
-            ? {
+        let fileInput: any = null;
+        let audioOutput: any = null;
+
+        for (const block of completion.content) {
+            if (block.type === "audio" as any) {
+                audioOutput = {
+                    type: "output_audio",
+                    data: (block as any).data,
+                    transcript: (block as any).transcript ?? ""
+                };
+            } else if (block.type === "document" as any) {
+                fileInput = {
+                    type: "input_file",
+                    file_data: `data:${(block as any).source?.media_type};base64,${(block as any).source?.data}`,
+                    filename: (block as any).filename || "document.pdf"
+                };
+            }
+        }
+
+        let aiAnswer: AIMessage | null = null;
+        if (answerContentText || fileInput || audioOutput) {
+            aiAnswer = {
                 type: "ai",
                 content: answerContentText,
                 calledTools: calledToolsMessage
-            }
-            : null;
+            };
+            if (fileInput) aiAnswer.fileInput = fileInput;
+            if (audioOutput) aiAnswer.audioOutput = audioOutput;
+        }
         const answer: (ReasoningMessage | AIMessage | ToolMessage)[] = [
             ...(thinkingReasonMessage ?? []),
             ...(aiAnswer ? [aiAnswer] : []),

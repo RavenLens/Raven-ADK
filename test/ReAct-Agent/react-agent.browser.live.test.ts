@@ -78,6 +78,7 @@ ${BrowserToolsBucket.systemPrompt}`,
         // Check the final answer
         const lastAIMessage = [...result.messages].reverse().find(m => m.type === "ai");
         expect(lastAIMessage?.content).toBeTruthy();
+        console.log(lastAIMessage)
         // expect(lastAIMessage?.content?.toLowerCase()).toContain("github" || "copilot" || "heading");
 
         console.log("✅ Successfully read webpage and closed browser");
