@@ -36,10 +36,10 @@
     - User prompt (v)
     - AI Answer (v)
     - Tool usage (v)
-5. Tests for
-    - ReAct Agent
-        - Skills
-        - Memory
+5. Tests for  (v)
+    - ReAct Agent (v)
+        - Skills (v)
+        - Memory (v)
 6. Improve Skills
     - Give instruction what skill is valulable to the `SkillSharedConfig`
     - Make the system to evaluate whether skill ReAct Agent would like to create is what the `instruction` for skill appreciates when specified, when not specified whether is this skill greate and whether does the similar same skill exists
@@ -48,7 +48,7 @@
     - Compressing standards
         - Make documentation for this
         - Implement the methods:
-            - Compressing
+            - Compressing (v)
             - Storing aside of agent
     - Playwright support tools for browsing (v)
         - Make the screens (v)
@@ -62,8 +62,8 @@
             - Add to logic (v)
             - Add to documentation (v)
         - Deliver more execution places and make compression so called "compaction" to be compatible
-    - Add support for media in the message
-        - Images
+    - Add support for media in the message (v)
+        - Images (v)
     - Add skills and memory improvement (Hermes inspired)
         - Create tree with skills, memory concluded as file with constrained (hard limit) size and added to each prompt
             - Instruct agent to use its tools to explote these skills / memory as needed base on prompt
@@ -73,7 +73,7 @@
         - https://www.daytona.io/
         - local
         - https://vercel.com/docs/sandbox
-    - RLMs - 
+    - RLMs - Add support for improving the performance
     - InfyAgent - Offloading the context to external files and reading the last 10 files and rest to read on demand with regexp, sequence read tools and more, delegate subtasks to be done by subagents for better overall agent results
 7. Agentic RAG support
     - For typical chatting with ai
@@ -96,10 +96,10 @@
     - Prompting in voice - (Input voice)
     - Outputing in voice (Output voice)
     - Talking in voice - (Input + Voice) in real time
-12. Compaction Chat History
-    - i automatic
+12. Compaction Chat History (v)
+    - i automatic (v)
     - for LLM Class
-    - for ReAct Agent
+    - for ReAct Agent (v)
 13. RavenHub
 14. TODO tools and events
     - ReAct agent once executes todo tool communicates the updation state and events base on this tools

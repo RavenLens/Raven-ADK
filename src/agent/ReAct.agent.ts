@@ -14,7 +14,7 @@ import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
 import { RunPod } from "../models/runpod";
 import z from "zod";
 
-type AgentModel = OpenAI | Anthropic | RunPod | Google;
+export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
 export type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt" | "tools"> & {
     role: string;
