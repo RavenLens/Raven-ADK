@@ -12,6 +12,7 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 
 #### RavenADK as default supports these SOTA Agentic patterns:
 - ReAct Agent
+- RLMs - Recursive approach to increase agent accuracy on large set of text with reducing significantly costs
 - Skills
     - Exploring and applying
     - Dynamic Skills solutions
@@ -24,6 +25,7 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 - MCP - Model context protocol is to your disposition - [check it](./documentation/MCP.md)
 - Events - Listen agent events and transfer this to UI/TUI to show user what your agent is doing
 - HITL - sometimes actions are risky or agent needs more information and it can ask you for that - [check](./documentation/HITL.md)
+- Sandboxes - Secure code execution environments designed for RLM and ReAct tools - [check](./documentation/Sandbox.md)
 - Builting tools
     - Browser - run serverless browser on your device - [check](./documentation/tools/Browsing.md)
 <!-- TODO: Add compression showcase and achivements from roadmap -->
