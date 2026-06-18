@@ -1,4 +1,5 @@
 import { Anthropic, OpenAI } from "../../models";
+import { LLMAnswer } from "../../models/mutual";
 import { AgentModel } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
 import { ExecuteAgentCodeOutput, RLMEnvironment } from "./context";
@@ -38,6 +39,11 @@ export interface RLMAgentEventsBody {
     finish: (result: string) => any;
 }
 
+export interface UsageData {
+    orchestrator_llm: LLMAnswer["tokens"];
+    submodels: LLMAnswer["tokens"];
+}
+
 export class RLMAgent {
     environment: RLMEnvironment;
     maxIterations: number = 10;
@@ -45,11 +51,24 @@ export class RLMAgent {
     submodels?: RLMSubModel[];
     subRLMsDict: SubRLMsDict;
     private EventsListeners: Partial<{ [EventName in keyof RLMAgentEventsBody]: RLMAgentEventsBody[EventName] }> = {};
+    usageData: UsageData;
     
     constructor(longContextString: string, config: RLMAgentConfig) {
         this.maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
         this.model = config.model;
         this.submodels = config.submodels;
+        this.usageData = {
+            orchestrator_llm: {
+                input: 0,
+                output: 0,
+                reasoning: 0,
+            },
+            submodels: {
+                input: 0,
+                output: 0,
+                reasoning: 0,
+            }
+        };
 
         this.subRLMsDict = this.constructSubmodelsObj();
         this.environment = new RLMEnvironment(
@@ -88,6 +107,10 @@ ${userPrompt}
         });
         const finalAnswer = subModelAnswer.answer.at(-1);
 
+        if (subModelAnswer.tokens) {
+            this.addTokens(this.usageData.submodels, subModelAnswer.tokens);
+        }
+
         return finalAnswer?.content ?? "Analyses by LLM didn't output content";
     }
     
@@ -109,6 +132,12 @@ ${userPrompt}
         }
 
         return models;
+    }
+
+    private addTokens(target: LLMAnswer["tokens"], source: LLMAnswer["tokens"]) {
+        target.input += source.input ?? 0;
+        target.output += source.output ?? 0;
+        target.reasoning += source.reasoning ?? 0;
     }
 
     private emit<Event extends keyof RLMAgentEventsBody>(
@@ -139,6 +168,10 @@ ${userPrompt}
 
         this.EventsListeners[event] = listener as RLMAgentEventsBody[Event];
         return this;
+    }
+    
+    getUsage() {
+        return this.usageData;
     }
     
     async invoke(taskDescription: string) {
@@ -201,6 +234,9 @@ You have access to:
                 }
             );
             const agentAnswer = agentResponse.answer.at(-1)!.content ?? "";
+            if (agentResponse.tokens) {
+                this.addTokens(this.usageData.orchestrator_llm, agentResponse.tokens);
+            }
             this.emit("orchestrator_model_call", this.model, agentAnswer);
             
             // 2. Extract the JS code block
