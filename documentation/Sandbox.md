@@ -50,9 +50,51 @@ const agent = new ReActAgent({
 ### NodeExecutionSandbox
 The default sandbox uses the Node.js native `vm` module to create a secure, isolated execution context.
 
+-   **Best For**: Local execution of JavaScript/Node.js code.
 -   **Isolation**: Uses `vm.createContext()` to prevent access to the global `process` or `require`.
 -   **Async Support**: Automatically wraps code in an async IIFE to support top-level `await`.
 -   **Context Injection**: Allows injecting custom data and helper functions into the sandbox environment.
+
+#### Usage Example
+
+```typescript
+import { NodeJSSandbox } from "@ravenlens/raven-adk/agent/tools/CodeExecutionSandboxes";
+
+const sandbox = new NodeJSSandbox.NodeExecutionSandbox();
+const result = await sandbox.execute("const x = 10; submitFinalAnswer(x * 2);", { 
+    submitFinalAnswer: (val) => { /* handle result */ } 
+});
+```
+
+### E2BExecutionSandbox
+The E2B sandbox provides a cloud-native, highly isolated environment for executing code in multiple languages.
+
+-   **Best For**: Multi-language support, high isolation, and running untrusted code in a secure cloud environment.
+-   **Supported Languages**: Supports a wide range of languages including Python, JavaScript, R, and more. See the [Supported Languages reference](https://e2b.dev/docs/code-interpreting/supported-languages/javascript).
+-   **Cloud Infrastructure**: Runs code in micro-VMs managed by E2B.
+
+#### Usage Example
+
+```typescript
+import { E2BSandbox } from "@ravenlens/raven-adk/agent/tools/CodeExecutionSandboxes";
+
+const sandbox = new E2BSandbox.E2BExecutionSandbox({ apiKey: "YOUR_E2B_API_KEY" });
+const result = await sandbox.execute(
+    "print('Hello from E2B Python!')", // Code to run
+    { contextData: { key: "value" } },  // Context data
+    []                                  // Logs array
+);
+```
+
+## Choosing a Sandbox
+
+| Feature | `NodeExecutionSandbox` | `E2BExecutionSandbox` |
+| :--- | :--- | :--- |
+| **Execution Environment** | Local (Node.js Process) | Cloud (E2B Micro-VMs) |
+| **Primary Language** | JavaScript / TypeScript | Multi-language (Python, JS, etc.) |
+| **Isolation Level** | Process-level (`vm` module) | Micro-VM (Secure Isolation) |
+| **Speed** | Near-instant (No network overhead) | Depends on network/cloud latency |
+| **Cost** | Free (Local resources) | Cloud-based (Requires E2B subscription) |
 
 ## Best Practices
 
