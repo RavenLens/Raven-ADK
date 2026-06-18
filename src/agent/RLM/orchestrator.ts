@@ -1,3 +1,4 @@
+import * as z from 'zod';
 import { LLMAnswer } from "../../models/mutual";
 import { AgentModel } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
@@ -100,13 +101,16 @@ export class RLMAgent<CodeSandbox extends CodeExecutionSandboxSchema> {
             messages: [
                 {
                     type: "system",
-                    content: `
-You are a Specialized Submodel delegated by a Recursive Language Model (RLM) Orchestrator.
-The Orchestrator has specified instructuib for this submodel defined as: ${submodelFetch.instruction ?? 'General analysis'}
-
-The orchestrator has asked you to analyze the prompt below:
-${userPrompt}
-                    `
+                    content: `You are a Specialized Submodel delegated by a Recursive Language Model (RLM) Orchestrator.
+Task: ${submodelFetch.instruction ?? 'General analysis'}
+Guidelines:
+- Return the direct answer or extraction from the snippet.
+- Be concise but complete.
+- Do not mention being a submodel or provide metadata unless asked.`
+                },
+                {
+                    type: "user",
+                    content: userPrompt
                 }
             ]
         });
@@ -179,6 +183,12 @@ ${userPrompt}
         return this.usageData;
     }
     
+    /**
+     * Execute the RLM
+     * @description 
+     * @param taskDescription - user given task to perform 
+     * @returns result answer
+     */
     async invoke(taskDescription: string) {
         // Build submodels description for the orchestrator
         const submodelsDescription = Object.entries(this.subRLMsDict)
@@ -188,6 +198,23 @@ ${userPrompt}
                 return `- Model ${subRLMIndex}: ${modelName}\n  Use when: ${instruction}`;
             })
             .join('\n');
+
+        const RLMSchema = z.object({
+            thought: z.string().describe("Your reasoning about the current state and next steps"),
+            blocks: z.array(z.discriminatedUnion("type", [
+                z.object({
+                    type: z.literal("code"),
+                    content: z.string().describe("JavaScript code to execute in the sandbox. Access contextData directly.")
+                }),
+                z.object({
+                    type: z.literal("llm_query"),
+                    instruction: z.string().describe("What you want the sub-model to analyze/extract"),
+                    snippet: z.string().describe("The relevant part of contextData to analyze"),
+                    modelIndex: z.number().optional().describe("Index of the sub-model to use (0-based)")
+                })
+            ])).describe("A sequence of steps to execute in order."),
+            finalAnswer: z.string().optional().describe("The definitive answer to the user's task. Include relevant details and proof from the context. Only set this when you are 100% sure.")
+        });
 
         let messages: MessagesVariations[] = [
             {
@@ -204,86 +231,95 @@ Instead, it is loaded into a secure JavaScript VM in the variable \`contextData\
 You can delegate analysis tasks to these specialized sub-models:
 ${submodelsDescription}
 
-When you need analysis, call \`await llmQuery(instruction, snippet, modelIndex)\` where:
-- \`instruction\`: What you want the model to do
-- \`snippet\`: The context snippet to analyze
-- \`modelIndex\`: (optional) Index of the sub-model (0-based), defaults to model 0
+## Execution Strategy
+Instead of writing a single large script with async calls, you must provide a sequence of blocks:
+1. **code**: JavaScript code that runs in the sandbox. It can explore \`contextData\` and log findings.
+2. **llm_query**: Instructions for a sub-model to analyze a specific snippet. This is executed by the host, not the sandbox.
+These blocks are executed in sequence. Results from previous blocks (like console output, llms calls) are visible in subsequent iterations.
 
-## Available Functions in Sandbox
+## Available Functions in Sandbox (Code Blocks)
+In your \`code\` blocks, you have access to:
+1. \`contextData\` (String) - The entire dataset to analyze.
+2. \`console.log()\` - Use this to print findings that will be used to plan next steps.
 
-You must write JavaScript code to explore \`contextData\`. 
-You have access to:
-1. \`contextData\` (String) - The entire dataset to analyze
-2. \`await llmQuery(instruction, snippet, modelIndex)\` - Recursively delegate analysis to a sub-LLM (CodeAct pattern). Returns the analysis result as a string.
-3. \`console.log()\` - Print intermediate findings to the console for debugging.
-4. \`submitFinalAnswer(answer)\` - Call this when you have definitively solved the task.
-
-## Code Generation Rules
-- Write your JavaScript code inside \`\`\`javascript ... \`\`\` blocks.
-- Use top-level await for all async operations.
-- Break down large datasets by calling llmQuery() on snippets.
-- Log your progress with console.log() for transparency.
-- Submit the final answer only when confident.
+## Rules
+- Break down large datasets: Use \`code\` to find line numbers, indexes, or snippets, then use \`llm_query\` to analyze those specific snippets.
+- Be precise: Your \`finalAnswer\` must be derived from the evidence found in \`contextData\`.
+- Complete Answers: When providing the \`finalAnswer\`, include the entity name and the specific value found (e.g., "The status of User Zara is active").
+- Incremental progress: Use iterations to narrow down the search space until you find the exact answer.
+- If you find the answer in a \`code\` block, you can call \`submitFinalAnswer(answer)\` inside the code, or return it in the next iteration's \`finalAnswer\` field.
         `
             }
-        ]
+        ];
         
         for (let i = 0; i < this.maxIterations; i++) {
             this.emit("start_iteration", i + 1);
             
-            // 1. Get code from Orchestrator
-            // Use your best reasoning model here (e.g., GPT-4o, Claude-3.5-Sonnet)
-            const agentResponse = await this.model.invoke(
-                {
-                    messages
-                }
-            );
-            const agentAnswer = agentResponse.answer.at(-1)!.content ?? "";
+            // 1. Get structured answer from Orchestrator
+            this.model.config.messages = messages;
+            const agentResponse = await this.model.invokeStructuredOutput(RLMSchema);
+            const agentAnswerRaw = agentResponse.answer.at(-1)!;
+            
             if (agentResponse.tokens) {
                 this.addTokens(this.usageData.orchestrator_llm, agentResponse.tokens);
             }
-            this.emit("orchestrator_model_call", this.model, agentAnswer);
+
+            // Extract structured data from AIMessage (type cast for convenience)
+            const structuredResult = (agentAnswerRaw as any).structuredOutput as z.infer<typeof RLMSchema>;
             
-            // 2. Extract the JS code block
-            const codeMatch = agentAnswer.match(/```javascript\n([\s\S]*?)```/);
-            if (!codeMatch) {
+            if (!structuredResult) {
                 messages.push({
                     type: "ai",
-                    content: "System: No javascript block found. Please write code."
-                });
-                this.emit("end_iteration", i + 1, {
-                    isFinish: false,
-                    isError: false,
-                    result: agentAnswer
+                    content: "System: Failed to parse structured output. Please follow the schema."
                 });
                 continue;
             }
+
+            this.emit("orchestrator_model_call", this.model, structuredResult.thought);
             
-            const agentCode = codeMatch[1];
-
-            // 3. Execute in the RLM Environment
-            const executionResult = await this.environment.executeAgentCode(agentCode);
-
-            // 4. Check for completion
-            const iterationResult = {
-                isFinish: Boolean(executionResult.finalAnswer),
-                isError: executionResult.finalAnswer === null,
-                result: executionResult.output || agentAnswer
-            };
-
-            this.emit("end_iteration", i + 1, iterationResult);
-
-            if (executionResult.finalAnswer) {
-                this.emit("finish", executionResult.finalAnswer);
-                return executionResult.finalAnswer;
+            // Check for immediate finish
+            if (structuredResult.finalAnswer) {
+                this.emit("finish", structuredResult.finalAnswer);
+                return structuredResult.finalAnswer;
             }
 
-            // 5. Append results to history so the Orchestrator can plan the next step
-            const feedback = `\nExecution Console Output:\n${executionResult.output || "No output."}`;
-            console.log(feedback);
+            // 2. Process blocks in sequence
+            let iterationLogs: string[] = [];
+
+            for (const block of structuredResult.blocks) {
+                if (block.type === "code") {
+                    // Execute in the RLM Environment
+                    const executionResult = await this.environment.executeAgentCode(block.content);
+                    iterationLogs.push(`[Code Output]:\n${executionResult.output || "No output."}`);
+                    
+                    if (executionResult.finalAnswer) {
+                        this.emit("finish", executionResult.finalAnswer);
+                        return executionResult.finalAnswer;
+                    }
+                } else if (block.type === "llm_query") {
+                    this.emit("submodel_call", this.model, block.instruction);
+                    const llmResult = await this.environment.llmQuery(block.instruction, block.snippet, block.modelIndex ?? 0);
+                    iterationLogs.push(`[LLM Query Result for index ${block.modelIndex ?? 0}]:\n${llmResult}`);
+                }
+            }
+
+            // 3. Check for completion and feedback
+            const feedback = iterationLogs.join("\n\n");
+
+            this.emit("end_iteration", i + 1, {
+                isFinish: false,
+                isError: false,
+                result: feedback
+            });
+
+            // 4. Update message history properly
+            // Add the AI's actual structured response first
+            messages.push(agentAnswerRaw);
+            
+            // Then add the execution results as a user feedback message
             messages.push({
-                type: "ai",
-                content: `\nAgent Code:\n\`\`\`javascript\n${agentCode}\n\`\`\`\n${feedback}\nSystem: What is your next step?`
+                type: "user",
+                content: `Execution Results for Iteration ${i + 1}:\n${feedback || "No output produced by blocks."}\n\nPlease analyze these results and decide on the next step.`
             });
         }
 

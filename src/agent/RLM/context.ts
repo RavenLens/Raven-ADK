@@ -3,7 +3,6 @@ import { RLMAgentEventsBody, RLMSubModel } from './orchestrator';
 
 interface Sandbox {
     contextData: string,
-    llmQuery: (inst: string, snip: string, modelIndex?: number) => Promise<string>,
     console: {
         log: (...args: any[]) => any,
         error: (...args: any[]) => any
@@ -77,8 +76,6 @@ export class RLMEnvironment<CodeSandbox extends CodeExecutionSandboxSchema> {
             contextData: this.hugeContextData,
             finalAnswer: undefined,
             submodels: this.submodels,
-            llmQuery: (inst: string, snip: string, modelIndex?: number) => 
-                this.llmQuery(inst, snip, modelIndex ?? 0),
             console: {
                 log: (...args: any[]) => this.logs.push(args.join(' ')),
                 error: (...args: any[]) => this.logs.push(`ERROR: ${args.join(' ')}`)
