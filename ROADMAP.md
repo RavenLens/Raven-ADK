@@ -54,8 +54,7 @@
         - Make the screens (v)
         - Read the webpage text (v)
         - Add AutoClose plugin & Documentation (v)
-        - Don't save snapshot on disk file as default but let a model to handle this instead
-            - Add saving as separate option
+        - Don't save snapshot on disk file as default but let a model to handle this instead (v)
     - Add concept of plugins to ReAct agent and:
         - make them executable according to place (v)
         - Make ReAct Agent places invoke - invoke from place from where agent has to be executed (v)
@@ -108,3 +107,6 @@
 16. Frontend Libraries
     - Add Svelte ui package to handle the ui - it's the component library base on a Shadcdn
     - Add React same version
+17. Add router model to scale the execution to particular model according to specification
+    - This is to optimize costs
+    - User writes his own conditions what model has to be triggered+

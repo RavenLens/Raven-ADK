@@ -28,7 +28,7 @@ export interface ReActAgentPluginSpec {
      * It's a place where agent is going to be execute
      * TODO: Deliver more plugin execution places: after_tool_execution, "before_tool_execution"
     */
-    executionWay: "before_agent_run" | "after_agent_run";
+    executionWay: "before_agent_run" | "after_agent_run" | "before_model_call";
     /**
      * Runs the plugin logic 
      * @returns Execution status and changed/unchanged state of agent is assigned in place of prior state, When success is `false` then doesn't use a result to override the agent state
@@ -287,6 +287,9 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     currentState = stateWithoutToolFlag;
                 }
 
+                // Run plugins
+                await this.runPlugins("before_model_call");
+                
                 // Invoke model
                 const modelInvoke = await this.agentConfig.model.invoke({
                     messages: this.agentConfig.messages
@@ -577,6 +580,10 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
                     subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
 
+                    
+                    // Run plugins // FIXME: As far as subagents inherits the messages context from the rest of models the compress algorithm will work
+                    await this.runPlugins("before_model_call");
+                    
                     const result = await subagent.invoke();
 
                     this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
