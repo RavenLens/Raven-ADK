@@ -1,8 +1,8 @@
-import { Anthropic, OpenAI } from "../../models";
 import { LLMAnswer } from "../../models/mutual";
 import { AgentModel } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
-import { ExecuteAgentCodeOutput, RLMEnvironment } from "./context";
+import { CodeExecuteOutput, CodeExecutionSandboxSchema } from "../tools/CodeExecutionSandboxes/mutual";
+import { RLMEnvironment } from "./context";
 
 const DEFAULT_MAX_ITERATIONS = 10;
 
@@ -13,11 +13,12 @@ export interface RLMSubModel {
     instruction?: string;
 }
 
-export interface RLMAgentConfig {
+export interface RLMAgentConfig<CodeSandbox extends CodeExecutionSandboxSchema> {
     model: AgentModel;
     /** Optional list with smaller models will be use to  */
     submodels?: RLMSubModel[];
     maxIterations?: number;
+    codeSandbox: CodeSandbox;
 }
 
 export type SubRLMsDict = Record<number, RLMSubModel>;
@@ -33,7 +34,7 @@ export interface RLMAgentEventsBody {
         result: string;
     }) => any;
     execute_code_start: (code: string) => any;
-    execute_code_end: (executionCodeOutput: ExecuteAgentCodeOutput) => any;
+    execute_code_end: (executionCodeOutput: CodeExecuteOutput) => any;
     orchestrator_model_call: (model: AgentModel, result: string) => any;
     /** Emit once SubRLM iteration finishes successfully */
     finish: (result: string) => any;
@@ -44,16 +45,17 @@ export interface UsageData {
     submodels: LLMAnswer["tokens"];
 }
 
-export class RLMAgent {
-    environment: RLMEnvironment;
+export class RLMAgent<CodeSandbox extends CodeExecutionSandboxSchema> {
+    environment: RLMEnvironment<CodeSandbox>;
     maxIterations: number = 10;
     model: AgentModel;
     submodels?: RLMSubModel[];
     subRLMsDict: SubRLMsDict;
     private EventsListeners: Partial<{ [EventName in keyof RLMAgentEventsBody]: RLMAgentEventsBody[EventName] }> = {};
     usageData: UsageData;
+    codeExecutionSandbox: RLMAgentConfig<CodeSandbox>["codeSandbox"];
     
-    constructor(longContextString: string, config: RLMAgentConfig) {
+    constructor(longContextString: string, config: RLMAgentConfig<CodeSandbox>) {
         this.maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
         this.model = config.model;
         this.submodels = config.submodels;
@@ -69,14 +71,17 @@ export class RLMAgent {
                 reasoning: 0,
             }
         };
+        this.codeExecutionSandbox = config.codeSandbox;
 
         this.subRLMsDict = this.constructSubmodelsObj();
         this.environment = new RLMEnvironment(
-            longContextString, config.submodels ?? [
+            longContextString, 
+            config.submodels ?? [
                 {
                     model: config.model
                 }
-            ], 
+            ],
+            config.codeSandbox,
             this.callSubRLM.bind(this),
             this.emit.bind(this)
         );
@@ -285,21 +290,3 @@ You have access to:
         throw new Error("Max iterations reached without finding a final answer.");
     }
 }
-
-const rlm = new RLMAgent("Load here document", {
-    model: new OpenAI({
-        model: "gpt-5-mini",
-        apiKey: "key"
-    }),
-    submodels: [
-        {
-            model: new Anthropic({
-                model: "",
-                apiKey: ""
-            }),
-            instruction: "Call this to process basic code"
-        }
-    ]
-})
-
-rlm.invoke("Find for me ")

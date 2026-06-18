@@ -1,4 +1,4 @@
-import vm from 'node:vm';
+import { CodeExecutionSandboxSchema } from '../tools/CodeExecutionSandboxes/mutual';
 import { RLMAgentEventsBody, RLMSubModel } from './orchestrator';
 
 interface Sandbox {
@@ -19,29 +19,25 @@ type CallLLMFunction = (prompt: string, modelIndex: number) => Promise<string>;
 
 type EmitEventFunction = <Event extends keyof RLMAgentEventsBody>(eventName: Event, ...eventArgs: Parameters<RLMAgentEventsBody[Event]>) => any;
 
-export type ExecuteAgentCodeOutput = {
-    output: string;
-    finalAnswer: string | null | undefined;
-    /** When specified as `true` statisifies the error has happen for RLM */
-    isError?: boolean;
-}
-
-export class RLMEnvironment {
+export class RLMEnvironment<CodeSandbox extends CodeExecutionSandboxSchema> {
     hugeContextData: string;
     submodels: RLMSubModel[];
-    logs: any[];
+    logs: string[];
+    codeExecutionSandbox: CodeSandbox;
     callLLM: CallLLMFunction;
     emitEvent: EmitEventFunction;
     
     constructor(
         hugeContextData: string,
         submodels: RLMSubModel[],
+        codeSandbox: CodeSandbox,
         callLLM: CallLLMFunction,
         emitEvent: EmitEventFunction
     ) {
         this.hugeContextData = hugeContextData;
         this.submodels = submodels;
         this.logs = [];
+        this.codeExecutionSandbox = codeSandbox;
         this.callLLM = callLLM;
         this.emitEvent = emitEvent;
     }
@@ -91,33 +87,11 @@ export class RLMEnvironment {
             submitFinalAnswer: (answer: string) => { sandbox.finalAnswer = answer; }
         };
 
-        const vmContext = vm.createContext(sandbox);
-
-        // Wrap the agent's code in an async IIFE to support top-level await
-        const wrappedCode = `
-            (async () => {
-                try {
-                    ${code}
-                } catch (err) {
-                    console.error(err.message);
-                }
-            })();
-        `;
-
-        const script = new vm.Script(wrappedCode);
+        // Defined the output
+        const executionOutputResult = await this.codeExecutionSandbox.execute(code, sandbox, this.logs);
         
-        try {
-            await script.runInContext(vmContext);
-            const result = {
-                output: this.logs.join('\n'),
-                finalAnswer: vmContext.finalAnswer
-            };
-            this.emitEvent("execute_code_end", result);
-            return result;
-        } catch (error: any) {
-            const result = { output: `Execution Error: ${error.message}`, finalAnswer: null, isError: true };
-            this.emitEvent("execute_code_end", result);
-            return result;
-        }
+        this.emitEvent("execute_code_end", executionOutputResult);
+
+        return executionOutputResult;
     }
 }
