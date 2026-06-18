@@ -120,6 +120,99 @@ ReAct Agent is the standalone agent of RavenADK -> it's about to Reason atop of 
 
 > [Check full ReAct Agent documentation](./documentation/ReAct-Agent.md)
 
+### RLM (Recurrent Language Models)
+
+RLM is a powerful pattern for processing **massive datasets** (100MB+) and **complex analyses** through recursive delegation to specialized models. It implements the **CodeAct pattern** where an orchestrator LLM **writes and executes code** to explore data, delegating analysis tasks to cheaper sub-models when needed.
+
+**Why RLM?**
+- **Process huge datasets** without context window limitations
+- **Reduce costs** by ***70-90%*** through smart model delegation
+- **Faster execution** via iterative code-based exploration
+- **Transparent reasoning** via code execution events
+
+```typescript
+    import { RLMAgent } from "@ravenlens/raven-adk/agent";
+    import { NodeJSSandbox } from "@ravenlens/raven-adk/tools/CodeExecutionSandboxes";
+    import { OpenAI } from "@ravenlens/raven-adk/models";
+
+    // Load massive dataset (e.g., 500MB log file)
+    const largeDataset = await fs.readFile("./massive-data.txt", "utf-8");
+
+    const rlmAgent = new RLMAgent(largeDataset, {
+        model: new OpenAI({
+            model: "gpt-4o",  // Orchestrator: writes code to explore data
+            apiKey: process.env.OPENAI_API_KEY
+        }),
+        submodels: [
+            {
+                model: new OpenAI({
+                    model: "gpt-3.5-turbo",  // Sub-model: fast & cheap
+                    apiKey: process.env.OPENAI_API_KEY
+                }),
+                instruction: "Analyze patterns and classify data"
+            }
+        ],
+        maxIterations: 5,
+        codeSandbox: new NodeJSSandbox()
+    });
+
+    // Monitor the reasoning process
+    rlmAgent.onEvent("orchestrator_model_call", (model, result) => {
+        console.log("🧠 Orchestrator code:", result.substring(0, 100) + "...");
+    });
+
+    rlmAgent.onEvent("submodel_call", (model, task) => {
+        console.log("🤖 Delegating to sub-model:", task.substring(0, 80) + "...");
+    });
+
+    // Run analysis
+    const result = await rlmAgent.invoke(
+        "Analyze logs: find top 5 error types, frequency trends, and performance bottlenecks"
+    );
+
+    console.log("✅ Analysis:", result);
+    console.log("📊 Tokens used:", rlmAgent.getUsage());
+```
+
+**Combine RLM + ReAct for Complex Workflows:**
+
+```typescript
+    // Step 1: RLM processes huge dataset efficiently
+    const rlmAnalysis = await rlmAgent.invoke("Extract key findings from 500K records");
+
+    // Step 2: ReAct Agent acts on findings (uses tools, makes decisions)
+    const reactAgent = new ReActAgent({
+        model: new OpenAI({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY }),
+        systemPrompt: "You are an operations agent.",
+        messages: [
+            {
+                type: "user",
+                content: `Based on this analysis:\n${rlmAnalysis}\n\nCreate alerts and notify teams.`
+            }
+        ],
+        tools: [
+            {
+                name: "create_alert",
+                description: "Create a system alert",
+                execute: async (params) => createAlert(params)
+            }
+        ]
+    });
+
+    await reactAgent.invoke();
+```
+
+**Use Cases:**
+- 📊 **Log Analysis**: Find errors & anomalies in GB-sized logs
+- 🔍 **Search Results Processing**: Filter 10K+ results down to top insights
+- 📄 **Document Review**: Assess contracts, policies, PDFs at scale
+- 👥 **Data Segmentation**: Classify millions of records efficiently
+- 🏦 **Compliance Checks**: Scan large datasets for violations
+
+> [Read full RLM documentation with case studies](./documentation/RLMs.md) • [CodeAct Pattern](https://learn.microsoft.com/en-us/agent-framework/agents/code_act?pivots=programming-language-csharp)
+
+> Combine RLM with ReAct agent for the best performance gains [start here](./documentation/RLMs.md#advanced-usage-rlm--react-agent)
+
 ### Skills
 Skills of RavenADK are compliant with open [skills standard](https://agentskills.io/home) what is use by e.g: Claude Code, MS Copilot and likelly more
 [Read more about RavenADK skills](./documentation/Skills.md). Additional skill features:
