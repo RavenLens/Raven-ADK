@@ -52,7 +52,7 @@ This approach dramatically **reduces token costs** and **improves latency** when
 
 ```typescript
 import { RLMAgent, RLMContextEnvironment } from "@ravenlens/raven-adk/agent";
-import { NodeJSSandbox } from "@ravenlens/raven-adk/tools/CodeExecutionSandboxes";
+import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 import { OpenAI } from "@ravenlens/raven-adk/models";
 ```
 
@@ -63,8 +63,8 @@ Use RLM when you have a large dataset and need to extract structured information
 ### Example 1: Analyzing Large Log Files
 
 ```typescript
-import { RLMAgent } from "@ravenlens/raven-adk/agent";
-import { NodeJSSandbox } from "@ravenlens/raven-adk/tools/CodeExecutionSandboxes";
+import { RLMAgent } from "@ravenlens/raven-adk/rlm";
+import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 import { OpenAI } from "@ravenlens/raven-adk/models";
 
 // Load a massive log file (e.g., 10MB+ of server logs)
@@ -93,7 +93,7 @@ const rlmAgent = new RLMAgent(hugeLogData, {
         }
     ],
     maxIterations: 10,
-    codeSandbox: new NodeJSSandbox()
+    codeSandbox: new NodeExecutionSandbox()
 });
 
 // Listen to events
@@ -138,8 +138,8 @@ console.log("📊 Token Usage:", {
 ### Example 2: Extracting Data from Large JSON
 
 ```typescript
-import { RLMAgent } from "@ravenlens/raven-adk/agent";
-import { NodeJSSandbox } from "@ravenlens/raven-adk/tools/CodeExecutionSandboxes";
+import { RLMAgent } from "@ravenlens/raven-adk/rlm";
+import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 import { OpenAI } from "@ravenlens/raven-adk/models";
 
 // Example: 500MB of user behavior data
@@ -157,7 +157,7 @@ const rlmAgent = new RLMAgent(userDataJSON, {
         }
     ],
     maxIterations: 5,
-    codeSandbox: new NodeJSSandbox()
+    codeSandbox: new NodeExecutionSandbox()
 });
 
 const result = await rlmAgent.invoke(
@@ -175,9 +175,9 @@ Combine RLM with ReAct Agent to solve complex, multi-step problems that require 
 RLM goes first to analyse the large file, ReAct agent follows the RLM outcomes for performing logical `Reaconing + Acting` ***for a wise management of workflow*** 
 
 ```typescript
-import { RLMAgent } from "@ravenlens/raven-adk/agent";
+import { RLMAgent } from "@ravenlens/raven-adk/rlm";
 import { ReActAgent } from "@ravenlens/raven-adk/agent";
-import { NodeJSSandbox } from "@ravenlens/raven-adk/tools/CodeExecutionSandboxes";
+import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 import { OpenAI } from "@ravenlens/raven-adk/models";
 
 // Step 1: Use RLM to analyze massive dataset
@@ -194,7 +194,7 @@ const analyzeDataWithRLM = async (largeDataset: string) => {
             }
         ],
         maxIterations: 5,
-        codeSandbox: new NodeJSSandbox()
+        codeSandbox: new NodeExecutionSandbox()
     });
 
     return await rlmAgent.invoke(
@@ -259,7 +259,7 @@ await orchestrateWorkflow();
 
 ```typescript
 import { RLMAgent, ReActAgent } from "@ravenlens/raven-adk/agent";
-import { NodeJSSandbox } from "@ravenlens/raven-adk/tools/CodeExecutionSandboxes";
+import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 import { OpenAI } from "@ravenlens/raven-adk/models";
 
 // Scenario: Answer complex questions over enormous search results
@@ -277,7 +277,7 @@ async function answerComplexQueryOverLargeDataset(query: string, searchResults: 
             }
         ],
         maxIterations: 3,
-        codeSandbox: new NodeJSSandbox()
+        codeSandbox: new NodeExecutionSandbox()
     });
 
     const relevantResults = await rlmAgent.invoke(

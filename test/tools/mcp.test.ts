@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
-import { MCP, MCPTool } from "../../src/agent/tools/mcpTools";
+import { MCP, MCPTool } from "../../src/agent/tools/mcp/mcpTools";
 
 describe("mcpTools.ts", () => {
 	it("connects to a real MCP stdio server, downloads tools, and executes a tool", async () => {

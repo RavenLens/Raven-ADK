@@ -1,3 +1,14 @@
-export { ReActAgent, type ReActAgentConfig, type SubAgent } from "./ReAct.agent";
-export * as RLM from "./RLM/index";
-export * as Tools from "./tools";
+export { ReActAgent, type ReActAgentConfig, type SubAgent } from "./ReAct.agent.js";
+export * from "./RLM/index.js";
+export * as RLM from "./RLM/index.js";
+export * from "./tools/index.js";
+export * as Tools from "./tools/index.js";
+export * from "./skills/index.js";
+export * as Skills from "./skills/index.js";
+export * from "./memory/index.js";
+export * as Memory from "./memory/index.js";
+export * from "./conversation/index.js";
+export * as Conversation from "./conversation/index.js";
+
+export * as HITL from "./tools/hitl/index.js";
+export * as MCP from "./tools/mcp/index.js";

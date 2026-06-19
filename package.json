@@ -50,6 +50,10 @@
       "import": "./dist/agent/index.js",
       "require": "./dist/agent/index.js"
     },
+    "./rlm": {
+      "import": "./dist/agent/RLM/index.js",
+      "require": "./dist/agent/RLM/index.js"
+    },
     "./models": {
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.js"
@@ -70,13 +74,25 @@
       "import": "./dist/agent/tools/hitl/index.js",
       "require": "./dist/agent/tools/hitl/index.js"
     },
+    "./skills": {
+      "import": "./dist/agent/skills/index.js",
+      "require": "./dist/agent/skills/index.js"
+    },
     "./skills/store": {
       "import": "./dist/agent/skills/stores/index.js",
       "require": "./dist/agent/skills/stores/index.js"
     },
+    "./memory": {
+      "import": "./dist/agent/memory/index.js",
+      "require": "./dist/agent/memory/index.js"
+    },
     "./memory/store": {
       "import": "./dist/agent/memory/stores/index.js",
       "require": "./dist/agent/memory/stores/index.js"
+    },
+    "./sandboxes": {
+      "import": "./dist/agent/tools/CodeExecutionSandboxes/index.js",
+      "require": "./dist/agent/tools/CodeExecutionSandboxes/index.js"
     }
   },
   "dependencies": {

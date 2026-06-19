@@ -24,9 +24,9 @@ While built for RLM, sandboxes are modular and can be used as **standalone tools
 
 ```typescript
 import { ReActAgent } from "@ravenlens/raven-adk/agent";
-import { NodeJSSandbox } from "@ravenlens/raven-adk/agent/tools/CodeExecutionSandboxes";
+import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 
-const sandbox = new NodeJSSandbox.NodeExecutionSandbox();
+const sandbox = new NodeExecutionSandbox();
 
 const agent = new ReActAgent({
     model: myModel,
@@ -58,9 +58,9 @@ The default sandbox uses the Node.js native `vm` module to create a secure, isol
 #### Usage Example
 
 ```typescript
-import { NodeJSSandbox } from "@ravenlens/raven-adk/agent/tools/CodeExecutionSandboxes";
+import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 
-const sandbox = new NodeJSSandbox.NodeExecutionSandbox();
+const sandbox = new NodeExecutionSandbox();
 const result = await sandbox.execute("const x = 10; submitFinalAnswer(x * 2);", { 
     submitFinalAnswer: (val) => { /* handle result */ } 
 });
@@ -76,9 +76,9 @@ The E2B sandbox provides a cloud-native, highly isolated environment for executi
 #### Usage Example
 
 ```typescript
-import { E2BSandbox } from "@ravenlens/raven-adk/agent/tools/CodeExecutionSandboxes";
+import { E2BExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
 
-const sandbox = new E2BSandbox.E2BExecutionSandbox({ apiKey: "YOUR_E2B_API_KEY" });
+const sandbox = new E2BExecutionSandbox({ apiKey: "YOUR_E2B_API_KEY" });
 const result = await sandbox.execute(
     "print('Hello from E2B Python!')", // Code to run
     { contextData: { key: "value" } },  // Context data

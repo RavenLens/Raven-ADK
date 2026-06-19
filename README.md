@@ -39,7 +39,7 @@ npm install @ravenlens/raven-adk
 Use graph with this style to make your own workflow
 
 ```typescript
-import { Graph, GraphMarkers } from "@ravenlens/@ravenlens/raven-adk/graph";
+import { Graph, GraphMarkers } from "@ravenlens/raven-adk/graph";
 
 const graphState = { invokeTimes: 0 };
 const graph = new Graph(graphState);
@@ -133,8 +133,8 @@ RLM is a powerful pattern for processing **massive datasets** (100MB+) and **com
 - **Transparent reasoning** via code execution events
 
 ```typescript
-    import { RLMAgent } from "@ravenlens/raven-adk/agent";
-    import { NodeJSSandbox } from "@ravenlens/raven-adk/tools/CodeExecutionSandboxes";
+    import { RLMAgent } from "@ravenlens/raven-adk/rlm";
+    import { NodeExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
     import { OpenAI } from "@ravenlens/raven-adk/models";
 
     // Load massive dataset (e.g., 500MB log file)
@@ -155,7 +155,7 @@ RLM is a powerful pattern for processing **massive datasets** (100MB+) and **com
             }
         ],
         maxIterations: 5,
-        codeSandbox: new NodeJSSandbox()
+        codeSandbox: new NodeExecutionSandbox()
     });
 
     // Monitor the reasoning process

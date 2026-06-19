@@ -25,7 +25,7 @@ With this integration you can:
 ### Step 1: Initialize MCP
 
 ```typescript
-import { MCP } from "./src/agent/tools/mcpTools";
+import { MCP } from "@ravenlens/raven-adk/tools/mcp";
 
 const mcp = new MCP({
 	clientName: "my-raven-client",
@@ -102,7 +102,7 @@ console.log(result.messages.at(-1));
 ## Full Example (Single Flow)
 
 ```typescript
-import { MCP } from "./src/agent/tools/mcpTools";
+import { MCP } from "@ravenlens/raven-adk/tools/mcp";
 import { ReActAgent } from "./src/agent/ReAct.agent";
 import { OpenAI } from "./src/models/openai";
 

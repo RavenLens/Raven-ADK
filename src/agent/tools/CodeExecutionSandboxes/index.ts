@@ -1,3 +1,3 @@
-export * as MutualSandbox from "./mutual";
-export * as NodeJSSandbox from "./nodejs-sandbox";
-export * as E2BSandbox from "./e2b-sandbox";
+export * from "./mutual.js";
+export { NodeExecutionSandbox } from "./nodejs-sandbox.js";
+export { E2BExecutionSandbox } from "./e2b-sandbox.js";
