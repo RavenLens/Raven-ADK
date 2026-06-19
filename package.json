@@ -1,8 +1,9 @@
 {
   "name": "@ravenlens/raven-adk",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightful UI assemblies gorgeous UX. Made by RavenAlliance",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc"
@@ -18,7 +19,7 @@
     "ravenalliance"
   ],
   "author": "Michał Szczepański (kotekpsotek)",
-  "license": "ISC",
+  "license": "Apache-2.0",
   "type": "commonjs",
   "bugs": {
     "url": "https://github.com/RavenLens/Raven-SDK/issues"
@@ -39,58 +40,72 @@
   ],
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.js"
     },
     "./graph": {
+      "types": "./dist/graph/index.d.ts",
       "import": "./dist/graph/index.js",
       "require": "./dist/graph/index.js"
     },
     "./agents": {
+      "types": "./dist/agent/index.d.ts",
       "import": "./dist/agent/index.js",
       "require": "./dist/agent/index.js"
     },
     "./rlm": {
+      "types": "./dist/agent/RLM/index.d.ts",
       "import": "./dist/agent/RLM/index.js",
       "require": "./dist/agent/RLM/index.js"
     },
     "./models": {
+      "types": "./dist/models/index.d.ts",
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.js"
     },
     "./tools": {
+      "types": "./dist/agent/tools/index.d.ts",
       "import": "./dist/agent/tools/index.js",
       "require": "./dist/agent/tools/index.js"
     },
     "./tools/mcp": {
+      "types": "./dist/agent/tools/mcp/index.d.ts",
       "import": "./dist/agent/tools/mcp/index.js",
       "require": "./dist/agent/tools/mcp/index.js"
     },
     "./tools/mcp/types": {
+      "types": "./dist/agent/tools/mcp/types.d.ts",
       "import": "./dist/agent/tools/mcp/types.js",
       "require": "./dist/agent/tools/mcp/types.js"
     },
     "./tools/hitl": {
+      "types": "./dist/agent/tools/hitl/index.d.ts",
       "import": "./dist/agent/tools/hitl/index.js",
       "require": "./dist/agent/tools/hitl/index.js"
     },
     "./skills": {
+      "types": "./dist/agent/skills/index.d.ts",
       "import": "./dist/agent/skills/index.js",
       "require": "./dist/agent/skills/index.js"
     },
     "./skills/store": {
+      "types": "./dist/agent/skills/stores/index.d.ts",
       "import": "./dist/agent/skills/stores/index.js",
       "require": "./dist/agent/skills/stores/index.js"
     },
     "./memory": {
+      "types": "./dist/agent/memory/index.d.ts",
       "import": "./dist/agent/memory/index.js",
       "require": "./dist/agent/memory/index.js"
     },
     "./memory/store": {
+      "types": "./dist/agent/memory/stores/index.d.ts",
       "import": "./dist/agent/memory/stores/index.js",
       "require": "./dist/agent/memory/stores/index.js"
     },
     "./sandboxes": {
+      "types": "./dist/agent/tools/CodeExecutionSandboxes/index.d.ts",
       "import": "./dist/agent/tools/CodeExecutionSandboxes/index.js",
       "require": "./dist/agent/tools/CodeExecutionSandboxes/index.js"
     }

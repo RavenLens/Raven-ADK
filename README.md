@@ -1,9 +1,10 @@
-# Raven ADK
+# RavenADK
 
 [![npm version](https://img.shields.io/npm/v/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
 [![npm downloads](https://img.shields.io/npm/dm/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
-[![License](https://img.shields.io/badge/license-ISC-blue.svg)](https://opensource.org/licenses/ISC)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289da?logo=discord&logoColor=white)](https://discord.gg/eFfVjDj7Xd)
+<!-- TODO: Someday point to the dedicated webpage -->
 [![Webpage](https://img.shields.io/badge/webpage-visit-blue.svg?logo=google-chrome&logoColor=white)](https://www.ravenalliance.tech)
 
 > Package is in active developement

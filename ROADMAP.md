@@ -73,8 +73,8 @@
         - https://www.daytona.io/
         - local
         - https://vercel.com/docs/sandbox
-    - RLMs - Add support for improving the performance
-    - InfyAgent - Offloading the context to external files and reading the last 10 files and rest to read on demand with regexp, sequence read tools and more, delegate subtasks to be done by subagents for better overall agent results
+    - RLMs - Add support for improving the performance (v)
+    - InfyAgent - Offloading the context to external files and reading the last 10 files and rest to read on demand with regexp, sequence read tools and more, delegate subtasks to be done by subagents for better overall agent results (v)
 7. Agentic RAG support
     - For typical chatting with ai
     - For [ReAct Agent](./documentation/ReAct-Agent.md)
@@ -110,3 +110,7 @@
 17. Add router model to scale the execution to particular model according to specification
     - This is to optimize costs
     - User writes his own conditions what model has to be triggered+
+18. Prepare the TODO component as ReAct Agent plugin
+    - It's to modify prompt - to isntruct llm to use planning
+    - It's to give the tools to allow to construct todo list and update its state: planned, doing, done
+    - It's to be in feature comptaoble with next core patterns for scalling for businesses
