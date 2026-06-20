@@ -98,12 +98,10 @@ export function createTodoTools(
  */
 export function createTodoPlugin(
     todoStorage: TodoStoreSchemaTS[],
-    finishedTodoTecallTries: number = 3,
-    model?: AgentModel,
 ): ReActAgentPluginSpec {
     return {
         name: "TODO-Plugin",
-        executionWay: ["before_agent_run", "after_model_call"],
+        executionWay: "before_agent_run",
         async execute(executionPlace, agentConfig, graphState) {
             if (executionPlace.way === "before_agent_run") {
                 // 1. Assign tools
@@ -123,8 +121,8 @@ export function createTodoPlugin(
                     todoContext = "The list is currently empty.";
                 }
     
-                const todoInstruction = `\n\n### Current TODO List:\n${todoContext}\n\nYou can update this list using the provided tools 'update_todo_list' and 'get_todo_list_points'. Always keep the list up to date with your progress. You've to pursue the TODO list resoultion to mark all points as 'done' by using tools, subagents, skills and your memory the best as is possible.`;
-                if (!agentConfig.systemPrompt.includes("### Current TODO List:")) {
+                const todoInstruction = `\n\n### TODO List Management Protocol\nYou MUST actively manage the task progress using the TODO list tools. Follow these rules to ensure operational excellence:\n1. **Frequent Observation**: Call 'get_todo_list_points' at the beginning of your task and after major milestones to synchronize your state with the storage.\n2. **Immediate Updates**: Use 'update_todo_list' the moment a task state changes. Mark points as 'in_progress' when starting and 'done' immediately upon completion.\n3. **Resolution Commitment**: Pursue the resolution of ALL points. Your primary objective is to move every task to the 'done' state. \n4. **Accuracy for Final Output**: Never conclude a conversation while points are still marked 'untouched' or 'in_progress' if the corresponding work has been performed. The list MUST reflect the actual mission status.\n\n### Current TODO List State:\n${todoContext}\n\nUse the 'update_todo_list' and 'get_todo_list_points' tools to pursue these objectives.`;
+                if (!agentConfig.systemPrompt.includes("### TODO List Management Protocol")) {
                     agentConfig.systemPrompt += todoInstruction;
                 }
     
@@ -134,85 +132,6 @@ export function createTodoPlugin(
                         agentConfig: agentConfig
                     }
                 };
-            }
-            else if (executionPlace.way === "after_model_call") {
-                const lastMessage = agentConfig.messages.at(-1);
-                // Skip verification if there are pending tool calls - avoids 400 error from OpenAI
-                // when tool calls are not followed by tool results in the checker's context
-                if (lastMessage?.type === "ai" && lastMessage.calledTools && lastMessage.calledTools.length > 0) {
-                    return { status: true };
-                }
-
-                const evaluationCheckerModel = model ?? agentConfig.model;
-                const currentTodos = todoStorage[0]?.todoPoints || [];
-                if (currentTodos.length === 0) return { status: true };
-
-                // 1. Prepare messages for checker (excluding system prompt and cleaning up tool calls)
-                const messagesForChecker: MessagesVariations[] = [
-                    {
-                        type: "system",
-                        content: `
-You're todo list verificatior and your rule is to check whether was some todo point accomplished base on the deliveried messages history and todo list
-                        `
-                    },
-                    ...agentConfig.messages
-                        .filter(m => m.type === "user" || m.type === "ai") // ONLY keep user and ai to keep history clean for verifier
-                        .map(m => {
-                            // Strip ALL metadata from AI messages to avoid "No tool output found" or other validation errors
-                            if (m.type === "ai") {
-                                return {
-                                    type: "ai",
-                                    content: m.content
-                                } as AIMessage;
-                            }
-                            return m;
-                        }),
-                    // Adds evaluation task
-                    {
-                        type: "user",
-                        content: `Based on the conversation above, identify if any of the following TODO points have been completed (reached 'done' state). 
-Return the names of the completed points.
-
-TODO Points to check:
-${currentTodos.map(t => `- ${t.name}${t.description ? `: ${t.description}` : ''} (Current state: ${t.state})`).join('\n')}`
-                    }
-                ];
-                
-                // 2. Define structured output schema
-                const finishedTodoCheckerSchema = z.object({
-                    finishedTodoNames: z.array(z.string()).describe("List with names of todo points that has been finished after recent model call")
-                });
-
-                // 3. Synchronize messages with the model and call it
-                const originalMessages = evaluationCheckerModel.config.messages;
-                try {
-                    console.log(`TODO-Plugin: Starting evaluation of finished tasks for ${executionPlace.nodeName}...`);
-                    evaluationCheckerModel.config.messages = messagesForChecker;
-                    const evaluationResult = await evaluationCheckerModel.invokeStructuredOutput(finishedTodoCheckerSchema, finishedTodoTecallTries);
-                    const aiMessage = evaluationResult.answer.find((m): m is AIMessage => m.type === "ai");
-                    const structured = aiMessage?.structuredOutput as { finishedTodoNames: string[] } | undefined;
-
-                    // 5. Update state of points
-                    if (structured?.finishedTodoNames && structured.finishedTodoNames.length > 0) {
-                        console.log(`TODO-Plugin: Identified finished tasks: ${structured.finishedTodoNames.join(', ')}`);
-                        for (const name of structured.finishedTodoNames) {
-                            const point = currentTodos.find(p => p.name === name);
-                            if (point && point.state !== "done") {
-                                point.state = "done";
-                            }
-                        }
-                    }
-                } catch (error) {
-                    // Log error but don't break the agent loop
-                    console.error("TODO-Plugin: Evaluation of finished tasks failed", error);
-                } finally {
-                    // Restore original messages
-                    evaluationCheckerModel.config.messages = originalMessages;
-                }
-
-                return {
-                    status: true
-                }
             }
 
             return {

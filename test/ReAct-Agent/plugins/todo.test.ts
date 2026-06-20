@@ -10,7 +10,7 @@ const liveDescribe = (openaiApiKey && openaiApiKey.length > 0) ? describe : desc
 liveDescribe("ReActAgent with TODO Plugin - Live Integration", () => {
     it("should manage a todo list with main agent and subagent", async () => {
         const todoStorage: TodoStoreSchemaTS[] = [{ todoPoints: [] }];
-        const todoPlugin = createTodoPlugin(todoStorage, 1);
+        const todoPlugin = createTodoPlugin(todoStorage);
 
         const model = new OpenAI({
             model: "gpt-5-mini",

@@ -30,7 +30,7 @@ describe("TODO Plugin - Logic alone", () => {
 
     it("should modify agent config in before_agent_run", async () => {
         const storage: TodoStoreSchemaTS[] = [{ todoPoints: [{ name: "Existing", state: "untouched" }] }];
-        const plugin = createTodoPlugin(storage, 1);
+        const plugin = createTodoPlugin(storage);
         const agentConfig: ReActAgentConfig<any, any> = {
             model: {} as AgentModel,
             systemPrompt: "Original prompt",
@@ -49,44 +49,5 @@ describe("TODO Plugin - Logic alone", () => {
         expect(agentConfig.tools).toHaveLength(2);
         expect(agentConfig.systemPrompt).toContain("Existing");
         expect(agentConfig.systemPrompt).toContain("update_todo_list");
-    });
-
-    it("should update storage in after_model_call based on model output", async () => {
-        const storage: TodoStoreSchemaTS[] = [{ 
-            todoPoints: [
-                { name: "Task 1", state: "untouched" },
-                { name: "Task 2", state: "untouched" }
-            ] 
-        }];
-        
-        const mockModel = {
-            config: { messages: [] },
-            invokeStructuredOutput: vi.fn().mockResolvedValue({
-                answer: [{
-                    type: "ai",
-                    structuredOutput: {
-                        finishedTodoNames: ["Task 1"]
-                    }
-                }]
-            })
-        } as unknown as AgentModel;
-
-        const plugin = createTodoPlugin(storage, 3, mockModel);
-        const agentConfig: ReActAgentConfig<any, any> = {
-            model: mockModel,
-            systemPrompt: "",
-            messages: [{ type: "user", content: "I finished Task 1" }],
-            tools: []
-        };
-
-        const result = await plugin.execute(
-            { way: "after_model_call", nodeType: "main" },
-            agentConfig,
-            {} as any
-        );
-
-        expect(result.status).toBe(true);
-        expect(storage[0].todoPoints.find(p => p.name === "Task 1")?.state).toBe("done");
-        expect(storage[0].todoPoints.find(p => p.name === "Task 2")?.state).toBe("untouched");
     });
 });

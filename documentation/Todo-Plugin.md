@@ -1,26 +1,23 @@
 # TODO Plugin
 
-The `TODO-Plugin` for RavenADK provides a robust way for ReAct Agents to manage, track, and automatically verify the completion of tasks during a conversation. It leverages a combination of specialized tools for task management and a background "verifier" logic that scans message history to update the state of your project.
+The `TODO-Plugin` for RavenADK provides a robust way for ReAct Agents to manage and track the completion of tasks during a conversation. It leverages specialized tools for task management and a strict **Operational Protocol** injected into the agent's system prompt to ensure high behavioral fidelity and task resolution.
 
 ## How it Works
 
-The plugin operates in two primary phases within the ReAct loop:
+The plugin operates during the initialization phase of the agent:
 
-### 1. Initialization (`before_agent_run`)
+### Initialization (`before_agent_run`)
 When the agent starts, the plugin:
 - **Injects Tools**: Adds `update_todo_list` and `get_todo_list_points` to the agent's toolset.
-- **Context Injection**: Modifies the system prompt to include the current state of the TODO list, ensuring the agent is always aware of what remains to be done.
-
-### 2. Verification (`after_model_call`)
-After every model call (whether from the main agent or a subagent):
-- **Automated Check**: The plugin uses the configured `AgentModel` (or the agent's own model) to evaluate the conversation history.
-- **State Synchronization**: It identifies which tasks have been completed based on the dialogue and automatically marks them as `done` in the shared storage.
+- **Protocol Injection**: Injects a "TODO List Management Protocol" into the system prompt. This protocol forces the agent to call the tools frequently, update status immediately upon changes, and prioritize the resolution of all points.
+- **Context Injection**: Updates the system prompt with the current live state of the TODO list from storage.
 
 ## Key Features
 
-- **Subagent Support**: Tasks assigned to or completed by subagents are automatically tracked and verified.
-- **Shared Storage**: Uses a simple JavaScript object (`TodoStoreSchemaTS[]`) as storage, allowing for easy persistence or integration with external databases.
-- **Structured Verification**: Uses structured output to ensure the verification process is consistent and accurate.
+- **Autonomous Management**: Unlike passive tracking, the plugin empowers the agent to be the "owner" of the task list, using tools to reflect its actual progress.
+- **Subagent Transparency**: The main agent uses the same tools to delegate and track work performed by subagents, maintaining a unified source of truth.
+- **Shared Storage**: Uses a simple JavaScript structure (`TodoStoreSchemaTS[]`) allowing for seamless integration with in-memory states or persistent databases.
+- **High Performance**: By relying on prompt-driven autonomy rather than background verification loops, the plugin ensures zero-latency task tracking.
 
 ## Scenarios
 
