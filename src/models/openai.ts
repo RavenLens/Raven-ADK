@@ -307,7 +307,7 @@ export class OpenAI implements StandardLLMShema {
         }
 
         let aiAnswer: AIMessage | null = null;
-        if (answerContentText || fileInput || audioInput || audioOutput) {
+        if (answerContentText || fileInput || audioInput || audioOutput || calledToolsMessage.length > 0) {
             aiAnswer = {
                 type: "ai",
                 content: answerContentText,
@@ -319,8 +319,7 @@ export class OpenAI implements StandardLLMShema {
         }
 
         const answer: (AIMessage | ToolMessage)[] = [
-            ...(aiAnswer ? [aiAnswer] : []),
-            ...calledToolsMessage
+            ...(aiAnswer ? [aiAnswer] : [])
         ];
 
         return {
@@ -365,7 +364,7 @@ export class OpenAI implements StandardLLMShema {
         }
 
         let aiAnswer: AIMessage | null = null;
-        if (answerContentText || audioOutput) {
+        if (answerContentText || audioOutput || calledToolsMessage.length > 0) {
             aiAnswer = {
                 type: "ai",
                 content: answerContentText,
@@ -375,8 +374,7 @@ export class OpenAI implements StandardLLMShema {
         }
 
         const answer: (AIMessage | ToolMessage)[] = [
-            ...(aiAnswer ? [aiAnswer] : []),
-            ...calledToolsMessage
+            ...(aiAnswer ? [aiAnswer] : [])
         ];
 
         return {

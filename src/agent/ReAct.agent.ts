@@ -6,7 +6,7 @@ import { Google } from "../models/google";
 import { SchemaMemoryStore } from "./memory/stores/schema";
 import { Memory as MemoryInterface } from "./memory/memory";
 import { SchemaSkillStore } from "./skills/stores/schema";
-import { AgentMessagesGraphState, MessagesVariations } from "./state";
+import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcp/mcpTools";
 import { Tool } from "./tools/tools";
@@ -21,6 +21,28 @@ export type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt"
     roleDescription: string;
 }
 
+/**
+ * Possible ways of execution for ReAct Agent
+ * 
+ * List with description:
+ * * before_agent_run - runs before agent start its execution. Ideal place to modify agent condifuration or graphState
+ * * after_agent_run  - runs after agent has finish its execution. Ideal place to sumup its execution
+ * * before_model_call - runs before the master and subagents model was launched
+ * * after_model_call - runs after the master and subagents model has finished its run
+ */
+export type PluginExecutionWays = "before_agent_run" | "after_agent_run" | "before_model_call" | "after_model_call";
+
+export interface ExecutionFrom {
+    way: PluginExecutionWays;
+    nodeType: "main" | "subagent" | "aside";
+    /**
+     * For main_node the value is "main_node",
+     * For subagent node the value is "subagent.role" so role name of subagent
+     */
+    nodeName?: string;
+    nodeModel?: AgentModel;
+}
+
 export interface ReActAgentPluginSpec {
     /** It's a plugin name */
     name: string;
@@ -28,12 +50,17 @@ export interface ReActAgentPluginSpec {
      * It's a place where agent is going to be execute
      * TODO: Deliver more plugin execution places: after_tool_execution, "before_tool_execution"
     */
-    executionWay: "before_agent_run" | "after_agent_run" | "before_model_call";
+    executionWay: PluginExecutionWays | PluginExecutionWays[];
     /**
      * Runs the plugin logic 
+     * @param executionPlace - it's singular place from where execution happens - it can be singular atime
      * @returns Execution status and changed/unchanged state of agent is assigned in place of prior state, When success is `false` then doesn't use a result to override the agent state
     */
-    execute<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore>(agentConfig: ReActAgentConfig<Skills, Memory>, graphState: AgentMessagesGraphState): Promise<{
+    execute<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore>(
+        executionFrom: ExecutionFrom,
+        agentConfig: ReActAgentConfig<Skills, Memory>,
+        graphState: AgentMessagesGraphState
+    ): Promise<{
         /** Status of plugin execution */
         status: boolean;
         /** Result of plugin execution. Overrides original 'entry' state only when `status === true` */
@@ -288,7 +315,11 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                 }
 
                 // Run plugins
-                await this.runPlugins("before_model_call");
+                await this.runPlugins("before_model_call", {
+                    nodeType: "main",
+                    nodeName: "main_node",
+                    nodeModel: this.agentConfig.model
+                });
                 
                 // Invoke model
                 const modelInvoke = await this.agentConfig.model.invoke({
@@ -298,6 +329,13 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                 this.calculateUsedTokens(modelInvoke);
                 this.agentConfig.messages = modelInvoke.messages;
                 this.emitEvent("llm_result", modelInvoke);
+
+                // Run plugins
+                await this.runPlugins("after_model_call", {
+                    nodeType: "main",
+                    nodeName: "main_node",
+                    nodeModel: this.agentConfig.model
+                });
 
                 // Reasoning
                 const reasoningMessages = modelInvoke.answer
@@ -310,10 +348,25 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     this.emitEvent("reasoning_end", reasoningMessages);
                 }
 
-                // Decide to call tools once again
-                const toolAnswers = modelInvoke.answer.filter(
-                    (answerMsg): answerMsg is Extract<MessagesVariations, { type: "tool" }> => answerMsg.type === "tool"
-                );
+                // Decide to call tools once again - check for top-level tool messages or nested calledTools in AI messages
+                const toolAnswers: ToolMessage[] = [];
+                const seenToolIds = new Set<string>();
+
+                for (const answerMsg of modelInvoke.answer) {
+                    if (answerMsg.type === "tool") {
+                        if (!seenToolIds.has(answerMsg.tool_id)) {
+                            toolAnswers.push(answerMsg);
+                            seenToolIds.add(answerMsg.tool_id);
+                        }
+                    } else if (answerMsg.type === "ai" && answerMsg.calledTools) {
+                        for (const tool of answerMsg.calledTools) {
+                            if (!seenToolIds.has(tool.tool_id)) {
+                                toolAnswers.push(tool);
+                                seenToolIds.add(tool.tool_id);
+                            }
+                        }
+                    }
+                }
 
                 if (toolAnswers.length) {
                     return {
@@ -571,6 +624,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                             ...this.agentConfig.tools,
                             ...agent.tools
                         ],
+                        plugins: this.agentConfig.plugins,
                         subagents: this.agentConfig.subagents,
                         withConclusion: true
                     });
@@ -581,8 +635,12 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
 
                     
-                    // Run plugins // FIXME: As far as subagents inherits the messages context from the rest of models the compress algorithm will work
-                    await this.runPlugins("before_model_call");
+                    // Run plugins // WARNING: As far as subagents inherits the messages context from the rest of models the compress algorithm will work
+                    await this.runPlugins("before_model_call", {
+                        nodeType: "subagent",
+                        nodeName: agent.role,
+                        nodeModel: agent.model
+                    });
                     
                     const result = await subagent.invoke();
 
@@ -598,10 +656,21 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         messagesToMerge = messagesToMerge.slice(0, -1);
                     }
 
+                    // Only merge new messages created by subagent to avoid duplication in history
+                    const originalMessagesCount = this.agentConfig.messages.length;
+                    const newMessages = messagesToMerge.slice(originalMessagesCount);
+
                     this.agentConfig.messages = [
                         ...this.agentConfig.messages,
-                        ...messagesToMerge // subagent messages to full set of messages
+                        ...newMessages
                     ];
+
+                    // Run after subagent
+                    await this.runPlugins("after_model_call", {
+                        nodeType: "subagent",
+                        nodeName: agent.role,
+                        nodeModel: agent.model
+                    });
 
                     // If subagent requested recall, convert it into main internal recall flow
                     if (subagentRecall) {
@@ -1069,16 +1138,20 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         };
     }
 
-    /** It's responsible to run agent plugins have the specific execution way */
-    private async runPlugins(executionWay: NonNullable<ReActAgentConfig<any, any>["plugins"]>[number]["executionWay"]) {
-        const pluginsToRun = this.agentConfig.plugins?.filter(plugin => plugin.executionWay === executionWay);
+    /** It's responsible to run agent plugins have the specific execution way
+     * 
+     * TODO: Add error resistant plugin execution behaviour as default and ignoring as option
+    */
+    private async runPlugins(executionWay: PluginExecutionWays, executionFrom?: Omit<ExecutionFrom, "way">) {
+        const pluginsToRun = this.agentConfig.plugins?.filter(plugin => plugin.executionWay instanceof Array ? plugin.executionWay.includes(executionWay) : plugin.executionWay === executionWay);
         if (pluginsToRun?.length) {
             for (const plugin of pluginsToRun) {
-                this.emitEvent("plugin_invoking", plugin.name, plugin.executionWay);
+                this.emitEvent("plugin_invoking", plugin.name, executionWay);
                 
-                const runResult = await plugin.execute(this.agentConfig, this.AgentGraph.graphState);
+                const executionFromObjPass: ExecutionFrom = executionFrom ? { ...executionFrom, way: executionWay } : { way: executionWay, nodeType: "aside" };
+                const runResult = await plugin.execute(executionFromObjPass, this.agentConfig, this.AgentGraph.graphState);
                 
-                this.emitEvent("plugin_result", plugin.name, plugin.executionWay, runResult);
+                this.emitEvent("plugin_result", plugin.name, executionWay, runResult);
 
                 if (runResult.status) {
                     if (runResult.result?.agentConfig) this.agentConfig = runResult.result.agentConfig;

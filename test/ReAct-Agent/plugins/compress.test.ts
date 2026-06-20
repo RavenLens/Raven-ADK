@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { generateCompressReActAgentPlugin, Tokenizer } from "../../src/agent/conversation";
-import { MessagesVariations } from "../../src/agent/state";
+import { generateCompressReActAgentPlugin, Tokenizer } from "../../../src/agent/conversation";
+import { MessagesVariations } from "../../../src/agent/state";
 
 describe("Conversation Tokenizer & Compaction Tests", () => {
     const mockTokenizer: Tokenizer = (content: string) => {
@@ -32,7 +32,7 @@ describe("Conversation Tokenizer & Compaction Tests", () => {
             tools: []
         };
 
-        const result = await plugin.execute(config, {});
+        const result = await plugin.execute({ nodeType: "aside", way: "after_agent_run" }, config, {});
         expect(result.status).toBe(true);
         expect(result.result?.agentConfig?.messages.length).toBe(6);
 
@@ -61,7 +61,10 @@ describe("Conversation Tokenizer & Compaction Tests", () => {
             tools: []
         };
 
-        const result = await plugin.execute(config, {});
+        const result = await plugin.execute({
+            nodeType: "aside",
+            way: "after_agent_run"
+        }, config, {});
         expect(result.status).toBe(false);
     });
 
@@ -88,7 +91,7 @@ describe("Conversation Tokenizer & Compaction Tests", () => {
             tools: []
         };
 
-        await plugin.execute(config, {});
+        await plugin.execute({ nodeType: "aside", way: "after_agent_run" }, config, {});
         expect(receivedContext).not.toBeNull();
         expect(receivedContext.systemPrompt.tokens).toBe(4);
         expect(receivedContext.userPrompt.tokens).toBe(2);

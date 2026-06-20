@@ -166,6 +166,6 @@ export async function invokeStructuredOutputWithRetries<TTools>(params: {
     }
 
     throw new Error(
-        `Unable to produce valid structured output after ${maxRetries + 1} attempt(s). Last error: ${lastError?.message ?? "Unknown error"}`
+        `Unable to produce valid structured output after ${maxRetries} attempt(s). Last error: ${lastError?.message ?? "Unknown error"}`
     );
 }
