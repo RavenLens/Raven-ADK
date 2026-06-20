@@ -9,6 +9,16 @@ Subagents is the list of agents can be delegated to perform some specific task. 
     - `memory` - Subagents can read and write to same memory has the parental agent access to
     - `skills` - Subagents have access to same skills definition as the paranetal agent
     - `htil` transport configuration and hitl tools - so main hitl has to get specified `hitl` tools from subagent if these have to get hitl ***agreement ask*** before beeing invoked
+3. **Optimized Execution**: When a subagent is called by a parent agent, it automatically runs with `withConclusion: false`. The parent agent acts as the orchestrator and produces the final summary once all subagents have finished.
+
+## Parallel Execution
+The `ReActAgent` supports parallel subagent execution. By setting `parallelizeSubagents: true` in the agent configuration, the agent can call multiple experts at once to solve different parts of a problem simultaneously.
+
+### Delegation Protocol
+The agent delegates tasks to subagents using the following internal syntax:
+`[[RAVEN_CALL_SUBAGENT]] <Role> | <Detailed instruction>`
+
+When parallelization is enabled, the agent can include multiple such lines in a single response.
 
 ## ReAct Agent
 Add the subagents to the `ReActAgent` by giving the `subagents` field
@@ -30,6 +40,8 @@ Add the subagents to the `ReActAgent` by giving the `subagents` field
                 content: "Check the weather condition"
             }
         ],
+        // Enable parallel subagents for faster execution
+        parallelizeSubagents: true,
         // Optional: Specify your subagents here
         subagents: [
             {

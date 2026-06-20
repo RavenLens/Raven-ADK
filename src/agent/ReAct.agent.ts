@@ -95,6 +95,10 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     maximumReasoningRecalls?: number;
     /** As default is `true` boolean */
     withConclusion?: boolean;
+    /** As default is `false` boolean */
+    parallelizeSubagents?: boolean;
+    /** As default is `false` boolean */
+    parallelTools?: boolean;
 }
 
 interface ReActAgentEvents {
@@ -206,12 +210,19 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
     /** It's overall amount of used tokens by the ReAct agent */
     usedTokens: LLMAnswer["tokens"];
 
+    private cachedWrappedSystemPrompt?: string;
+    private cachedUserSystemPrompt?: string;
+    private cachedToolsCount?: number;
+    private cachedSubagentsCount?: number;
+
     constructor(config: ReActAgentConfig<Skills, Memory>) {
         this.agentConfig = {
             ...config,
             tools: [...config.tools],
             // Agent generate conclusion by default
-            withConclusion: config.withConclusion ?? true
+            withConclusion: config.withConclusion ?? true,
+            parallelizeSubagents: config.parallelizeSubagents ?? false,
+            parallelTools: config.parallelTools ?? false
         };
         this.agentSkillsInterface = config.skills ? new SkillsInterface({
             ...config.skills.config,
@@ -279,7 +290,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             .addNode("main_node", async state => {
                 let currentState = state;
 
-                // Resolve tools -> redirect to same node once again
+                // Resolve tools inline -> eliminate dead turns!
                 if (state.callTools?.tools.length) {
                     const toolIds = new Set(state.callTools.tools.map(t => t.tool_id));
                     
@@ -292,26 +303,17 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         ...this.agentConfig.messages,
                         ...state.callTools.tools.map(toolMessage => ({
                             ...toolMessage,
-                            // Preserve the original content (arguments) and the toolOutput separately
-                            // This ensures model Turn History remains valid for OpenAI Responses API
                         }))
                     ];
 
                     const { callTools, ...stateWithoutCallTools } = state;
-
-                    return {
-                        callNode: "main_node",
-                        stateUpdate: {
-                            ...stateWithoutCallTools,
-                            toolsOutputRetrived: true
-                        }
-                    };
+                    currentState = stateWithoutCallTools as any;
                 }
 
                 // From above condition when tool output was retrived
-                if (state.toolsOutputRetrived) {
-                    const { toolsOutputRetrived, ...stateWithoutToolFlag } = state;
-                    currentState = stateWithoutToolFlag;
+                if (currentState.toolsOutputRetrived) {
+                    const { toolsOutputRetrived, ...stateWithoutToolFlag } = currentState;
+                    currentState = stateWithoutToolFlag as any;
                 }
 
                 // Run plugins
@@ -381,35 +383,154 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     };
                 }
 
-                // Parse special model command to call a subagent
-                const subagentInstruction = this.parseSubagentInstruction(modelInvoke.answer);
-                if (subagentInstruction) {
-                    const { role, instruction } = subagentInstruction;
-                    const subagentExists = this.agentConfig.subagents?.some(a => a.role === role);
-                    
+                // Parse special model command(s) to call subagent(s)
+                const subagentInstructions = this.agentConfig.parallelizeSubagents
+                    ? this.parseSubagentInstructions(modelInvoke.answer)
+                    : (() => {
+                        const single = this.parseSubagentInstruction(modelInvoke.answer);
+                        return single ? [single] : [];
+                    })();
+
+                if (subagentInstructions.length > 0) {
                     this.stripSubagentDirectiveFromTail();
 
-                    if (subagentExists) {
-                        this.agentConfig.messages = [
-                            ...this.agentConfig.messages,
-                            {
-                                type: "user",
-                                content: `[CALLING SUBAGENT: ${role}] Task: ${instruction}`
-                            }
-                        ];
-
-                        return {
-                            callNode: role,
-                            stateUpdate: currentState
-                        };
-                    } else {
-                        this.agentConfig.messages = [
-                            ...this.agentConfig.messages,
-                            {
+                    const validInstructions: { role: string; instruction: string }[] = [];
+                    for (const { role, instruction } of subagentInstructions) {
+                        const subagentExists = this.agentConfig.subagents?.some(a => a.role === role);
+                        if (subagentExists) {
+                            validInstructions.push({ role, instruction });
+                        } else {
+                            this.agentConfig.messages.push({
                                 type: "user",
                                 content: `Error: Subagent with role "${role}" does not exist. Available roles: ${this.agentConfig.subagents?.map(a => a.role).join(", ") || "None"}`
+                            });
+                        }
+                    }
+
+                    if (validInstructions.length > 0) {
+                        if (this.agentConfig.parallelizeSubagents) {
+                            const subagentsToRun = validInstructions.map(({ role, instruction }) => {
+                                const agent = this.agentConfig.subagents!.find(a => a.role === role)!;
+                                return { agent, instruction };
+                            });
+
+                            // Execute all subagents in parallel
+                            await Promise.all(subagentsToRun.map(async ({ agent, instruction }) => {
+                                // Add user calling message for this subagent
+                                this.agentConfig.messages.push({
+                                    type: "user",
+                                    content: `[CALLING SUBAGENT: ${agent.role}] Task: ${instruction}`
+                                });
+
+                                const subagentInitialMsgsCount = this.agentConfig.messages.length;
+
+                                const subagent = new ReActAgent<Skills, Memory>({
+                                    model: agent.model,
+                                    systemPrompt: agent.systemPrompt,
+                                    messages: [
+                                        ...this.agentConfig.messages
+                                    ],
+                                    skills: this.agentConfig.skills,
+                                    memory: this.agentConfig.memory,
+                                    hitl: this.agentConfig.hitl,
+                                    tools: [
+                                        ...this.agentConfig.tools,
+                                        ...agent.tools
+                                    ],
+                                    plugins: this.agentConfig.plugins,
+                                    subagents: this.agentConfig.subagents,
+                                    withConclusion: false
+                                });
+
+                                subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
+                                subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
+                                subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
+                                subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
+
+                                await this.runPlugins("before_model_call", {
+                                    nodeType: "subagent",
+                                    nodeName: agent.role,
+                                    nodeModel: agent.model
+                                });
+
+                                const result = await subagent.invoke();
+
+                                this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
+
+                                // Detect if subagent requested an internal recall
+                                const subagentRecall = this.parseRecallInstruction(result.messages);
+
+                                let messagesToMerge = result.messages;
+                                const lastMsg = messagesToMerge.at(-1);
+                                if (lastMsg?.type === "ai" && lastMsg.content?.trim().startsWith(RECALL_MAIN_NODE_PREFIX)) {
+                                    messagesToMerge = messagesToMerge.slice(0, -1);
+                                }
+
+                                const newMessages = messagesToMerge.slice(subagentInitialMsgsCount);
+
+                                this.agentConfig.messages = [
+                                    ...this.agentConfig.messages,
+                                    ...newMessages
+                                ];
+
+                                await this.runPlugins("after_model_call", {
+                                    nodeType: "subagent",
+                                    nodeName: agent.role,
+                                    nodeModel: agent.model
+                                });
+
+                                if (subagentRecall) {
+                                    currentState.parallelRecalls = currentState.parallelRecalls || [];
+                                    currentState.parallelRecalls.push(subagentRecall);
+                                }
+                            }));
+
+                            if (currentState.parallelRecalls && currentState.parallelRecalls.length > 0) {
+                                const recallsCount = currentState.reasoningRecallsCount ?? 0;
+                                const maxRecalls = this.getMaximumReasoningRecalls();
+                                if (recallsCount < maxRecalls) {
+                                    const nextRecallCount = recallsCount + 1;
+                                    const combinedRecall = currentState.parallelRecalls.join("; ");
+                                    currentState.parallelRecalls = undefined;
+
+                                    this.agentConfig.messages = [
+                                        ...this.agentConfig.messages,
+                                        {
+                                            type: "user",
+                                            content: `[INTERNAL_REASONING_RECALL ${nextRecallCount}/${maxRecalls}] ${combinedRecall}`
+                                        }
+                                    ];
+
+                                    return {
+                                        callNode: "main_node",
+                                        stateUpdate: {
+                                            ...currentState,
+                                            reasoningRecallsCount: nextRecallCount
+                                        }
+                                    };
+                                } else {
+                                    await this.concludeAndAppendConclusionMessage();
+                                    this.emitEvent("result_producing_start");
+                                }
                             }
-                        ];
+
+                            return {
+                                callNode: "main_node",
+                                stateUpdate: currentState
+                            };
+                        } else {
+                            const { role, instruction } = validInstructions[0];
+                            this.agentConfig.messages.push({
+                                type: "user",
+                                content: `[CALLING SUBAGENT: ${role}] Task: ${instruction}`
+                            });
+
+                            return {
+                                callNode: role,
+                                stateUpdate: currentState
+                            };
+                        }
+                    } else {
                         return {
                             callNode: "main_node",
                             stateUpdate: currentState
@@ -510,79 +631,93 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         });
                     }
 
-                    const toolsStatePrepared = await Promise.all(
-                        state.callTools.tools.map(async (tool, callIndex) => {
-                            const toolName = tool.tool_name ?? tool.tool_id;
-                            const definedTool = definedToolsByName.get(toolName);
-                            const toolParams = tool.arguments ?? {};
+                    const executeSingleTool = async (tool: any, callIndex: number) => {
+                        const toolName = tool.tool_name ?? tool.tool_id;
+                        const definedTool = definedToolsByName.get(toolName);
+                        const toolParams = tool.arguments ?? {};
 
-                            // --- HITL handle error for tool and deny
-                            const approvalResult = approvalByCallIndex.get(callIndex);
+                        // --- HITL handle error for tool and deny
+                        const approvalResult = approvalByCallIndex.get(callIndex);
 
-                            if (approvalResult && "errorMessage" in approvalResult) {
-                                return {
-                                    ...tool,
-                                    tool_name: toolName,
-                                    toolError: approvalResult.errorMessage,
-                                    toolOutput: approvalResult.errorMessage,
-                                    content: approvalResult.errorMessage
-                                };
-                            }
+                        if (approvalResult && "errorMessage" in approvalResult) {
+                            return {
+                                ...tool,
+                                tool_name: toolName,
+                                toolError: approvalResult.errorMessage,
+                                toolOutput: approvalResult.errorMessage,
+                                content: approvalResult.errorMessage
+                            };
+                        }
 
-                            if (approvalResult && approvalResult.answer === "deny") {
-                                const denyOutput = `Tool "${toolName}" execution was denied by HITL (${approvalResult.reason}).`;
+                        if (approvalResult && approvalResult.answer === "deny") {
+                            const denyOutput = `Tool "${toolName}" execution was denied by HITL (${approvalResult.reason}).`;
 
-                                return {
-                                    ...tool,
-                                    tool_name: toolName,
-                                    toolError: denyOutput,
-                                    toolOutput: denyOutput,
-                                    content: denyOutput
-                                };
-                            }
-                            // --- HITL End
+                            return {
+                                ...tool,
+                                tool_name: toolName,
+                                toolError: denyOutput,
+                                toolOutput: denyOutput,
+                                content: denyOutput
+                            };
+                        }
+                        // --- HITL End
 
-                            if (!definedTool) {
-                                const missingToolError = `Tool couldn't be executed because tool with name "${toolName}" does not exist`;
+                        if (!definedTool) {
+                            const missingToolError = `Tool couldn't be executed because tool with name "${toolName}" does not exist`;
 
-                                return {
-                                    ...tool,
-                                    tool_name: toolName,
-                                    toolError: missingToolError,
-                                    toolOutput: missingToolError,
-                                    content: missingToolError
-                                };
-                            }
+                            return {
+                                ...tool,
+                                tool_name: toolName,
+                                toolError: missingToolError,
+                                toolOutput: missingToolError,
+                                content: missingToolError
+                            };
+                        }
 
-                            this.emitEvent("tool_invoked", toolName, toolParams);
+                        this.emitEvent("tool_invoked", toolName, toolParams);
 
-                            try {
-                                const toolOutput = definedTool instanceof MCPTool
-                                    ? await definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
-                                    : await definedTool.invoke(toolParams as never);
-                                this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
+                        try {
+                            const toolOutput = definedTool instanceof MCPTool
+                                ? await definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
+                                : await definedTool.invoke(toolParams as never);
+                            this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
 
-                                return {
-                                    ...tool,
-                                    tool_name: toolName,
-                                    toolError: undefined,
-                                    toolOutput,
-                                    content: toolOutput
-                                };
-                            } catch (error) {
-                                const errorMessage = error instanceof Error ? error.message : "Unknown tool execution error";
-                                const toolFailureOutput = `Tool "${toolName}" failed during execution: ${errorMessage}`;
+                            return {
+                                ...tool,
+                                tool_name: toolName,
+                                toolError: undefined,
+                                toolOutput,
+                                content: toolOutput
+                            };
+                        } catch (error) {
+                            const errorMessage = error instanceof Error ? error.message : "Unknown tool execution error";
+                            const toolFailureOutput = `Tool "${toolName}" failed during execution: ${errorMessage}`;
 
-                                return {
-                                    ...tool,
-                                    tool_name: toolName,
-                                    toolError: errorMessage,
-                                    toolOutput: toolFailureOutput,
-                                    content: toolFailureOutput
-                                };
-                            }
-                        })
-                    );
+                            return {
+                                ...tool,
+                                tool_name: toolName,
+                                toolError: errorMessage,
+                                toolOutput: toolFailureOutput,
+                                content: toolFailureOutput
+                            };
+                        }
+                    };
+
+                    let toolsStatePrepared;
+                    if (this.agentConfig.parallelTools) {
+                        toolsStatePrepared = await Promise.all(
+                            state.callTools.tools.map(async (tool, callIndex) => {
+                                return await executeSingleTool(tool, callIndex);
+                            })
+                        );
+                    } else {
+                        toolsStatePrepared = [];
+                        for (let callIndex = 0; callIndex < state.callTools.tools.length; callIndex++) {
+                            const tool = state.callTools.tools[callIndex];
+                            const prepared = await executeSingleTool(tool, callIndex);
+                            toolsStatePrepared.push(prepared);
+                        }
+                    }
 
                     return {
                         callNode: "main_node",
@@ -626,7 +761,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         ],
                         plugins: this.agentConfig.plugins,
                         subagents: this.agentConfig.subagents,
-                        withConclusion: true
+                        withConclusion: false
                     });
 
                     subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
@@ -642,6 +777,8 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                         nodeModel: agent.model
                     });
                     
+                    const subagentInitialMsgsCount = this.agentConfig.messages.length;
+
                     const result = await subagent.invoke();
 
                     this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
@@ -657,8 +794,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                     }
 
                     // Only merge new messages created by subagent to avoid duplication in history
-                    const originalMessagesCount = this.agentConfig.messages.length;
-                    const newMessages = messagesToMerge.slice(originalMessagesCount);
+                    const newMessages = messagesToMerge.slice(subagentInitialMsgsCount);
 
                     this.agentConfig.messages = [
                         ...this.agentConfig.messages,
@@ -723,6 +859,16 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
 
     private buildWrappedSystemPrompt(userSystemPrompt: string): string {
         const cleanedUserPrompt = userSystemPrompt.trim();
+
+        if (
+            this.cachedUserSystemPrompt === cleanedUserPrompt &&
+            this.cachedWrappedSystemPrompt !== undefined &&
+            this.cachedToolsCount === this.agentConfig.tools.length &&
+            this.cachedSubagentsCount === (this.agentConfig.subagents?.length ?? 0)
+        ) {
+            return this.cachedWrappedSystemPrompt;
+        }
+
         const maxRecalls = this.getMaximumReasoningRecalls();
         const recallBoundary = `You can request at most ${maxRecalls} internal self-recalls in this run.`;
 
@@ -752,11 +898,19 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
             }
         }
 
+        let result;
         if (!cleanedUserPrompt.length) {
-            return `${baseSystemPrompt}\n${recallBoundary}`;
+            result = `${baseSystemPrompt}\n${recallBoundary}`;
+        } else {
+            result = `${baseSystemPrompt}\n${recallBoundary}\n\nUser system prompt:\n${cleanedUserPrompt}`;
         }
 
-        return `${baseSystemPrompt}\n${recallBoundary}\n\nUser system prompt:\n${cleanedUserPrompt}`;
+        this.cachedUserSystemPrompt = cleanedUserPrompt;
+        this.cachedWrappedSystemPrompt = result;
+        this.cachedToolsCount = this.agentConfig.tools.length;
+        this.cachedSubagentsCount = this.agentConfig.subagents?.length ?? 0;
+
+        return result;
     }
 
     private getMaximumReasoningRecalls(): number {
@@ -771,6 +925,37 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         }
 
         return Math.floor(configuredValue);
+    }
+
+    private parseSubagentInstructions(answer: ReActAgentInvokeResult["messages"]): { role: string; instruction: string }[] {
+        const latestAIMessage = [...answer]
+            .reverse()
+            .find((message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai" && !!message.content?.trim());
+
+        if (!latestAIMessage?.content) {
+            return [];
+        }
+
+        const lines = latestAIMessage.content.split("\n");
+        const instructions: { role: string; instruction: string }[] = [];
+        const prefix = "[[RAVEN_CALL_SUBAGENT]]";
+
+        for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (trimmedLine.startsWith(prefix)) {
+                const remainder = trimmedLine.slice(prefix.length).trim();
+                const separatorIndex = remainder.indexOf("|");
+                if (separatorIndex !== -1) {
+                    const role = remainder.slice(0, separatorIndex).trim();
+                    const instruction = remainder.slice(separatorIndex + 1).trim();
+                    if (role && instruction) {
+                        instructions.push({ role, instruction });
+                    }
+                }
+            }
+        }
+
+        return instructions;
     }
 
     private parseSubagentInstruction(answer: ReActAgentInvokeResult["messages"]): { role: string; instruction: string } | null {

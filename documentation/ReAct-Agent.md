@@ -5,14 +5,38 @@ The `ReActAgent` is a standalone agent in RavenADK designed to follow the ReAct 
 ## Key Features
 
 - **Reasoning Loop**: The agent generates internal thoughts before making any tool calls or providing a final response.
-- **Tool Usage**: Native support for standard tools and MCP (Model Context Protocol) tools.
+- **Tool Usage**: Native support for standard tools and MCP (Model Context Protocol) tools. Supports both sequential and **parallel tools execution**.
 - **Skills**: Integrates with the RavenADK Skills system for dynamic capability enhancement.
 - **Memory**: Supports persistent memory stores (e.g., ChromaDB) to remember user preferences and session history.
     - Memory via `hasToRemember` retrives specification what agent has to remember
     - (Optional): Memory can retrive the `session` that is id used to bound the memory to the specific entry (e.g: user, workspace, ...) - you can use different sessions ids 
 - **Human-In-The-Loop (HITL)**: Can pause and ask for user approval or clarification via Socket.io.
-- **Subagents**: Capability to delegate complex tasks to specialized subagents. [Checkout subagents documentation](./Subagents.md) for more
+- **Subagents**: Capability to delegate complex tasks to specialized subagents. Supports **parallel subagents execution** with multi-agent orchestration. [Checkout subagents documentation](./Subagents.md) for more
 - **Structured Output**: Capability to retrive the output follows specified `zod (v4) schema`. [Checkout structured-output documentation](./StructuredOutput.md) for more
+- **Optimized Execution**: Features internal reasoning recalls and optimized tool resolution to minimize unnecessary turns.
+- **Plugins**: Use [Chat-Compaction Plugin](./compression/Compression.md) and/or [TODO Plugin](./Todo-Plugin.md) and make your own/use community plugins to extend how does model behave
+
+## Execution Flow
+
+The `ReActAgent` follows a sophisticated execution flow designed for efficiency:
+
+1. **Reasoning**: The agent analyzes the task and decides on the next step.
+2. **Internal Recall**: If the agent needs to re-evaluate or perform another reasoning pass without tools, it uses the `[[RAVEN_RECALL_MAIN_NODE]]` protocol.
+3. **Action**:
+    - **Tools**: Executes tools (standard or MCP). If `parallelTools` is enabled, multiple tool calls are handled concurrently.
+    - **Subagents**: Delegates tasks using `[[RAVEN_CALL_SUBAGENT]]`. If `parallelizeSubagents` is enabled, it can spawn multiple subagents at once.
+4. **Observation**: Collects results from tools or subagents and updates its context.
+5. **Conclusion**: Once the task is complete, it produces a final summary for the user (can be disabled via `withConclusion: false`).
+
+### Example: Internal Protocols
+
+```text
+// Internal Reason Recall pass
+[[RAVEN_RECALL_MAIN_NODE]] Now I have the city name, I need to check the coordinates.
+
+// Subagent Delegation
+[[RAVEN_CALL_SUBAGENT]] Researcher | Find recent breakthroughs in quantum computing.
+```
 
 ## Events
 
@@ -65,6 +89,11 @@ const reactAgent = new ReActAgent({
             }
         )
     ],
+    // Optional: High Performance Execution Configuration
+    parallelTools: true,
+    parallelizeSubagents: true,
+    withConclusion: true,
+    maximumReasoningRecalls: 5,
     // Optional: Skills, Memory, HITL, Subagents configuration
     // ...
 });

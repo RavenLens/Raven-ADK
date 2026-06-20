@@ -12,7 +12,7 @@
 Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor.
 
 #### RavenADK as default supports these SOTA Agentic patterns:
-- ReAct Agent
+- ReAct Agent - Design for high performance with **parallel tools** and **parallel subagents** support
 - RLMs - Recursive approach to increase agent accuracy on large set of text with reducing significantly costs
 - Skills
     - Exploring and applying

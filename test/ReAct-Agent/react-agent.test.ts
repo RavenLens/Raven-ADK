@@ -115,19 +115,19 @@ describe("ReActAgent subagents", () => {
         // Ensure main model was called twice (once to decide subagent, once to finalize)
         expect(mainModel.invoke).toHaveBeenCalledTimes(2);
         
-        // Ensure sub model was called once (to produce its answer and conclusion since withConclusion defaults to true for subagents!)
-        expect(subModel.invoke).toHaveBeenCalledTimes(2);
+        // Ensure sub model was called once since subagent has withConclusion: false
+        expect(subModel.invoke).toHaveBeenCalledTimes(1);
 
         // Verify state traces
         expect(result.messages.some(m => m.type === "user" && m.content === "[CALLING SUBAGENT: Researcher] Task: Find information about Mars.")).toBe(true);
         expect(result.messages.at(-1)?.content).toBe("The researcher found the info. Mars is a planet.");
         
         // Tokens should be accumulated
-        // mainModel: 2 invokes = 2 * (10, 5) = (20, 10). Plus 1 conclusion invoke from main agent? Wait, main agent has withConclusion=false.
-        // subagent: 1 normal invoke = (20, 10). 1 conclusion invoke = (20, 10). Total = 40, 20.
-        // Total should be 20+40 = 60 input, 10+20 = 30 output.
-        expect(agent.usedTokens.input).toBe(60);
-        expect(agent.usedTokens.output).toBe(30);
+        // mainModel: 2 invokes = 2 * (10, 5) = (20, 10).
+        // subagent: 1 invoke = (20, 10).
+        // Total should be 20+20 = 40 input, 10+10 = 20 output.
+        expect(agent.usedTokens.input).toBe(40);
+        expect(agent.usedTokens.output).toBe(20);
     });
 });
 
@@ -209,5 +209,247 @@ describe("ReActAgent structured output", () => {
 
         // model config is restored to original tools after concludeWithStructuredOutput
         expect(model.config.tools).toEqual(originalTools);
+    });
+});
+
+describe("ReActAgent parallel subagents", () => {
+    it("can run multiple subagents in parallel", async () => {
+        const mainModel = new Google({
+            model: "gemini-3-flash-preview",
+            apiKey: "test-key"
+        });
+
+        let mainCallCount = 0;
+        vi.spyOn(mainModel, "invoke").mockImplementation(async (options) => {
+            const currentMessages = options?.messages || mainModel.config.messages || [];
+            mainCallCount++;
+            if (mainCallCount === 1) {
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "[[RAVEN_CALL_SUBAGENT]] Researcher | Mars data\n[[RAVEN_CALL_SUBAGENT]] Analyst | Compare data"
+                };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            } else {
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "Done processing."
+                };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            }
+        });
+
+        const subModel = new Google({
+            model: "gemini-3-flash-preview",
+            apiKey: "test-key"
+        });
+
+        vi.spyOn(subModel, "invoke").mockImplementation(async (options) => {
+            const currentMessages = options?.messages || subModel.config.messages || [];
+            const aiMessage = {
+                type: "ai" as const,
+                content: "Subagent content."
+            };
+            return {
+                messages: [...currentMessages, aiMessage],
+                answer: [aiMessage],
+                tokens: { input: 20, output: 10, reasoning: 0 }
+            };
+        });
+
+        const agent = new ReActAgent({
+            model: mainModel,
+            systemPrompt: "Main",
+            messages: [{ type: "user", content: "Go" }],
+            tools: [],
+            withConclusion: false,
+            parallelizeSubagents: true,
+            subagents: [
+                {
+                    role: "Researcher",
+                    roleDescription: "R",
+                    model: subModel,
+                    systemPrompt: "R Prompt",
+                    tools: []
+                },
+                {
+                    role: "Analyst",
+                    roleDescription: "A",
+                    model: subModel,
+                    systemPrompt: "A Prompt",
+                    tools: []
+                }
+            ]
+        });
+
+        const result = await agent.invoke();
+
+        // One to spark both parallel subagents, one final pass after both completed
+        expect(mainModel.invoke).toHaveBeenCalledTimes(2);
+        // Each subagent called model once
+        expect(subModel.invoke).toHaveBeenCalledTimes(2);
+
+        // BOTH calling traces must be in messages
+        expect(result.messages.some(m => m.type === "user" && m.content === "[CALLING SUBAGENT: Researcher] Task: Mars data")).toBe(true);
+        expect(result.messages.some(m => m.type === "user" && m.content === "[CALLING SUBAGENT: Analyst] Task: Compare data")).toBe(true);
+        
+        // Assert that tokens are aggregated from all runs
+        // mainModel: 2 * (10, 5) = (20, 10)
+        // subagent: 2 * (20, 10) = (40, 20)
+        expect(agent.usedTokens.input).toBe(60);
+        expect(agent.usedTokens.output).toBe(30);
+    });
+});
+
+describe("ReActAgent parallel tools", () => {
+    it("can run tools sequentially when parallelTools is false (default)", async () => {
+        const model = new Google({
+            model: "gemini-3-flash-preview",
+            apiKey: "test-key"
+        });
+
+        let callCount = 0;
+        vi.spyOn(model, "invoke").mockImplementation(async (options) => {
+            const currentMessages = options?.messages || model.config.messages || [];
+            callCount++;
+            if (callCount === 1) {
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "Calling tools.",
+                    calledTools: [
+                        { type: "tool", tool_id: "call_t1", tool_name: "tool1", arguments: {}, content: "" },
+                        { type: "tool", tool_id: "call_t2", tool_name: "tool2", arguments: {}, content: "" }
+                    ]
+                };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            } else {
+                const aiMessage = { type: "ai" as const, content: "Done." };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            }
+        });
+
+        const timeline: string[] = [];
+        const tool1 = tool(async () => {
+            timeline.push("t1_start");
+            await new Promise(r => setTimeout(() => r(null), 10));
+            timeline.push("t1_end");
+            return "res1";
+        }, {
+            toolName: "tool1",
+            toolDescription: "T1",
+            toolArguments: z.object({})
+        });
+
+        const tool2 = tool(async () => {
+            timeline.push("t2_start");
+            await new Promise(r => setTimeout(() => r(null), 5));
+            timeline.push("t2_end");
+            return "res2";
+        }, {
+            toolName: "tool2",
+            toolDescription: "T2",
+            toolArguments: z.object({})
+        });
+
+        const agent = new ReActAgent({
+            model,
+            systemPrompt: "T",
+            messages: [{ type: "user", content: "Go" }],
+            tools: [tool1, tool2],
+            withConclusion: false,
+            parallelTools: false // Sequential by default
+        });
+
+        await agent.invoke();
+
+        // Must run sequentially: tool1 must start/finish before tool2 starts
+        expect(timeline).toEqual(["t1_start", "t1_end", "t2_start", "t2_end"]);
+    });
+
+    it("can run tools in parallel when parallelTools is true", async () => {
+        const model = new Google({
+            model: "gemini-3-flash-preview",
+            apiKey: "test-key"
+        });
+
+        let callCount = 0;
+        vi.spyOn(model, "invoke").mockImplementation(async (options) => {
+            const currentMessages = options?.messages || model.config.messages || [];
+            callCount++;
+            if (callCount === 1) {
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "Calling tools.",
+                    calledTools: [
+                        { type: "tool", tool_id: "call_t1", tool_name: "tool1", arguments: {}, content: "" },
+                        { type: "tool", tool_id: "call_t2", tool_name: "tool2", arguments: {}, content: "" }
+                    ]
+                };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            } else {
+                const aiMessage = { type: "ai" as const, content: "Done." };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            }
+        });
+
+        const timeline: string[] = [];
+        const tool1 = tool(async () => {
+            timeline.push("t1_start");
+            await new Promise(r => setTimeout(() => r(null), 20));
+            timeline.push("t1_end");
+            return "res1";
+        }, {
+            toolName: "tool1",
+            toolDescription: "T1",
+            toolArguments: z.object({})
+        });
+
+        const tool2 = tool(async () => {
+            timeline.push("t2_start");
+            await new Promise(r => setTimeout(() => r(null), 5));
+            timeline.push("t2_end");
+            return "res2";
+        }, {
+            toolName: "tool2",
+            toolDescription: "T2",
+            toolArguments: z.object({})
+        });
+
+        const agent = new ReActAgent({
+            model,
+            systemPrompt: "T",
+            messages: [{ type: "user", content: "Go" }],
+            tools: [tool1, tool2],
+            withConclusion: false,
+            parallelTools: true // Parallel
+        });
+
+        await agent.invoke();
+
+        // Since they run in parallel, tool2 starts BEFORE tool1 ends, and tool2 finishes first
+        expect(timeline).toEqual(["t1_start", "t2_start", "t2_end", "t1_end"]);
     });
 });

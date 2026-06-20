@@ -100,6 +100,7 @@ export interface AgentMessagesGraphState {
     /** Number of times the model requested an internal main_node recall without tools. */
     reasoningRecallsCount?: number;
     toolsOutputRetrived?: boolean;
+    parallelRecalls?: string[];
 }
 
 export type AgentMessagesGraphNodeResult = GraphNodeExecutionResult<AgentMessagesGraphState>;

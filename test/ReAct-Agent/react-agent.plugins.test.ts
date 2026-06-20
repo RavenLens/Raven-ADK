@@ -9,7 +9,7 @@ describe("ReActAgent Plugins", () => {
         const beforePlugin: ReActAgentPluginSpec = {
             name: "before-plugin",
             executionWay: "before_agent_run",
-            execute: async (config, state) => {
+            execute: async (from, config, state) => {
                 executionOrder.push("before");
                 return {
                     status: true,
@@ -23,7 +23,7 @@ describe("ReActAgent Plugins", () => {
         const afterPlugin: ReActAgentPluginSpec = {
             name: "after-plugin",
             executionWay: "after_agent_run",
-            execute: async (config, state) => {
+            execute: async (from, config, state) => {
                 executionOrder.push("after");
                 return {
                     status: true,
