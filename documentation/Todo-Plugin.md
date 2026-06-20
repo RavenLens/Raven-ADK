@@ -4,7 +4,7 @@ The `TODO-Plugin` for RavenADK provides a robust way for ReAct Agents to manage 
 
 ## How it Works
 
-The plugin operates during the initialization phase of the agent:
+The plugin operates during both the initialization and completion phases of the agent:
 
 ### Initialization (`before_agent_run`)
 When the agent starts, the plugin:
@@ -12,12 +12,27 @@ When the agent starts, the plugin:
 - **Protocol Injection**: Injects a "TODO List Management Protocol" into the system prompt. This protocol forces the agent to call the tools frequently, update status immediately upon changes, and prioritize the resolution of all points.
 - **Context Injection**: Updates the system prompt with the current live state of the TODO list from storage.
 
+### Completion & Resolution Struggle (`after_agent_run`)
+If the `struggleForAccomplishementRetries` parameter is provided, the plugin performs an audit after the agent finishes its run:
+- **Unfinished Task Detection**: It checks `todoStorage` for any tasks not marked as `done`.
+- **Struggle Respawn**: If tasks remain, it respawns a clean `ReActAgent` instance with a specialized "Struggle Protocol" and the previous conversation history.
+- **Structured Reasoning**: The respawned agent is forced to produce a structured output. If it still cannot finish the tasks, it must provide a detailed `unresolvedTasksReason`.
+- **Event Notification**: Upon completion of the struggle phase, it emits an event via the internal `TODOPluginEventEmitter`.
+
 ## Key Features
 
 - **Autonomous Management**: Unlike passive tracking, the plugin empowers the agent to be the "owner" of the task list, using tools to reflect its actual progress.
 - **Subagent Transparency**: The main agent uses the same tools to delegate and track work performed by subagents, maintaining a unified source of truth.
 - **Shared Storage**: Uses a simple JavaScript structure (`TodoStoreSchemaTS[]`) allowing for seamless integration with in-memory states or persistent databases.
-- **High Performance**: By relying on prompt-driven autonomy rather than background verification loops, the plugin ensures zero-latency task tracking.
+- **Resolution Commitment**: The struggle mechanism ensures that the agent doesn't just "give up" but makes a dedicated final attempt to reach a 100% completion rate or explains why it's impossible.
+
+## Events
+
+The plugin exports a `TODOPluginEventEmitter` that allows the host application to react to the resolution process.
+
+### `todo_struggle_finished`
+Emitted after the "struggle" phase completes (only if retries were configured).
+- **Payload**: `{ unresolvedTasksReason: string, todoPoints: TodoPoint[] }`
 
 ## Scenarios
 
@@ -29,11 +44,11 @@ In complex workflows involving multiple tools or subagents, the TODO list acts a
 
 ## Usage Example
 
-The following snippet shows how to register the TODO plugin and use it with a subagent.
+The following snippet shows how to register the TODO plugin with retry logic and listen for the struggle result.
 
 ```typescript
 import { ReActAgent, OpenAI } from "@raven-adk/core";
-import { createTodoPlugin, TodoStoreSchemaTS } from "@raven-adk/plugins/todo";
+import { createTodoPlugin, TodoStoreSchemaTS, TODOPluginEventEmitter } from "@raven-adk/plugins/todo";
 
 // 1. Initialize shared storage
 const todoStorage: TodoStoreSchemaTS[] = [{ todoPoints: [] }];
@@ -44,10 +59,16 @@ const model = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
-// 3. Create the plugin
-const todoPlugin = createTodoPlugin(todoStorage);
+// 3. Create the plugin with 3 retries for the "struggle" phase
+const todoPlugin = createTodoPlugin(todoStorage, 3);
 
-// 4. Initialize the Agent
+// 4. Listen for the struggle result (if agent fails to finish tasks)
+TODOPluginEventEmitter.on("todo_struggle_finished", (data) => {
+    console.log("Struggle result reason:", data.unresolvedTasksReason);
+    console.log("Final task states:", data.todoPoints);
+});
+
+// 5. Initialize the Agent
 const agent = new ReActAgent({
     model,
     systemPrompt: "You are a professional project coordinator.",
@@ -72,7 +93,7 @@ const agent = new ReActAgent({
 
 // Run the agent
 const result = await agent.invoke();
-console.log("Final TODO State:", todoStorage[0].todoPoints);
+console.log("Run finished.");
 ```
 
 ## Tools Reference
@@ -85,3 +106,5 @@ Used by the agent to manually add, remove, or modify tasks.
 Allows the agent to retrieve the most recent version of the task list.
 - **Arguments**: None.
 
+## Listening the updates
+If you would like to listen the tools are executing use `tool_executed` to match the todo tools names and stream to user proper event [check todo tools](./Todo-Plugin.md#tools-reference)
