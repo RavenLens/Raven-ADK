@@ -13,10 +13,12 @@ import { Tool } from "./tools/tools";
 import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
 import { RunPod } from "../models/runpod";
 import z from "zod";
+import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
+import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
-export type SubAgent = Pick<ReActAgentConfig<any, any>, "model" | "systemPrompt" | "tools"> & {
+export type SubAgent = Pick<ReActAgentConfig<any, any, any>, "model" | "systemPrompt" | "tools"> & {
     role: string;
     roleDescription: string;
 }
@@ -56,22 +58,22 @@ export interface ReActAgentPluginSpec {
      * @param executionPlace - it's singular place from where execution happens - it can be singular atime
      * @returns Execution status and changed/unchanged state of agent is assigned in place of prior state, When success is `false` then doesn't use a result to override the agent state
     */
-    execute<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore>(
+    execute<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore, HITL extends HITLTransportSchema>(
         executionFrom: ExecutionFrom,
-        agentConfig: ReActAgentConfig<Skills, Memory>,
+        agentConfig: ReActAgentConfig<Skills, Memory, HITL>,
         graphState: AgentMessagesGraphState
     ): Promise<{
         /** Status of plugin execution */
         status: boolean;
         /** Result of plugin execution. Overrides original 'entry' state only when `status === true` */
         result?: {
-            agentConfig?: ReActAgentConfig<Skills, Memory>;
+            agentConfig?: ReActAgentConfig<Skills, Memory, HITL>;
             graphState?: AgentMessagesGraphState;
         };
     }>;
 }
 
-export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
+export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore, HITL extends HITLTransportSchema> {
     model: AgentModel;
     systemPrompt: string;
     messages: MessagesVariations[];
@@ -88,7 +90,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     plugins?: ReActAgentPluginSpec[];
     tools: Tool<any, any>[];
     /** specify this schema to use the Human In The Loop */
-    hitl?: HITLSocketIo;
+    hitl?: HITL;
     /** Subagents definition */
     subagents?: SubAgent[];
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
@@ -200,12 +202,18 @@ const CONCLUSION_SYSTEM_PROMPT = [
  * 5. Produce output by completing `main_node`, then graph continues to GraphMarkers.END
  * 6. Emit events for reasoning and tool lifecycle
 */
-export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore> {
+export class ReActAgent
+<
+    Skills extends SchemaSkillStore,
+    Memory extends SchemaMemoryStore,
+    HITL extends HITLTransportSchema,
+    SkillsSandbox extends CodeExecutionSandboxSchema
+> {
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
-    agentConfig: ReActAgentConfig<Skills, Memory>;
-    agentSkillsInterface: SkillsInterface<Skills> | undefined = undefined;
+    agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
+    agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
     agentMemoryInterface: MemoryInterface<Memory> | undefined = undefined;
     /** It's overall amount of used tokens by the ReAct agent */
     usedTokens: LLMAnswer["tokens"];
@@ -215,7 +223,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
     private cachedToolsCount?: number;
     private cachedSubagentsCount?: number;
 
-    constructor(config: ReActAgentConfig<Skills, Memory>) {
+    constructor(config: ReActAgentConfig<Skills, Memory, HITL>) {
         this.agentConfig = {
             ...config,
             tools: [...config.tools],
@@ -226,7 +234,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         };
         this.agentSkillsInterface = config.skills ? new SkillsInterface({
             ...config.skills.config,
-            skillStorage: config.skills
+            skillStorage: config.skills,
         }) : undefined;
         this.agentMemoryInterface = config.memory ? new MemoryInterface(config.memory) : undefined;
         this.usedTokens = {
@@ -441,7 +449,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
 
                                 const subagentInitialMsgsCount = this.agentConfig.messages.length;
 
-                                const subagent = new ReActAgent<Skills, Memory>({
+                                const subagent = new ReActAgent<Skills, Memory, any, any>({
                                     model: agent.model,
                                     systemPrompt: agent.systemPrompt,
                                     messages: [
@@ -763,7 +771,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         if (this.agentConfig.subagents?.length) {
             for (const agent of this.agentConfig.subagents) {
                 reactAgentGraph.addNode(agent.role, async state => {
-                    const subagent = new ReActAgent<Skills, Memory>({
+                    const subagent = new ReActAgent<Skills, Memory, any, any>({
                         model: agent.model,
                         systemPrompt: agent.systemPrompt,
                         messages: [

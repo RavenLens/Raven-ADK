@@ -1,5 +1,5 @@
 import { Sandbox } from '@e2b/code-interpreter'
-import { CodeExecuteOutput, CodeExecutionSandboxSchema } from './mutual'
+import { CodeExecuteOutput, CodeExecutionSandboxSchema, CommandExecutionOptions, CommandExecutionOutput } from './mutual'
 
 type E2BSandboxConnectionOpts = Parameters<(typeof Sandbox.create)>[1];
 
@@ -54,6 +54,48 @@ finalAnswer;`;
                 output: "E2B Sandbox Error: " + error.message,
                 finalAnswer: null,
                 isError: true
+            };
+        } finally {
+            await sbx.kill();
+        }
+    }
+
+    async executeCommand(command: string, args: string[], options: CommandExecutionOptions): Promise<CommandExecutionOutput> {
+        const sbx = await Sandbox.create(this.sandboxConnectionOptions);
+        const fullCommand = `${command} ${args.join(' ')}`;
+        
+        try {
+            const execution = await sbx.commands.run(fullCommand, {
+                cwd: options.workingDirectory,
+                timeoutMs: options.timeoutMs
+            });
+
+            return {
+                success: execution.exitCode === 0,
+                command,
+                args,
+                cwd: options.workingDirectory || "/",
+                exitCode: execution.exitCode,
+                timedOut: false, // E2B throws or handles timeout
+                stdout: execution.stdout,
+                stderr: execution.stderr,
+                truncatedStdout: false,
+                truncatedStderr: false,
+                error: execution.error
+            };
+        } catch (error: any) {
+            return {
+                success: false,
+                command,
+                args,
+                cwd: options.workingDirectory || "/",
+                exitCode: null,
+                timedOut: error.message?.toLowerCase().includes("timeout"),
+                stdout: "",
+                stderr: "",
+                truncatedStdout: false,
+                truncatedStderr: false,
+                error: error.message
             };
         } finally {
             await sbx.kill();

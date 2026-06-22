@@ -42,8 +42,18 @@ export interface HITLConfigSchema {
     toolsUsage?: Record<string, ToolUsageConfObject | true>;
 }
 
+export interface EmitToolUsageBody { answer: HITLToolAllowancePossibleAnswer; reason: "user_answer" | "delay_pass" }
+
 // TODO: Document the HITL in the HITL doc
 export interface HITLTransportSchema {
+    /** Configuration object */
+    config?: any;
+
+    emitAbcQuestion?: (question: string, abcOptions: [string, string][]) => Promise<[string, string]>;
+    emitOpenQuestion?: (question: string) => Promise<string>;
+    emitToolUsage: (toolName: string) => Promise<EmitToolUsageBody>;
+    emitAcceptance?: (question: string, context?: string) => Promise<HITLToolAllowancePossibleAnswer>;
+    
     /** Describe how to use HITL Questioning tools */
     questionHITLPrompt: string;
     /**

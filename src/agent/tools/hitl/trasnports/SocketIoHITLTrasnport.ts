@@ -1,7 +1,7 @@
 import { createServer } from "http";
 import * as z from "zod";
 import { Server, Socket } from "socket.io";
-import { DEFAULT_ABC_ANSWERS_RANGE, HITLConfigSchema, HITLToolAllowancePossibleAnswer, HITLTransportSchema } from "../hitlToolSchema";
+import { DEFAULT_ABC_ANSWERS_RANGE, EmitToolUsageBody, HITLConfigSchema, HITLToolAllowancePossibleAnswer, HITLTransportSchema } from "../hitlToolSchema";
 import { tool, Tool } from "../../tools";
 
 const DEFAULT_SOCKETIO_PORT = 3000;
@@ -57,14 +57,14 @@ interface SocketIOHITLConfig extends HITLConfigSchema {
     socketConnectionMiddleware?: Parameters<Socket["use"]>[0][];
 }
 
-type HITLEvents = keyof NonNullable<HITLConfigSchema["questions"]> | keyof Pick<NonNullable<HITLConfigSchema>, "toolsUsage">
+type HITLEvents = keyof NonNullable<HITLConfigSchema["questions"]> | keyof Pick<NonNullable<HITLConfigSchema>, "toolsUsage"> | "acceptance";
 
 export class HITLSocketIo implements HITLTransportSchema {
     private connectionSocket: Socket | undefined = undefined;
     questionHITLPrompt: string;
     config: SocketIOHITLConfig;
     
-    constructor(config: HITLConfigSchema) {
+    constructor(config: HITLConfigSchema & SocketIOHITLConfig) {
         this.config = config;
         this.questionHITLPrompt = this.buildQuestionPrompt();
         this.runServer();
@@ -159,7 +159,7 @@ export class HITLSocketIo implements HITLTransportSchema {
     }
 
     emitToolUsage(toolName: string) {
-        return new Promise<{ answer: HITLToolAllowancePossibleAnswer; reason: "user_answer" | "delay_pass" }>((res, rej) => {
+        return new Promise<EmitToolUsageBody>((res, rej) => {
             let isAnswer = false;
             
             if (!this.connectionSocket) {
@@ -190,6 +190,23 @@ export class HITLSocketIo implements HITLTransportSchema {
                     }
                 }, this.config.toolsUsage[toolName].delayMs)
             }
+        });
+    }
+
+    emitAcceptance(question: string, context?: string): Promise<HITLToolAllowancePossibleAnswer> {
+        return new Promise<HITLToolAllowancePossibleAnswer>((res, rej) => {
+            if (!this.connectionSocket) {
+                return rej("Cannot emit \"acceptance\" because socket.io connection isn't defined");
+            }
+
+            this.connectionSocket.emit(
+                "acceptance" as HITLEvents,
+                question,
+                context,
+                (answer: HITLToolAllowancePossibleAnswer) => {
+                    res(answer);
+                }
+            );
         });
     }
 

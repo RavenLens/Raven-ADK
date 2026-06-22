@@ -102,3 +102,5 @@ Use failed assertions + human review feedback to improve `SKILL.md`, rerun evals
 - Write assertions that are objective and verifiable.
 - Keep skill metadata in frontmatter so `readSkillMeta` can route quickly.
 - Store reusable logic in `scripts/` when repeated work appears in transcripts.
+
+<!-- TODO: Skill has to be adjusted to the new schema of skill where: are events emitted that can be listened, agent has access to the list of allowed skills, skill script can be execute in sandbox, skill hitl when specified can be execute before executing the script  -->

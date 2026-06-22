@@ -4,11 +4,27 @@ import fs from "node:fs";
 import vm from 'node:vm';
 import { CodeExecuteOutput, CodeExecutionSandboxSchema, CommandExecutionOptions, CommandExecutionOutput } from "./mutual";
 
-export class NodeExecutionSandbox implements CodeExecutionSandboxSchema {
-    async execute(code: string, sandboxContextData: vm.Context, logs?: string[]): Promise<CodeExecuteOutput> {
-        const vmContext = vm.createContext(sandboxContextData);
+export class LocalExecutionSandbox implements CodeExecutionSandboxSchema {
+    async execute(code: string, contextData: any, logs: string[], ...args: any[]): Promise<CodeExecuteOutput> {
+        const vmContext = vm.createContext({
+            ...contextData,
+            console: {
+                log: (...args: any[]) => logs.push(args.join(' ')),
+                error: (...args: any[]) => logs.push("ERROR: " + args.join(' ')),
+                warn: (...args: any[]) => logs.push("WARN: " + args.join(' ')),
+                info: (...args: any[]) => logs.push("INFO: " + args.join(' '))
+            },
+            process,
+            Buffer,
+            setTimeout,
+            clearTimeout,
+            setInterval,
+            clearInterval,
+            setImmediate,
+            clearImmediate,
+        });
 
-        // Wrap the agent's code in an async IIFE to support top-level await
+        // Wrap the code in an async IIFE to support top-level await if needed
         const wrappedCode = `
             (async () => {
                 try {
@@ -19,18 +35,22 @@ export class NodeExecutionSandbox implements CodeExecutionSandboxSchema {
             })();
         `;
 
-        const script = new vm.Script(wrappedCode);
-
         try {
-            await script.runInContext(vmContext);
-            const result = {
-                output: logs?.join('\n') ?? "",
-                finalAnswer: vmContext.finalAnswer
+            const script = new vm.Script(wrappedCode);
+            const result = await script.runInContext(vmContext);
+
+            return {
+                output: logs.join('\n'),
+                finalAnswer: result,
+                isError: false
             };
-            return result;
         } catch (error: any) {
-            const result = { output: `Execution Error: ${error.message}`, finalAnswer: null, isError: true };
-            return result;
+            logs.push("FATAL ERROR: " + error.message);
+            return {
+                output: logs.join('\n'),
+                finalAnswer: null,
+                isError: true
+            };
         }
     }
 
@@ -85,6 +105,8 @@ export class NodeExecutionSandbox implements CodeExecutionSandboxSchema {
                 cwd,
                 shell: false,
                 windowsHide: true,
+                // On Windows, use shell: true for some commands if needed, 
+                // but Skills uses shell: false, so we stick to it for consistency.
             });
 
             const timeoutHandle = setTimeout(() => {
@@ -126,7 +148,7 @@ export class NodeExecutionSandbox implements CodeExecutionSandboxSchema {
                 clearTimeout(timeoutHandle);
 
                 resolve({
-                    success: !timedOut && (exitCode === 0 || exitCode === null),
+                    success: !timedOut && exitCode === 0,
                     command: trimmedCommand,
                     args,
                     cwd,

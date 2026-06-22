@@ -5,6 +5,26 @@ export type CodeExecuteOutput = {
     isError?: boolean;
 }
 
+export interface CommandExecutionOptions {
+    workingDirectory?: string;
+    timeoutMs?: number;
+}
+
+export interface CommandExecutionOutput {
+    success: boolean;
+    command: string;
+    args: string[];
+    cwd: string;
+    exitCode: number | null;
+    timedOut: boolean;
+    stdout: string;
+    stderr: string;
+    truncatedStdout: boolean;
+    truncatedStderr: boolean;
+    error?: string;
+}
+
 export interface CodeExecutionSandboxSchema {
     execute(code: string, contextData: any, logs: string[], ...args: any[]): Promise<CodeExecuteOutput>;
+    executeCommand(command: string, args: string[], options: CommandExecutionOptions): Promise<CommandExecutionOutput>;
 }

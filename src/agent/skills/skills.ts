@@ -6,22 +6,10 @@ import path from "node:path";
 import z from "zod";
 import { tool, Tool } from "../tools/tools";
 import { SchemaSkillStore, SkillFileEntryWithContent } from "./stores/schema";
+import { HITLToolAllowancePossibleAnswer, HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
+import { CodeExecutionSandboxSchema, CommandExecutionOptions, CommandExecutionOutput } from "../tools/CodeExecutionSandboxes/mutual";
 
 type SkillScriptRuntime = "auto" | "node" | "python" | "powershell" | "bash" | "cmd";
-
-interface CommandExecutionResult {
-    success: boolean;
-    command: string;
-    args: string[];
-    cwd: string;
-    exitCode: number | null;
-    timedOut: boolean;
-    stdout: string;
-    stderr: string;
-    truncatedStdout: boolean;
-    truncatedStderr: boolean;
-    error?: string;
-}
 
 // TODO: Add the dynamic skill updation and add prompt
 export interface SkillSharedConfig {
@@ -47,8 +35,20 @@ export interface SkillSharedConfig {
     session?: string;
 }
 
-export interface SkillConfig<SkillStorage extends SchemaSkillStore> extends SkillSharedConfig {
+export interface SkillConfig
+<
+    SkillStorage extends SchemaSkillStore,
+    HITL extends HITLTransportSchema,
+    Sandbox extends CodeExecutionSandboxSchema
+> extends SkillSharedConfig {
+    /**  Skills storage definition */
     skillStorage: SkillStorage;
+    /** 
+     * Whenever command/script is given to execution has to be trigger a acceptance hitl before its execution 
+     * Always triggres acceptance before execution when was passed
+    */
+    hitl?: HITL;
+    sandbox?: Sandbox; 
 }
 
 type SkillEventHandler<T extends Array<any>> = (...args: T) => any;
@@ -62,21 +62,34 @@ export interface SkillEvents {
     reloacateSkill: SkillEventHandler<Parameters<SchemaSkillStore["reloacateSkill"]>>,
     removeSkill: SkillEventHandler<Parameters<SchemaSkillStore["removeSkill"]>>,
     removeSkillFolder: SkillEventHandler<Parameters<SchemaSkillStore["removeSkillFolder"]>>,
-    // TODO: Add script execution events
+    hitlAcceptanceTrigger: (command: string, args: string[], workingDirectory: string) => any;
+    hitlAcceptanceResult: (result: HITLToolAllowancePossibleAnswer) => any;
+    runSkillScript: SkillEventHandler<[scriptLocation: string, runtime: SkillScriptRuntime, args: string[], result: CommandExecutionOutput]>,
+    executeSkillCLI: SkillEventHandler<[command: string, args: string[], result: CommandExecutionOutput]>
 }
 
 export type SkillEventNames = keyof SkillEvents;
 
-interface SkillsFoundation<SkillStorage extends SchemaSkillStore> {
-    config: SkillConfig<SkillStorage>;
+interface SkillsFoundation
+<
+    SkillStorage extends SchemaSkillStore,
+    HITL extends HITLTransportSchema,
+    Sandbox extends CodeExecutionSandboxSchema
+> {
+    config: SkillConfig<SkillStorage, HITL, Sandbox>;
     createExploreSkillsAgentTools(): Tool<any, any>[];
     createSkillScriptExecuteTools(): Tool<any, any>[];
     createExploreSkillsAgentTools(): Tool<any, any>[];
-    api: SkillConfig<SkillStorage>["skillStorage"]
+    api: SkillConfig<SkillStorage, HITL, Sandbox>["skillStorage"]
 }
 
-export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoundation<SkillStorage> {
-    config: SkillConfig<SkillStorage>;
+export class Skills
+<
+    SkillStorage extends SchemaSkillStore,
+    HITL extends HITLTransportSchema,
+    Sandbox extends CodeExecutionSandboxSchema
+> implements SkillsFoundation<SkillStorage, HITL, Sandbox> {
+    config: SkillConfig<SkillStorage, HITL, Sandbox>;
     private EventsListeners: Record<string, SkillEventHandler<any>> = {};
 
     static exploreSkillsPrompt: string = [
@@ -160,7 +173,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "- Use tool output as evidence for the final answer or next action."
     ].join("\n");
     
-    constructor(config: SkillConfig<SkillStorage>) {
+    constructor(config: SkillConfig<SkillStorage, HITL, Sandbox>) {
         this.config = config;
     }
 
@@ -530,6 +543,8 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                         }
                     );
 
+                    this.emit("runSkillScript", scriptLocation, runtime ?? "auto", scriptArgs ?? [], executionResult);
+
                     return JSON.stringify({
                         ...executionResult,
                         scriptLocation,
@@ -565,6 +580,8 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                         timeoutMs,
                         workingDirectory
                     });
+
+                    this.emit("executeSkillCLI", command, args ?? [], executionResult);
 
                     return JSON.stringify(executionResult, null, 2);
                 },
@@ -795,11 +812,43 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
     private async executeCommandLine(
         command: string,
         args: string[],
-        options: {
-            workingDirectory?: string;
-            timeoutMs?: number;
+        options: CommandExecutionOptions
+    ): Promise<CommandExecutionOutput> {
+        // Skill execution has to be accepted
+        if (this.config.hitl?.emitAcceptance) {
+            const directory = options.workingDirectory || "current";
+            
+            this.emit("hitlAcceptanceTrigger", command, args, directory);
+            
+            const acceptanceResult = await this.config.hitl.emitAcceptance(
+                `Do you allow to execute the following command: "${command} ${args.join(" ")}"?`,
+                `Command: ${command}\nArguments: ${args.join(" ")}\nWorking Directory: ${directory}`
+            );
+
+            this.emit("hitlAcceptanceResult", acceptanceResult);
+            
+            if (acceptanceResult === "deny") {
+                return {
+                    success: false,
+                    command,
+                    args,
+                    cwd: options.workingDirectory || process.cwd(),
+                    exitCode: null,
+                    timedOut: false,
+                    stdout: "",
+                    stderr: "",
+                    truncatedStdout: false,
+                    truncatedStderr: false,
+                    error: "Execution was denied by user."
+                };
+            }
         }
-    ): Promise<CommandExecutionResult> {
+
+        // Execute command in sandbox
+        if (this.config.sandbox) {
+            return this.config.sandbox.executeCommand(command, args, options);
+        }
+
         const trimmedCommand = command.trim();
         const cwd = options.workingDirectory?.trim().length
             ? path.resolve(options.workingDirectory)
@@ -839,7 +888,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
 
         const timeout = this.getExecutionTimeout(options.timeoutMs);
 
-        return new Promise<CommandExecutionResult>((resolve) => {
+        return new Promise<CommandExecutionOutput>((resolve) => {
             let stdout = "";
             let stderr = "";
             let truncatedStdout = false;
@@ -891,7 +940,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                 clearTimeout(timeoutHandle);
 
                 resolve({
-                    success: !timedOut && exitCode === 0,
+                    success: !timedOut && (exitCode === 0 || exitCode === null),
                     command: trimmedCommand,
                     args,
                     cwd,
