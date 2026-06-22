@@ -114,3 +114,23 @@ console.log("Final Answer:", result.messages.at(-1).content);
 
 ### RLMs and ReAct Agent
 For some scenarios like processing the large files of text you can find combining both standards **RLMs** with **ReAct** to be more effecitve. [Check more here](./RLMs.md)
+
+## Structured Output
+
+The `ReActAgent` can produce validated, type-safe JSON objects using `invokeStructuredOutput`. This allows the agent to execute its full reasoning loop and then extract the final result into a specific schema.
+
+```typescript
+import { z } from "zod";
+
+const ResponseSchema = z.object({
+    analysis: z.string(),
+    score: z.number(),
+    isSafe: z.boolean()
+});
+
+// Run the agent and get structured output
+const result = await agent.invokeStructuredOutput(ResponseSchema);
+console.log(result.messages.at(-1).structuredOutput);
+```
+
+> **Note**: To produce structured output, you must set `withConclusion: false` in the agent configuration. This prevents the agent from generating a natural language summary, which would otherwise interfere with the structured extraction process. For more details, see the [Structured Output documentation](./StructuredOutput.md).
