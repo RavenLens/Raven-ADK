@@ -104,6 +104,11 @@
       "import": "./dist/agent/memory/stores/index.js",
       "require": "./dist/agent/memory/stores/index.js"
     },
+    "./aeval": {
+      "types": "./dist/agent/abstract/aeval/index.d.ts",
+      "import": "./dist/agent/abstract/aeval/index.js",
+      "require": "./dist/agent/abstract/aeval/index.js"
+    },
     "./sandboxes": {
       "types": "./dist/agent/tools/CodeExecutionSandboxes/index.d.ts",
       "import": "./dist/agent/tools/CodeExecutionSandboxes/index.js",

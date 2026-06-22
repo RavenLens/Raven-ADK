@@ -9,6 +9,8 @@ export * from "./memory/index.js";
 export * as Memory from "./memory/index.js";
 export * from "./conversation/index.js";
 export * as Conversation from "./conversation/index.js";
+export * from "./abstract/aeval/index.js";
+export * as AEval from "./abstract/aeval/index.js";
 
 export * as HITL from "./tools/hitl/index.js";
 export * as MCP from "./tools/mcp/index.js";

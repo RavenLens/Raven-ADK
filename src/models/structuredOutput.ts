@@ -48,7 +48,7 @@ function extractStructuredOutputAIMessage(answer: LLMAnswer): AIMessage {
     return aiMessage;
 }
 
-function parseStructuredOutputContent(content: string, schema: z.ZodTypeAny): unknown {
+export function parseStructuredOutputContent(content: string, schema: z.ZodTypeAny): unknown {
     const trimmedContent = content.trim();
     const fencedMatch = trimmedContent.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
     const normalizedContent = fencedMatch ? fencedMatch[1].trim() : trimmedContent;
