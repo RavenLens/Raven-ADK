@@ -7,7 +7,7 @@ import { SchemaMemoryStore } from "./memory/stores/schema";
 import { Memory as MemoryInterface } from "./memory/memory";
 import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
-import { Skills as SkillsInterface } from "./skills/skills";
+import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcp/mcpTools";
 import { Tool } from "./tools/tools";
 import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
@@ -101,7 +101,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     parallelTools?: boolean;
 }
 
-interface ReActAgentEvents {
+interface ReActAgentEvents extends SkillEvents {
     llm_result: (result: LLMAnswer) => void | Promise<void>;
     tool_invoked: (toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
     tool_executed: (toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
@@ -251,6 +251,23 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
                 if (!this.agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
                     this.agentConfig.tools.push(tool);
                 }
+            }
+
+            const skillEventNames = [
+                "readSkillFull",
+                "readSkillMeta",
+                "discoverSkillFolder",
+                "createSkillFile",
+                "createSkillFolder",
+                "reloacateSkill",
+                "removeSkill",
+                "removeSkillFolder",
+            ] as SkillEventNames[];
+            
+            for (const possibleSkillEvent of skillEventNames) {
+                this.agentSkillsInterface.onEvent(possibleSkillEvent, (...args: any[]) => {
+                    this.emitEvent(possibleSkillEvent as any, ...args)
+                })
             }
         }
 

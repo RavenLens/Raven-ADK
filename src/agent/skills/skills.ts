@@ -51,6 +51,22 @@ export interface SkillConfig<SkillStorage extends SchemaSkillStore> extends Skil
     skillStorage: SkillStorage;
 }
 
+type SkillEventHandler<T extends Array<any>> = (...args: T) => any;
+
+export interface SkillEvents {
+    readSkillFull: SkillEventHandler<Parameters<SchemaSkillStore["readSkillFull"]>>,
+    readSkillMeta: SkillEventHandler<Parameters<SchemaSkillStore["readSkillMeta"]>>,
+    discoverSkillFolder: SkillEventHandler<Parameters<SchemaSkillStore["discoverSkillFolder"]>>,
+    createSkillFile: SkillEventHandler<Parameters<SchemaSkillStore["createSkillFile"]>>,
+    createSkillFolder: SkillEventHandler<Parameters<SchemaSkillStore["createSkillFolder"]>>,
+    reloacateSkill: SkillEventHandler<Parameters<SchemaSkillStore["reloacateSkill"]>>,
+    removeSkill: SkillEventHandler<Parameters<SchemaSkillStore["removeSkill"]>>,
+    removeSkillFolder: SkillEventHandler<Parameters<SchemaSkillStore["removeSkillFolder"]>>,
+    // TODO: Add script execution events
+}
+
+export type SkillEventNames = keyof SkillEvents;
+
 interface SkillsFoundation<SkillStorage extends SchemaSkillStore> {
     config: SkillConfig<SkillStorage>;
     createExploreSkillsAgentTools(): Tool<any, any>[];
@@ -61,6 +77,8 @@ interface SkillsFoundation<SkillStorage extends SchemaSkillStore> {
 
 export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoundation<SkillStorage> {
     config: SkillConfig<SkillStorage>;
+    private EventsListeners: Record<string, SkillEventHandler<any>> = {};
+
     static exploreSkillsPrompt: string = [
         "### Skills Exploration",
         "Discover, inspect, and reuse skills in a format compatible with the Open Skills standard: https://agentskills.io/home.",
@@ -141,58 +159,123 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "- Report command, arguments, cwd, exit code, stdout/stderr excerpts, and timeout state.",
         "- Use tool output as evidence for the final answer or next action."
     ].join("\n");
-    static createSkillsPrompt: string = [
-        "### Skills Creation.",
-        "If you feel required you can create, organize, relocate, and remove skills in RavenADK while keeping Open Skills compatibility: https://agentskills.io/home.",
-        "Use only the provided management/exploration tools and respect each tool schema exactly.",
-        "",
-        "Why skill creation exists in ReAct:",
-        "- Capture newly developed, reusable know-how discovered while solving real tasks.",
-        "- Improve future task quality by turning proven procedures into reusable skills.",
-        "",
-        "When creation is allowed (strict gate):",
-        "- Create a skill only after exploration confirms no same or meaningfully similar skill already exists.",
-        "- Create a skill only after the agent has developed or validated a reusable process during the current task.",
-        "- Do not create speculative, empty, or duplicate skills.",
-        "",
-        "Creation and management tools:",
-        "1) skill_folder_create",
-        "   - Arguments: { folderName: string, folderLocation?: string }",
-        "   - Creates a new skill ward/folder under folderLocation or root if omitted.",
-        "2) skill_file_create",
-        "   - Arguments: { skillFile: { fileName: string, type: skill|script|reference|documentation|assets, location: string, content: string }, inLocation?: string }",
-        "   - Creates a file entry with content.",
-        "3) skill_folder_remove",
-        "   - Arguments: { folderLocation: string }",
-        "   - Recursively removes a ward/folder subtree.",
-        "4) skill_remove",
-        "   - Arguments: { skillLocation: string }",
-        "   - Recursively removes a skill folder subtree.",
-        "5) skill_relocate",
-        "   - Arguments: { fromLocation: string, toLocation: string }",
-        "   - Relocates a skill or ward under target location.",
-        "",
-        "Exploration helpers available in the same runtime:",
-        "- skill_folder_discover, skill_meta_read, skill_full_read.",
-        "Use these before creation for deduplication, and after mutation for verification.",
-        "",
-        "How to create and manage (safe, universal workflow):",
-        "- Discover target ward and potential duplicates before any write/remove/relocate call.",
-        "- For a new skill, create a skill folder first, then create SKILL.md as the canonical skill file.",
-        "- Use skill_file_create with type=skill and fileName=SKILL.md for the core definition.",
-        "- Keep supporting files in scripts/references/assets/documentation with matching type values.",
-        "- Ensure SKILL.md metadata/frontmatter is valid, specific, and useful for routing.",
-        "- After each mutation, re-discover and re-read metadata/full skill to confirm expected state.",
-        "- Do not perform destructive removal when target path is ambiguous.",
-        "",
-        "Execution policy:",
-        "- Tool availability depends on runtime flags (dynamic creation/removal/relocation).",
-        "- If a required tool is unavailable or returns false, report limitation and do not fabricate success.",
-        "- Prefer minimal, reversible changes and keep skill structure coherent."
-    ].join("\n");
     
     constructor(config: SkillConfig<SkillStorage>) {
         this.config = config;
+    }
+
+    onEvent<EventName extends keyof SkillEvents>(
+        eventName: EventName,
+        eventListener: SkillEvents[EventName]
+    ): this {
+        if (this.EventsListeners[eventName]) {
+            console.warn(`Event listener for skill event "${eventName}" is already registered.`);
+            return this;
+        }
+
+        this.EventsListeners[eventName] = eventListener;
+        return this;
+    }
+
+    protected emit<EventName extends keyof SkillEvents>(
+        eventName: EventName,
+        ...eventArgs: Parameters<SkillEvents[EventName]>
+    ) {
+        const eventListener = this.EventsListeners[eventName];
+
+        if (!eventListener) {
+            return;
+        }
+
+        const listener = eventListener as unknown as SkillEvents[EventName];
+
+        void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
+            console.warn(`Skill event listener for "${String(eventName)}" failed during execution.`, error);
+        });
+    }
+
+    createSkillsManagementPrompt() {
+        const promptLines = [
+            "### Skills Creation & Management.",
+            "You have capabilities to manage the skills in RavenADK while keeping Open Skills compatibility: https://agentskills.io/home.",
+            "Use only the provided management/exploration tools and respect each tool schema exactly.",
+            "",
+            "Why skill management exists in ReAct:",
+            "- Capture newly developed, reusable know-how discovered while solving real tasks.",
+            "- Improve future task quality by turning proven procedures into reusable skills.",
+            "- Re-organize, refine, or relocate existing knowledge to maintain a high-quality codebase of capabilities.",
+            "",
+            "Management philosophy:",
+            "- Be cautious with management actions. Your goal is to improve awareness and capability for future tasks.",
+            "- Instead of permanently removing a skill that might still hold value, consider redefining it within its folder or moving it to a more appropriate ward.",
+            "- Evolution of knowledge is preferred over flat deletion unless the skill is confirmed to be incorrect or entirely redundant.",
+            ""
+        ];
+
+        if (this.config.dynamicSkillCreation) {
+            promptLines.push(
+                "When creation is allowed (strict gate):",
+                "- Create a skill only after exploration confirms no same or meaningfully similar skill already exists.",
+                "- Create a skill only after the agent has developed or validated a reusable process during the current task.",
+                "- Do not create speculative, empty, or duplicate skills.",
+                ""
+            );
+        }
+
+        promptLines.push("Available management tools:");
+        let toolIdx = 1;
+        if (this.config.dynamicSkillCreation) {
+            promptLines.push(
+                `${toolIdx++}) skill_folder_create`,
+                "   - Arguments: { folderName: string, folderLocation?: string }",
+                "   - Creates a new skill ward/folder under folderLocation or root if omitted.",
+                `${toolIdx++}) skill_file_create`,
+                "   - Arguments: { skillFile: { fileName: string, type: skill|script|reference|documentation|assets, location: string, content: string }, inLocation?: string }",
+                "   - Creates a file entry with content."
+            );
+        }
+
+        if (this.config.dynamicSkillRemoval) {
+            promptLines.push(
+                `${toolIdx++}) skill_folder_remove`,
+                "   - Arguments: { folderLocation: string }",
+                "   - Recursively removes a ward/folder subtree.",
+                `${toolIdx++}) skill_remove`,
+                "   - Arguments: { skillLocation: string }",
+                "   - Recursively removes a skill folder subtree."
+            );
+        }
+
+        if (this.config.dynamicSkillRelocation) {
+            promptLines.push(
+                `${toolIdx++}) skill_relocate`,
+                "   - Arguments: { fromLocation: string, toLocation: string }",
+                "   - Relocates a skill or ward under target location."
+            );
+        }
+
+        promptLines.push(
+            "",
+            "Exploration helpers available in the same runtime:",
+            "- skill_folder_discover, skill_meta_read, skill_full_read.",
+            "Use these before any modification for deduplication, and after for verification.",
+            "",
+            "How to manage (safe, universal workflow):",
+            "- Discover target ward and potential duplicates before any write/remove/relocate call.",
+            "- For a new skill, create a skill folder first, then create SKILL.md as the canonical skill file.",
+            "- Use skill_file_create with type=skill and fileName=SKILL.md for the core definition.",
+            "- Keep supporting files in scripts/references/assets/documentation with matching type values.",
+            "- Ensure SKILL.md metadata/frontmatter is valid, specific, and useful for routing.",
+            "- After each mutation, re-discover and re-read metadata/full skill to confirm expected state.",
+            "- Do not perform destructive removal when target path is ambiguous.",
+            "",
+            "Execution policy:",
+            "- Tool availability depends on runtime flags (dynamic creation/removal/relocation).",
+            "- If a required tool is unavailable or returns false, report limitation and do not fabricate success.",
+            "- Prefer minimal, reversible changes and keep skill structure coherent."
+        );
+
+        return promptLines.join("\n");
     }
     
     /** 
@@ -210,6 +293,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
             tool(
                 async ({ fromLocation }) => {
                     const discoveredEntriesResult = await discoverSkillFolder(fromLocation);
+                    this.emit("discoverSkillFolder", fromLocation);
                     return JSON.stringify(discoveredEntriesResult, null, 2);
                 },
                 {
@@ -229,6 +313,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
             tool(
                 async ({ fromLocation }) => {
                     const skillMetaResult = await readSkillMeta(fromLocation);
+                    this.emit("readSkillMeta", fromLocation);
                     return String(skillMetaResult);
                 },
                 {
@@ -248,6 +333,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
             tool(
                 async ({ fromLocation }) => {
                     const skillFullResult = await readSkillFull(fromLocation);
+                    this.emit("readSkillFull", fromLocation);
                     return String(skillFullResult);
                 },
                 {
@@ -280,7 +366,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                 tool(
                     async ({ folderName, folderLocation }) => {
                         const createFolderSkillsResult = await createSkillFolder(folderName, folderLocation);
-    
+                        this.emit("createSkillFolder", folderName, folderLocation);
                         return String(createFolderSkillsResult);
                     },
                     {
@@ -302,7 +388,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                 tool(
                     async ({ skillFile, inLocation }) => {
                         const createFolderSkillsResult = await createSkillFile(skillFile, inLocation);
-    
+                        this.emit("createSkillFile", skillFile, inLocation);
                         return String(createFolderSkillsResult);
                     },
                     {
@@ -331,7 +417,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                 tool(
                     async ({ folderLocation }) => {
                         const removeFolderSkillsResult = await removeSkillFolder(folderLocation);
-    
+                        this.emit("removeSkillFolder", folderLocation);
                         return String(removeFolderSkillsResult);
                     },
                     {
@@ -352,7 +438,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                 tool(
                     async ({ skillLocation }) => {
                         const removeSkillResult = await removeSkill(skillLocation);
-    
+                        this.emit("removeSkill", skillLocation);
                         return String(removeSkillResult);
                     },
                     {
@@ -374,7 +460,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
                 tool(
                     async ({ fromLocation, toLocation }) => {
                         const relocateResult = await reloacateSkill(fromLocation, toLocation);
-    
+                        this.emit("reloacateSkill", fromLocation, toLocation);
                         return String(relocateResult);
                     },
                     {
@@ -393,6 +479,7 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
     }
 
     /**
+     * TODO: Execute skill in sandbox and use hitl according to config
      * Set of tools to execute scripts of skills
     */
     createSkillScriptExecuteTools(): Tool<any, any>[] {
@@ -700,6 +787,11 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         };
     }
 
+    /**
+     * TODO: Cover this with config changes
+     * 1. Provide to it sandbox to allow toe execute the skills in isolated environment out of the device
+     * 2. Allow to use hitl there to always make user bee decidive
+     */
     private async executeCommandLine(
         command: string,
         args: string[],
