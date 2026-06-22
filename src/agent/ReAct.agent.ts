@@ -857,7 +857,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         this.AgentGraph = reactAgentGraph;
     }
 
-    private buildWrappedSystemPrompt(userSystemPrompt: string): string {
+    private async buildWrappedSystemPrompt(userSystemPrompt: string): Promise<string> {
         const cleanedUserPrompt = userSystemPrompt.trim();
 
         if (
@@ -877,7 +877,13 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         if (this.agentSkillsInterface) {
             baseSystemPrompt += `\n\n## Explore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
             baseSystemPrompt += `\n\n## Execute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
-            baseSystemPrompt += `\n\n## Create and manage skills as needed according to this specification:\n${SkillsInterface.createSkillsPrompt}`;
+
+            if (this.agentSkillsInterface.config.dynamicSkillCreation || this.agentSkillsInterface.config.dynamicSkillRelocation || this.agentSkillsInterface.config.dynamicSkillRemoval) {
+                baseSystemPrompt += `\n\n## Create and manage skills as needed according to this specification:\n${this.agentSkillsInterface.createSkillsManagementPrompt()}`;
+            }
+
+            const getListOfAvaibalbeSkills = await this.agentSkillsInterface.getListOfAvailableSkillsString();
+            baseSystemPrompt += `\n\n## Available skills list:\n${getListOfAvaibalbeSkills}`;
         }
 
         if (this.agentMemoryInterface) {
@@ -1197,8 +1203,8 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         }
     }
 
-    private ensureWrappedSystemPrompt(): void {
-        const wrappedSystemPrompt = this.buildWrappedSystemPrompt(this.agentConfig.systemPrompt);
+    private async ensureWrappedSystemPrompt(): Promise<void> {
+        const wrappedSystemPrompt = await this.buildWrappedSystemPrompt(this.agentConfig.systemPrompt);
         const nonSystemMessages = this.agentConfig.messages.filter(message => message.type !== "system");
 
         this.agentConfig.messages = [
@@ -1358,7 +1364,7 @@ export class ReActAgent<Skills extends SchemaSkillStore, Memory extends SchemaMe
         // Runs Plugins
         await this.runPlugins("before_agent_run");
         
-        this.ensureWrappedSystemPrompt();
+        await this.ensureWrappedSystemPrompt();
         this.synchronizeModelConfig();
 
         // Run Agent

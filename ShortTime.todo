@@ -1,5 +1,0 @@
-These points have to be done today
-
-1. Optimize TODO List as additional option to push it to verify output and recall ReActAgent when todo list isn't finished (done)
-2. Optimize ReAct Agent according to file to make it more performant
-    - update the documentation and Readme.md to include how well is optimized and how it uses the parallel agents and tools to speedup execution time compared to another libraries and when retries doesn't match agent has to produce structe output with reason

@@ -23,6 +23,7 @@ interface CommandExecutionResult {
     error?: string;
 }
 
+// TODO: Add the dynamic skill updation and add prompt
 export interface SkillSharedConfig {
     /**
      * Derives default value from the of base [`Skills`](../skills.ts) class
@@ -61,8 +62,8 @@ interface SkillsFoundation<SkillStorage extends SchemaSkillStore> {
 export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoundation<SkillStorage> {
     config: SkillConfig<SkillStorage>;
     static exploreSkillsPrompt: string = [
-        "You are RavenADK Skills Explorer.",
-        "Your mission is to discover, inspect, and reuse skills in a format compatible with the Open Skills standard: https://agentskills.io/home.",
+        "### Skills Exploration",
+        "Discover, inspect, and reuse skills in a format compatible with the Open Skills standard: https://agentskills.io/home.",
         "Use only the provided skill tools and follow their argument schemas exactly.",
         "",
         "Why to use skills in a ReAct workflow:",
@@ -74,7 +75,12 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "- Before creating a new skill candidate, to avoid duplicates or near-duplicates.",
         "- After tool outputs reveal uncertainty about the correct process.",
         "",
-        "Available explore tools:",
+        "How to find available skills:",
+        "- A hierarchical tree of available skills is provided at the bottom of the system prompt.",
+        "- Use this tree to identify potential matches by name and brief description.",
+        "- If a description is truncated (ends with \"...\"), use exploration tools to get more details.",
+        "",
+        "Available explore tools (from createExploreSkillsAgentTools):",
         "1) skill_folder_discover",
         "   - Arguments: { fromLocation?: string }",
         "   - Purpose: list direct child entries from a location. Returns JSON text of entries with folder/file types and relative locations.",
@@ -86,10 +92,10 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "   - Purpose: read full SKILL.md content for complete skill understanding.",
         "",
         "How to explore and reuse (ReAct-compatible loop):",
-        "- Reason: identify what capability is needed.",
-        "- Act: call skill_folder_discover to map candidate wards and skills.",
-        "- Act: call skill_meta_read on likely matches for quick filtering.",
-        "- Act: call skill_full_read only for finalists before applying instructions.",
+        "- Reason: identify what capability is needed and check the provided skills tree.",
+        "- Act: if needed, call skill_folder_discover to map candidate wards and skills in more detail.",
+        "- Act: call skill_meta_read on likely matches for quick filtering or to see information missing from the tree.",
+        "- Act: call skill_full_read only for finalists before applying instructions or using its scripts and assets.",
         "- Observe: compare discovered capability to current objective and continue only with evidence.",
         "- If no suitable skill is confirmed, continue task execution and only then consider creation policy.",
         "",
@@ -104,8 +110,8 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "- Never claim a skill exists without evidence from discover/read tools."
     ].join("\n");
     static executeSkillScriptsPrompt: string = [
-        "You are RavenADK Skill Script Executor.",
-        "Your mission is to execute verified skill scripts through command-line tools and report outputs as evidence.",
+        "### Skills Execution",
+        "Execute verified skill scripts through command-line tools and report outputs as evidence.",
         "Use only the provided script execution tools and follow argument schemas exactly.",
         "",
         "Why execution tools exist in ReAct:",
@@ -136,8 +142,8 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         "- Use tool output as evidence for the final answer or next action."
     ].join("\n");
     static createSkillsPrompt: string = [
-        "You are RavenADK Skills Curator.",
-        "Your mission is to create, organize, relocate, and remove skills in RavenADK while keeping Open Skills compatibility: https://agentskills.io/home.",
+        "### Skills Creation.",
+        "If you feel required you can create, organize, relocate, and remove skills in RavenADK while keeping Open Skills compatibility: https://agentskills.io/home.",
         "Use only the provided management/exploration tools and respect each tool schema exactly.",
         "",
         "Why skill creation exists in ReAct:",
@@ -489,6 +495,57 @@ export class Skills<SkillStorage extends SchemaSkillStore> implements SkillsFoun
         );
 
         return executeTools;
+    }
+
+    /** It's list with numbers of available skills a agent can use
+     * It's insert to each system prompt when skills interface is specified to inform user about skills and description of all available skills
+     * 
+     * ### How does it work?
+     * 1. Explore skill folder
+     * 2. Place the name of skill and description from skill meta after a hyphen
+     */
+    async getListOfAvailableSkillsString(): Promise<string> {
+        const { readSkillMeta, discoverSkillFolder } = this.config.skillStorage;
+
+        const buildTree = async (location?: string, indent = ""): Promise<string> => {
+            const entries = await discoverSkillFolder(location);
+            let tree = "";
+
+            for (const entry of entries) {
+                if ("folderName" in entry) {
+                    if (entry.type === "skill") {
+                        const meta = await readSkillMeta(entry.location);
+                        const description = this.extractDescription(meta);
+                        const truncatedDescription = description.length > 700 
+                            ? description.slice(0, 700) + "..." 
+                            : description;
+                        tree += `${indent}- ${entry.folderName}${truncatedDescription ? ` - ${truncatedDescription}` : ""}\n`;
+                    } else if (entry.type === "skill-ward") {
+                        tree += `${indent}- (${entry.folderName})\n`;
+                        tree += await buildTree(entry.location, indent + "   ");
+                    }
+                }
+            }
+            return tree;
+        };
+
+        const treeContent = await buildTree();
+        const finalTree = `(Root Skills Directory)\n${treeContent || "- No skills found."}`;
+        
+        return `${finalTree}\n\n**How to interpret the tree:**\n- Items in parentheses e.g., \`(Folder Name)\` are skill wards (categories) that group multiple skills.\n- Items starting with a hyphen e.g., \`- Skill Name - Description\` are actual skills that you can use.\n- If a description ends with \`...\`, it has been truncated to conserve tokens. Use \`skill_full_read\` or \`skill_meta_read\` to see the complete information and instructions for that skill.`;
+    }
+
+    private extractDescription(meta: string): string {
+        if (!meta) return "";
+        // Simple regex to extract description from frontmatter
+        const match = meta.match(/description:\s*(?:>|\|)?\s*([\s\S]*?)(?=\n\w+:|$)/);
+        if (match && match[1]) {
+            let desc = match[1].trim();
+            // Remove YAML multiline markers and clean up
+            desc = desc.replace(/^[|>]\s*\n?/, "").replace(/\n\s+/g, " ").trim();
+            return desc;
+        }
+        return "";
     }
 
     private normalizeLocation(location?: string): string {
