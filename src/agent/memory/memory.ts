@@ -3,28 +3,55 @@ import { tool, Tool } from "../tools/tools";
 import { MemoryFetch, MemoryRecord } from "./stores/schema";
 import { SchemaMemoryStore } from "./stores/schema";
 import { randomUUID } from "node:crypto";
+import { ReActAgentConfig, ReActAgentPluginSpec } from "../ReAct.agent";
 
 export class Memory<MemoryStore extends SchemaMemoryStore> {
     static memorySystemPrompt: string = [
-        "You have access to long-term memory through two tools: `fetch_memory` and `save_memory`.",
+        "You have access to long-term memory through two tools: `fetch_memory` and `save_memory` additionally you've conclusion of memory specified down below.",
         "Follow this process:",
-        "1. Before answering, decide whether the current task depends on durable facts, prior preferences, user identity, recurring goals, or established decisions.",
-        "2. If memory can help, call `fetch_memory` first to look for matching knowledge.",
-        "3. Use `fetch_memory` with semantic search for keywords, titles, content, and related memory ids.",
-        "4. Use `fetch_memory` in explore mode when you need to walk outward from a known memory node and inspect connected knowledge.",
-        "5. After reading memory, answer with the stored facts instead of guessing.",
-        "6. Save new memory only when the information is durable, useful later, and does not already exist in saved memory.",
-        "7. Before calling `save_memory`, compare the new fact with fetched memory. If it is already stored, do not save it again.",
-        "8. Save only stable information such as preferences, profile facts, task constraints, decisions, terminology, and important outcomes.",
-        "9. Do not save transient chat noise, repeated tool output, secrets, or speculative guesses.",
-        "10. When saving related facts, attach related memory ids and strength values in the range 0 to 1 when known.",
-        "11. Prefer short, normalized titles and clear content that can be reused in later turns.",
-        "12. If you are unsure whether a fact is worth remembering, fetch first and save only if it is genuinely new and durable.",
+        "1. In section `Memory conclusion already you've rememebered` you've specified the conclusion of all memory you've ever fathom. Use this conclusion before seek deeper for reminescents with using memory tools given to your disposal described here",        
+        "2. Before answering, decide whether the current task depends on durable facts, prior preferences, user identity, recurring goals, or established decisions.",
+        "3. If memory can help, call `fetch_memory` first to look for matching knowledge.",
+        "4. Use `fetch_memory` with semantic search for keywords, titles, content, and related memory ids.",
+        "5. Use `fetch_memory` in explore mode when you need to walk outward from a known memory node and inspect connected knowledge.",
+        "6. After reading memory, answer with the stored facts instead of guessing.",
+        "7. Save new memory only when the information is durable, useful later, and does not already exist in saved memory.",
+        "8. Before calling `save_memory`, compare the new fact with fetched memory. If it is already stored, do not save it again.",
+        "9. Save only stable information such as preferences, profile facts, task constraints, decisions, terminology, and important outcomes.",
+        "10. Do not save transient chat noise, repeated tool output, secrets, or speculative guesses.",
+        "11. When saving related facts, attach related memory ids and strength values in the range 0 to 1 when known.",
+        "12. Prefer short, normalized titles and clear content that can be reused in later turns.",
+        "13. If you are unsure whether a fact is worth remembering, fetch first and save only if it is genuinely new and durable.",
     ].join("\n");
     store: MemoryStore;
 
     constructor(store: MemoryStore) {
         this.store = store;
+    }
+
+    /** 
+     * Use this to retrive the memory file is the conclusion of all memory the agent has and it's insert to system prompt paired with `memorySystemPrompt
+     * How does the memory conclusion file work?
+     *  - Read - at the begining of work agent in system prompt gets the memory conclusion file has no more than 2048 words
+     *  - Write - at the end of agent progress agent gets the 
+    */
+    async getMemoryConclusionFile() {
+        return await this.store.fetchMemoryConclusionFile();
+    }
+
+    async setMemoryConclusionFile(fileContent: string) {
+        return await this.store.writeMemoryConclusionFile(fileContent);
+    }
+
+    async getMemoryConclusionFileSystemPrompt() {
+        const conclusion = await this.getMemoryConclusionFile();
+
+        // Don't include max conclusion length since it is not required to know for this stage
+        return `### Memory conclusion already you've rememebered
+        
+#### Memory conclusion content
+${conclusion || "Memory conclusion is empty - use tools to seek instead"}
+        `
     }
 
     createMemoryTools(): Tool<any, any>[] {
@@ -285,4 +312,96 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
     get api() {
         return this.store;
     }
+}
+
+// TODO: Agent has to conclude the memory only when user thinks it's necessary
+
+/**
+ * Creates a `MemoryConcludePlugin` that is the unified interface to conclude the memory as needance
+ * ### Requirements:
+ * - Memory interface has to be specified on ReAct agent atop of what you use this plugin
+ * ```typescript
+ *  new ReActAgent({
+ *      memory: // (here has to be interface)
+ *      ...restOfConfig
+ *  })
+ * ```
+ * 
+ * ## How Does it work
+ * - Spawns another ReAct Agent with specified configuration that will decide whether is worthy to save a memory
+ * - Base on transcript of conversation decides whether to overwrite/make the conclusion in the specified range of words
+ * @param reactAgentConfig - is the configuration for ReAct Agent will decide whether to override the memory
+ * @returns
+ */
+export function createMemoryConclusionPlugin(reactAgentConfig: ReActAgentConfig<any, any, any>) {
+    return {
+        name: "MemoryConcludePlugin",
+        executionWay: "after_agent_run",
+        async execute(executionFrom, agentConfig, graphState) {
+            if (agentConfig.memory) {
+                const { ReActAgent } = await import("../ReAct.agent");
+                const memoryInterface = new Memory(agentConfig.memory);
+                const oldConclusion = await memoryInterface.getMemoryConclusionFile();
+
+                const transcript = agentConfig.messages
+                    .filter((m): m is any => m.type !== 'system')
+                    .map((m: any) => {
+                        if (m.type === 'user') return `User: ${m.content}`;
+                        if (m.type === 'ai') return `Assistant: ${m.content || '(no text)'}`;
+                        if (m.type === 'thinking') return `Thought: ${m.content}`;
+                        if (m.type === 'tool') {
+                            return `Tool Call [${m.tool_name || m.tool_id}]: ${m.content}${m.toolOutput ? `\nOutput: ${m.toolOutput}` : ''}${m.toolError ? `\nError: ${m.toolError}` : ''}`;
+                        }
+                        return '';
+                    })
+                    .filter(Boolean)
+                    .join('\n\n');
+
+                const summaryPrompt = [
+                    "Perform agent memory conclusion based on the interaction history.",
+                    "Determine if there are new durable facts, preferences, user identity details, or important decisions that should be remembered long-term.",
+                    "Update the 'Memory conclusion already you've rememebered' if necessary.",
+                    "",
+                    "### Rules:",
+                    "- Keep it under 2048 words.",
+                    "- Focus on durable/stable information, not transient chat noise.",
+                    "- If no significant information was gathered, do not change the conclusion.",
+                    "- Return ONLY the final conclusion text.",
+                ].join('\n');
+
+                const concludeAgent = new ReActAgent({
+                    ...reactAgentConfig,
+                    systemPrompt: [
+                        summaryPrompt,
+                        "### Current Memory Conclusion:",
+                        oldConclusion || "Empty",
+                        "",
+                        reactAgentConfig.systemPrompt || ""
+                    ].filter(Boolean).join('\n'),
+                    messages: [
+                        {
+                            type: 'user',
+                            content: `Transcript of recent interaction:\n\n${transcript}\n\nBased on this, provide the updated consolidated memory conclusion.`
+                        }
+                    ],
+                    withConclusion: true
+                });
+
+                const result = await concludeAgent.invoke();
+                const lastMessage = result.messages[result.messages.length - 1];
+                const newConclusion = lastMessage?.type === 'ai' ? lastMessage.content : null;
+
+                if (newConclusion && newConclusion.trim() !== "" && newConclusion !== oldConclusion) {
+                    await memoryInterface.setMemoryConclusionFile(newConclusion.trim());
+                    return {
+                        status: true
+                    };
+                }
+            }
+             
+            return {
+                status: false
+            }
+        },
+    } satisfies ReActAgentPluginSpec;
 }

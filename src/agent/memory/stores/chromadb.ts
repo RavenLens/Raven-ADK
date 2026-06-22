@@ -43,6 +43,69 @@ export class MemoryChromaDBStore implements SchemaMemoryStore {
         this.chromadbClient = new ChromaClient(config.chromaDBConfig);
     }
 
+    async fetchMemoryConclusionFile(): Promise<string> {
+        try {
+            const collection = await this.getCollection();
+            const result = await collection?.get?.({
+                ids: ["conclusion-file"],
+                include: ["documents"]
+            });
+
+            return result?.documents?.[0] ?? "";
+        }
+        catch {
+            return "";
+        }
+    }
+
+    async writeMemoryConclusionFile(fileContent: string): Promise<boolean> {
+        const maxCharacters = this.config.conclusion?.maxCharacters;
+
+        if (maxCharacters !== undefined && fileContent.length > maxCharacters) {
+            return false;
+        }
+
+        try {
+            const collection = await this.getCollection();
+            const metadata: ChromaMetadata = {
+                title: "Memory Conclusion",
+                content: fileContent,
+                keywords: JSON.stringify(["conclusion"]),
+                relatedMemoryIds: "",
+                relationStrengths: "",
+                subMemoryIds: JSON.stringify([]),
+                relationCount: 0,
+                maxRelationStrength: 0,
+                session: this.resolveSession() ?? ""
+            };
+
+            if (typeof collection.upsert === "function") {
+                await collection.upsert({
+                    ids: ["conclusion-file"],
+                    documents: [fileContent],
+                    metadatas: [metadata]
+                });
+
+                return true;
+            }
+
+            if (typeof collection.add === "function") {
+                await collection.add({
+                    ids: ["conclusion-file"],
+                    documents: [fileContent],
+                    metadatas: [metadata]
+                });
+
+                return true;
+            }
+
+            return false;
+        }
+        catch {
+            return false;
+        }
+    }
+
     async fetchMemory(fetchBy: FetchBySemantic | MemoryFetch.Explore): Promise<MemoryFetchResult> {
         try {
             const collection = await this.getCollection();

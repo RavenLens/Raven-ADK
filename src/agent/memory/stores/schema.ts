@@ -5,6 +5,14 @@ export interface SchemaMemoryConfig {
      *  2. User subjects of interest: e.g: Ferrari Cars, Apple devices
     */
     hasToRemember: string;
+    /**
+     * It's the property shows the conclusion will be attached to the end of system prompt and it's the shortcut of what agent has rememebred for user and it helps to give it cousciousness before it go after
+     * Use a `MemoryConcludePlugin` to allow agent to make and edit conclusion file base on the actual conversation
+    */
+    conclusion?: {
+        /** The limit for how many characters can include conclusion file */
+        maxCharacters: number;
+    }
     /** 
      * Optional: Session is required to store the memory bound e.g: to user account or specific user session
      * Some stores requires it some other don't
@@ -46,6 +54,17 @@ export type MemoryFetchResult = MemoryRecord | MemoryRecord[] | undefined;
 export interface SchemaMemoryStore {
     config: SchemaMemoryConfig;
 
+    /**
+     * Fetches the conclusion file 
+     */
+    fetchMemoryConclusionFile(): string | Promise<string>;
+
+    /**
+     * Writes the action conlusion at the end of prompt
+     * @param fileContent 
+     */
+    writeMemoryConclusionFile(fileContent: string): boolean | Promise<boolean>;
+    
     /**
      * Fetches the memory from database
      * Use session as needed

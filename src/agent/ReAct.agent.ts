@@ -913,7 +913,17 @@ export class ReActAgent
         }
 
         if (this.agentMemoryInterface) {
-            baseSystemPrompt += `\n\n\n\n## Memory and recall system:\n${MemoryInterface.memorySystemPrompt}\n\nYou've to remember following informations always when has occured in conversation transcript and were't already remembered:\n${this.agentMemoryInterface.store.config.hasToRemember}`;
+            const memoryConclusionSystemPrompt = this.agentMemoryInterface.getMemoryConclusionFile();
+            
+            baseSystemPrompt += `\n\n\n\n## Memory and recall system:
+${MemoryInterface.memorySystemPrompt}
+
+
+> You've to remember following informations always when has occured in conversation transcript and were't already remembered:
+> ${this.agentMemoryInterface.store.config.hasToRemember}
+ 
+${memoryConclusionSystemPrompt}
+`;
         }
 
         if (this.agentConfig.hitl) {

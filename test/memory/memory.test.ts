@@ -154,7 +154,9 @@ describe("Memory duplicate detection", () => {
                     subMemoryIds: []
                 }
             ]),
-            saveMemory: vi.fn()
+            saveMemory: vi.fn(),
+            fetchMemoryConclusionFile: vi.fn().mockResolvedValue(""),
+            writeMemoryConclusionFile: vi.fn().mockResolvedValue(true)
         } satisfies SchemaMemoryStore;
 
         const memory = new Memory(store);
