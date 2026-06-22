@@ -76,3 +76,5 @@ When toolsUsage includes a tool name:
 - If delay fallback is configured, fallback answer is used when timeout is reached.
 
 Tip: enable approvals only for risky or irreversible operations so users are protected without excessive prompts.
+
+<!-- TODO: Once HITL has exension of custom acceptance of execution describe it here -->

@@ -97,10 +97,104 @@ Capture timing and token usage (for example, `timing.json`) and aggregate all ev
 ### 5. Iterate
 Use failed assertions + human review feedback to improve `SKILL.md`, rerun evals in a new iteration folder, and repeat until quality stabilizes.
 
+## Advantages of Using Skills
+- **Reuse Over Reasoning**: Reduce the need for high-reasoning LLM calls by providing verified procedural instructions.
+- **Improved Consistency**: Ensure the agent follows the same steps for repeatable tasks across different sessions.
+- **Enhanced Safety**: Execute complex logic in isolated sandboxes with optional Human-In-The-Loop (HITL) confirmation.
+- **Dynamic Learning**: Agents can capture successful workflows and persist them as new skills for future use.
+- **Zero-Dead Turns**: Skills exploration tools allow agents to find solutions without failing first.
+
+## Automated Prompting & Discovery
+When a `ReActAgent` is configured with a skill store, RavenADK automatically enhances the system prompt:
+- **Available Skills Tree**: A hierarchical list of all available skills (names and descriptions) is injected at the bottom of the prompt.
+- **Exploration Guidelines**: Instructions on how to use `skill_folder_discover`, `skill_meta_read`, and `skill_full_read` tools are provided.
+- **Instructional Context**: The agent is encouraged to seek existing skills before inventing new approaches to non-trivial tasks.
+
+## Safe Execution with Sandbox & HITL
+RavenADK provides a robust system for executing skill-related scripts and CLI commands safely.
+
+### Sandboxes
+Scripts are executed within a `CodeExecutionSandbox`. You can use built-in sandboxes or bring your own.
+
+#### Available Sandboxes Specification
+| Sandbox | Environment | Context Isolation | Primary Use Case |
+| :--- | :--- | :--- | :--- |
+| **`LocalExecutionSandbox`** | Local Process | Opinionated `vm` | Running generic JS logic with common Node.js globals (`Buffer`, `process`) injected. |
+| **`NodeExecutionSandbox`** | Local Process | Strict `vm` | Pure JavaScript execution where the caller provides a precise execution context. |
+| **`E2BExecutionSandbox`** | Cloud Micro-VM | OS-level | Secure execution of multi-language scripts (Python, Node, Bash) in a remote environment. |
+
+- **`LocalExecutionSandbox`**: Best for simple local tools. It automatically provides console overrides and standard Node.js utilities to the script.
+- **`NodeExecutionSandbox`**: Best for RLM (Recurrent Language Models) where the agent needs a "scratchpad" to compute results using a provided data object.
+- **`E2BExecutionSandbox`**: The most secure option. Recommended for untrusted code or when specific system dependencies (like specialized Python libraries) are required.
+- **Custom Sandbox**: Implement the `CodeExecutionSandboxSchema` to use any execution environment.
+
+### Human-In-The-Loop (HITL) Guardrails
+If a HITL transport is provided in the `Skills` configuration, every script or CLI execution will trigger an **Acceptance Prompt**. The agent will pause and wait for the user to explicitly "Allow" or "Deny" the command execution.
+
+## Configuration Example
+Here is a complete example of setting up a `ReActAgent` with Skills, an E2B Sandbox, and Socket.io HITL.
+
+```typescript
+import { ReActAgent } from "@ravenlens/raven-adk/agent";
+import { SkillDiskStore } from "@ravenlens/raven-adk/skills";
+import { E2BExecutionSandbox } from "@ravenlens/raven-adk/sandboxes";
+import { HITLSocketIo } from "@ravenlens/raven-adk/hitl";
+
+// 1. Setup HITL Transport
+const hitl = new HITLSocketIo({
+    port: 3000,
+    toolsUsage: {
+        "skill_script_run": true,    // Require approval for scripts
+        "skill_cli_execute": true    // Require approval for direct CLI
+    }
+});
+
+// 2. Setup Sandbox
+const sandbox = new E2BExecutionSandbox({ apiKey: process.env.E2B_API_KEY });
+
+// 3. Setup Skill Storage with Sandbox and HITL
+const skills = new SkillDiskStore({
+    root: "./my-skills",
+    dynamicSkillCreation: true,
+    sandbox,
+    hitl
+});
+
+// 4. Initialize Agent
+const agent = new ReActAgent({
+    model: myModel,
+    systemPrompt: "You are a specialized developer assistant.",
+    tools: [],
+    skills,
+    hitl
+});
+```
+
+## Skill Events
+The `Skills` interface emits events that can be listened to for logging, auditing, or UI updates.
+
+| Event | Description |
+| :--- | :--- |
+| `readSkillFull` | Emitted when a full `SKILL.md` is read. |
+| `readSkillMeta` | Emitted when skill metadata is read. |
+| `discoverSkillFolder` | Emitted when skill wards or files are discovered. |
+| `createSkillFile` | Emitted when a new skill file is created. |
+| `runSkillScript` | Emitted when a skill script is executed (includes results). |
+| `executeSkillCLI` | Emitted when a direct CLI command is executed. |
+| `removeSkill` | Emitted when a particular skill is removed. |
+| `reloacateSkill` | Emitted when a skill is moved. |
+
+### Listening to Events
+You can listen to these events directly via the `ReActAgent` instance:
+
+```typescript
+agent.onEvent("runSkillScript", (scriptLocation, runtime, args, result) => {
+    console.log(`Script executed at ${scriptLocation}. Success: ${result.success}`);
+});
+```
+
 ## Practical Tips
 - Keep skills focused: fewer, clear instructions outperform long rule lists.
 - Write assertions that are objective and verifiable.
 - Keep skill metadata in frontmatter so `readSkillMeta` can route quickly.
 - Store reusable logic in `scripts/` when repeated work appears in transcripts.
-
-<!-- TODO: Skill has to be adjusted to the new schema of skill where: are events emitted that can be listened, agent has access to the list of allowed skills, skill script can be execute in sandbox, skill hitl when specified can be execute before executing the script  -->

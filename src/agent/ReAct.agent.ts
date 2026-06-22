@@ -193,6 +193,7 @@ const CONCLUSION_SYSTEM_PROMPT = [
     "Return only the conclusion text."
 ].join("\n");
 
+// TODO: Configure HITL `questions` to be able to use a acceptance HITL and adjust the ReAct agent to be able to use that
 /**
  * ReAct flow:
  * 1. Reason

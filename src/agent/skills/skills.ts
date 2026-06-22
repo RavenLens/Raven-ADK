@@ -817,7 +817,7 @@ export class Skills
         // Skill execution has to be accepted
         if (this.config.hitl?.emitAcceptance) {
             const directory = options.workingDirectory || "current";
-            
+
             this.emit("hitlAcceptanceTrigger", command, args, directory);
             
             const acceptanceResult = await this.config.hitl.emitAcceptance(
