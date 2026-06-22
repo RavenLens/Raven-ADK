@@ -35,8 +35,19 @@ describe("AgenticEvaluator Live Tests", () => {
             tools: [],
         });
 
+        let evaluateStartEmitted = false;
+        let evaluateEndEmitted = false;
+        evaluator.onEvent("evaluate_start", () => { evaluateStartEmitted = true; });
+        evaluator.onEvent("evaluate_end", (msg) => { 
+            evaluateEndEmitted = true;
+            expect(msg.type).toBe("ai");
+            expect(msg.structuredOutput).toBeDefined();
+        });
+
         const result = await evaluator.evaluate();
 
+        expect(evaluateStartEmitted).toBe(true);
+        expect(evaluateEndEmitted).toBe(true);
         expect(result.result).toBeDefined();
         expect(result.result.score).toBeGreaterThanOrEqual(0.1);
         expect(result.result.score).toBeLessThanOrEqual(1.0);
@@ -60,6 +71,12 @@ describe("AgenticEvaluator Live Tests", () => {
             tools: []
         });
 
+        let iterations: number[] = [];
+        evaluator.onEvent("loop_iteration", (iter) => {
+            iterations.push(iter);
+            console.log(`Evaluator Loop Iteration: ${iter}`);
+        });
+
         const runnerAgent = new ReActAgent({
             model,
             systemPrompt: "You are a helpful assistant that explains things simply.",
@@ -77,6 +94,8 @@ describe("AgenticEvaluator Live Tests", () => {
             2 // allow 2 retries
         );
 
+        expect(iterations.length).toBeGreaterThan(0);
+        expect(iterations[0]).toBe(0);
         expect(loopResult.success).toBeDefined();
         console.log("Loop success:", loopResult.success);
         console.log("Final Message:", loopResult.reasoningMessages.at(-1)?.content);

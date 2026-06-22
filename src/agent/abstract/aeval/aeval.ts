@@ -3,11 +3,11 @@ import { MessagesVariations } from "../../state";
 import { z } from "zod";
 
 export const EvaluationResultSchema = z.object({
-    score: z.number().min(0.1).max(1.0),
+    score: z.number().min(0.0).max(1.0).describe("Accuracy scroll for measured message"),
     verdict: z.enum(['BEST', 'GOOD', 'POOR', 'REJECTED']),
-    reasoning: z.string(),
+    reasoning: z.string().describe("Prove your score, verdict, metrics and improvements points"),
     metrics: z.record(z.string(), z.number()),
-    improvements: z.array(z.string()).optional()
+    improvements: z.array(z.string()).optional().describe("List with elements can be improved in answer. Instruct what to include in final answer to make it better")
 });
 
 export type EvaluationResult = {
@@ -26,12 +26,18 @@ abstract class AgenticEvaluatorSchema {
     ): Promise<{ success: boolean; reasoningMessages: MessagesVariations[] }>;
 }
 
+export interface AgenticEvaluatorEvents {
+    evaluate_start: () => any;
+    evaluate_end: (resultMessage: MessagesVariations) => any;
+    loop_iteration: (iteration: number) => any;
+}
 
 type AEvalConfig = Omit<ReActAgentConfig<any, any, any>, "messages">;
 
 export class AgenticEvaluator implements AgenticEvaluatorSchema {
     messages: MessagesVariations[];
     agentConfig: ReActAgentConfig<any, any, any>;
+    private eventsListeners: Record<string, ((...args: any[]) => void)[]> = {};
     
     /**
      * @param messages - List with messages with ai answer as last one to evaluate. The last message has to be ai answer, the last user message is the message base on that we mesure output
@@ -48,8 +54,26 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
         };
     }
 
+    /** Register event listener */
+    onEvent<K extends keyof AgenticEvaluatorEvents>(event: K, listener: AgenticEvaluatorEvents[K]): void {
+        if (!this.eventsListeners[event]) {
+            this.eventsListeners[event] = [];
+        }
+        this.eventsListeners[event].push(listener as any);
+    }
+
+    /** Emit event */
+    private emit<K extends keyof AgenticEvaluatorEvents>(event: K, ...args: Parameters<AgenticEvaluatorEvents[K]>): void {
+        const listeners = this.eventsListeners[event];
+        if (listeners) {
+            listeners.forEach(l => l(...args));
+        }
+    }
+
     /** Runs evaluation with ReActAgent with specified config and returns outcome */
-    async evaluate(messages?: MessagesVariations[]): Promise<EvaluationResult> {
+    async evaluate(): Promise<EvaluationResult> {
+        this.emit("evaluate_start");
+
         const evalAgent = new ReActAgent({
             ...this.agentConfig,
             systemPrompt: [
@@ -86,6 +110,8 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
             throw new Error("Evaluator failed to produce evaluation result.");
         }
 
+        this.emit("evaluate_end", lastMessage);
+
         return {
             result: lastMessage.structuredOutput,
             messages: result.messages
@@ -107,6 +133,8 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
         const verdicts = ['REJECTED', 'POOR', 'GOOD', 'BEST'];
         
         while (currentRetries <= maxRetries) {
+            this.emit("loop_iteration", currentRetries);
+            
             // `messages` are the trace of evaluation of AI Agent
             const { result, messages } = await this.evaluate();
             

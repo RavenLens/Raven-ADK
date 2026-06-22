@@ -59,6 +59,32 @@ When using the `.loop()` method, provide a clear `expectationDescription`.
 - **Good Expectation**: "The response must be under 200 words, use a professional tone, and mention the specifically requested product features X and Y."
 - **Verdicts**: Aim for `BEST` or `GOOD` for production-ready responses. `REJECTED` will always trigger a retry if the loop hasn't hit the limit.
 
+## Events
+
+`AgenticEvaluator` provides several events to monitor the evaluation process in real-time.
+
+| Event Name | Description | Parameters |
+| :--- | :--- | :--- |
+| `evaluate_start` | Emitted when the evaluation process starts. | - |
+| `evaluate_end` | Emitted when evaluation finishes successfully. | `resultMessage: MessagesVariations` (The message containing structured output) |
+| `loop_iteration` | Emitted at the start of each iteration in the improvement loop. | `iteration: number` |
+
+### Listening to Events
+
+```typescript
+evaluator.onEvent("evaluate_start", () => {
+    console.log("Starting evaluation...");
+});
+
+evaluator.onEvent("evaluate_end", (message) => {
+    console.log("Evaluation complete. Reasoning:", message.structuredOutput.reasoning);
+});
+
+evaluator.onEvent("loop_iteration", (iteration) => {
+    console.log(`Starting loop iteration: ${iteration}`);
+});
+```
+
 ## Features
 AEval includes these features:
 
