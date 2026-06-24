@@ -38,4 +38,6 @@ export interface StandardLLMShema {
     config: LLMConfig;
     invoke(): Promise<LLMAnswer>;
     invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer>;
+    tts(text: string, options?: any): Promise<Buffer | undefined>;
+    stt(speechFile: File, options?: any): Promise<string>;
 }

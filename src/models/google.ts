@@ -430,4 +430,27 @@ export class Google implements StandardLLMShema {
             invoke: () => this.invoke()
         });
     }
+
+    async tts(text: string, options: { model: string; speech_config: { speaker: string, voice: string }[] }): Promise<Buffer | undefined> {
+        const interaction = await this.client.interactions.create({
+            model: options.model,
+            input: text,
+            response_format: { type: 'audio' },
+            generation_config: {
+                speech_config: options.speech_config
+            },
+        });
+
+        if (interaction.output_audio?.data) {
+            const audioBuffer = Buffer.from(interaction.output_audio.data, 'base64');
+            return audioBuffer;
+        }
+
+        return undefined;
+    }
+
+    /** Google doesn't provide stt in their generative ai api */
+    async stt(speechFile: File, options?: any): Promise<string> {
+        throw new Error("STT is not supported by Google provider in Raven ADK.");
+    }
 }

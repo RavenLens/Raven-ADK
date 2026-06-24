@@ -462,4 +462,12 @@ export class RunPod implements StandardLLMShema {
 			invoke: () => this.invoke()
 		});
 	}
+
+    async tts(text: string): Promise<Buffer> {
+        throw new Error("TTS is not supported by RunPod provider in Raven ADK.");
+    }
+
+    async stt(speechFile: File, options?: any): Promise<string> {
+        throw new Error("STT is not supported by RunPod provider in Raven ADK.");
+    }
 }

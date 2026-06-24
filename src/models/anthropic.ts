@@ -345,4 +345,14 @@ export class Anthropic implements StandardLLMShema {
             invoke: () => this.invoke()
         });
     }
+
+    /** Anthropic doesn't provide tts */
+    async tts(text: string): Promise<Buffer> {
+        throw new Error("TTS is not supported by Anthropic provider in Raven ADK.");
+    }
+
+    /** Anthropic doesn't provide stt */
+    async stt(speechFile: File, options?: any): Promise<string> {
+        throw new Error("STT is not supported by Anthropic provider in Raven ADK.");
+    }
 }
