@@ -1,7 +1,7 @@
 import z from "zod";
-import { AgentModel, ReActAgent, ReActAgentConfig, ReActAgentPluginSpec } from "../ReAct.agent";
-import { tool, Tool } from "../tools/tools";
-import { AIMessage, MessagesVariations } from "../state";
+import { AgentModel, ReActAgent, ReActAgentConfig, ReActAgentPluginSpec } from "../../ReAct.agent";
+import { tool, Tool } from "../../tools/tools";
+import { AIMessage, MessagesVariations } from "../../state";
 import EventEmitter from "node:events";
 
 export interface TodoPoint {
@@ -164,7 +164,7 @@ IMPORTANT: Previous history is provided below for context. Focus on finishing th
                     const nonSystemMessages = agentConfig.messages.filter(m => m.type !== "system");
                     const tools = createTodoTools(todoStorage);
 
-                    const struggleAgentConfig: ReActAgentConfig<any, any> = {
+                    const struggleAgentConfig: ReActAgentConfig<any, any, any> = {
                         ...agentConfig,
                         systemPrompt: struggleSystemPrompt,
                         messages: nonSystemMessages,

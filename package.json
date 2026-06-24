@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest",
     "build": "tsc"
   },
   "keywords": [
@@ -113,6 +113,16 @@
       "types": "./dist/agent/tools/CodeExecutionSandboxes/index.d.ts",
       "import": "./dist/agent/tools/CodeExecutionSandboxes/index.js",
       "require": "./dist/agent/tools/CodeExecutionSandboxes/index.js"
+    },
+    "./plugins": {
+      "types": "./dist/agent/plugins/index.d.ts",
+      "import": "./dist/agent/plugins/index.js",
+      "require": "./dist/agent/plugins/index.js"
+    },
+    "./multianswers": {
+      "types": "./dist/agent/abstract/multianswers/index.d.ts",
+      "import": "./dist/agent/abstract/multianswers/index.js",
+      "require": "./dist/agent/abstract/multianswers/index.js"
     }
   },
   "dependencies": {

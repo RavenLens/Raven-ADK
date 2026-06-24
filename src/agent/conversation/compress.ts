@@ -54,7 +54,7 @@ export function generateCompressReActAgentPlugin(
     return {
         name: "CompressConversation",
         executionWay: "before_model_call",
-        async execute(agentConfig, graphState) {
+        async execute(executionFrom, agentConfig, graphState) {
             // 1. Calculate tokens
             let tokens: Tokens = {
                 systemPrompt: 0,
