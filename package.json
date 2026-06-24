@@ -123,6 +123,11 @@
       "types": "./dist/agent/abstract/multianswers/index.d.ts",
       "import": "./dist/agent/abstract/multianswers/index.js",
       "require": "./dist/agent/abstract/multianswers/index.js"
+    },
+    "./sequential": {
+      "types": "./dist/agent/abstract/sequential/index.d.ts",
+      "import": "./dist/agent/abstract/sequential/index.js",
+      "require": "./dist/agent/abstract/sequential/index.js"
     }
   },
   "dependencies": {
