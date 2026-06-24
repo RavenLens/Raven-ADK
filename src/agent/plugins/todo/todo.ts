@@ -91,11 +91,18 @@ export const TODOPluginEventEmitter = new EventEmitter();
  *      - This produces the additional event can be listened for working environment
  * 
  * @param todoStorage - is the storage with list of all todo points either finished and not
- * @param struggleForAccomplishement - Optional: is the number of tries llm will take to parse the names of finished todo points after each call. It recalls. WORTH TO MENTION: if it doesn't work you can use another agent to dela with task, give user output why it cannot be accomplished (since agent produces it for such case) or manually as script fill todo storage tasks as done after accomplishement
+ * @param options - Optional: It's set with options for agent
  */
 export function createTodoPlugin(
     todoStorage: TodoStoreSchemaTS[],
-    struggleForAccomplishementRetries?: number
+    options?: {
+        struggleForAccomplishementRetries?: number;
+        /** S
+         * Setup as `true` to achive `Planist behaviour` generating plan before run model - it's deepagent behaviour. Agent is spawn with config inherited from ReAct agent on that plugin is mount
+         * Setup with reactagent config to spawn specific agent will generate todo before agent run
+        */
+        generateAlwaysBeforePluginRun?: boolean | ReActAgentConfig<any, any, any>;
+    }
 ): ReActAgentPluginSpec {
     return {
         name: "TODO-Plugin",
@@ -107,6 +114,48 @@ export function createTodoPlugin(
                 for (const tool of tools) {
                     if (!agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
                         agentConfig.tools.push(tool);
+                    }
+                }
+
+                // 1.1 Trigger Always Before Plugin Run (Planning phase)
+                if (options?.generateAlwaysBeforePluginRun) {
+                    const planningAgentConfig: ReActAgentConfig<any, any, any> =
+                        options.generateAlwaysBeforePluginRun === true
+                            ? { ...agentConfig }
+                            : { ...options.generateAlwaysBeforePluginRun };
+
+                    // Ensure we don't have recursive plugin calls and have tools
+                    const planningTools = createTodoTools(todoStorage);
+                    const filteredPlugins = (planningAgentConfig.plugins || []).filter(p => p.name !== "TODO-Plugin");
+
+                    const finalPlanningConfig: ReActAgentConfig<any, any, any> = {
+                        ...planningAgentConfig,
+                        plugins: filteredPlugins,
+                        tools: [...(planningAgentConfig.tools || [])] as any as Tool<any, any>[],
+                        systemPrompt: `
+### PLANNING PROTOCOL
+Analyze the mission and generate a detailed TODO list of points to accomplish the goal.
+Decompose complex tasks into specific, manageable steps.
+You MUST output the TODO points according to the schema.
+`
+                    };
+
+                    // Add todo tools if missing to the planning config
+                    for (const pt of planningTools) {
+                        if (!finalPlanningConfig.tools.find(t => t.toolConfig.toolName === pt.toolConfig.toolName)) {
+                            finalPlanningConfig.tools.push(pt as any);
+                        }
+                    }
+
+                    const planningAgent = new ReActAgent(finalPlanningConfig);
+                    const planningResult = await planningAgent.invokeStructuredOutput(todoSchemaZod, 1);
+                    const structuredOutputResult = (planningResult.state.produceStructuredOutput as any)?.result as z.infer<typeof todoSchemaZod>;
+
+                    if (structuredOutputResult?.todoPoints) {
+                        if (todoStorage.length === 0) {
+                            todoStorage.push({ todoPoints: [] });
+                        }
+                        todoStorage[0].todoPoints = structuredOutputResult.todoPoints;
                     }
                 }
     
@@ -121,6 +170,8 @@ export function createTodoPlugin(
     
                 const todoInstruction = `
 \n\n### TODO List Management Protocol
+${options?.generateAlwaysBeforePluginRun ? "Treat TODO List as pathway you've to follow to accomplish task" : ""}
+
 You MUST actively manage the task progress using the TODO list tools. TODO is for you the canvas for strategical planning of tasks. Follow these rules to ensure operational excellence:
 1. **Frequent Observation**: Call 'get_todo_list_points' at the beginning of your task and after major milestones to synchronize your state with the storage.
 2. **Immediate Updates**: Use 'update_todo_list' the moment a task state changes. Mark points as 'in_progress' when starting and 'done' immediately upon completion.
@@ -145,7 +196,7 @@ Use the 'update_todo_list' and 'get_todo_list_points' tools to pursue these obje
                     }
                 };
             }
-            else if (executionPlace.way === "after_agent_run" && struggleForAccomplishementRetries) {
+            else if (executionPlace.way === "after_agent_run" && options?.struggleForAccomplishementRetries) {
                 const todoListsPointsNotFinished = todoStorage[0]?.todoPoints.filter(todoPoint => todoPoint.state !== "done");
                 if (todoListsPointsNotFinished.length) {
                     const uncompletedNames = todoListsPointsNotFinished.map(tp => tp.name).join(', ');
@@ -174,7 +225,7 @@ IMPORTANT: Previous history is provided below for context. Focus on finishing th
                     };
 
                     const retryAgent = new ReActAgent(struggleAgentConfig);
-                    const result = await retryAgent.invokeStructuredOutput(todoStruggleSchema, struggleForAccomplishementRetries);
+                    const result = await retryAgent.invokeStructuredOutput(todoStruggleSchema, options.struggleForAccomplishementRetries);
                     
                     const structuredOutputResult = (result.state.produceStructuredOutput as any)?.result as z.infer<typeof todoStruggleSchema>;
 
