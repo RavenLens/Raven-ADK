@@ -500,4 +500,22 @@ export class OpenAI implements StandardLLMShema {
             invoke: () => this.invoke()
         });
     }
+
+    async tts(text: string, options: OpenAIStandalone.Audio.Speech.SpeechCreateParams): Promise<Buffer> {
+        const response = await this.openai.audio.speech.create({
+            ...options,
+            input: text,
+        });
+
+        return Buffer.from(await response.arrayBuffer());
+    }
+
+    async stt(speechFile: File, options: OpenAIStandalone.Audio.Transcriptions.TranscriptionCreateParamsNonStreaming): Promise<string> {
+        const response = await this.openai.audio.transcriptions.create({
+            ...options,
+            file: speechFile,
+        });
+
+        return response.text;
+    }
 }
