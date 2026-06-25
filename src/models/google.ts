@@ -34,6 +34,7 @@ export interface GoogleConfig extends LLMConfig {
 
 interface GoogleAIEvents {
     stream: (event: GenerateContentResponse) => void | Promise<void>;
+    reasoning: (content: string) => void | Promise<void>;
 }
 
 /**
@@ -329,6 +330,10 @@ export class Google implements StandardLLMShema {
             }
         }
 
+        if (thoughts.length > 0) {
+            this.emitEvent("reasoning", thoughts.map(t => t.content).join("\n"));
+        }
+
         const aiAnswer: AIMessage = {
             type: "ai",
             content: text,
@@ -362,6 +367,15 @@ export class Google implements StandardLLMShema {
     private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>) {
         for await (const event of stream) {
             this.emitEvent("stream", event);
+
+            if (event.candidates?.[0]?.content?.parts) {
+                for (const part of event.candidates[0].content.parts) {
+                    if (part.text && (part as any).thought) {
+                        this.emitEvent("reasoning", part.text);
+                    }
+                }
+            }
+
             yield event;
         }
     }
@@ -378,6 +392,13 @@ export class Google implements StandardLLMShema {
         const systemInstruction = this.prepareSystemInstruction();
         const tools = this.prepareTools();
 
+        // Reasoning configuration for Google
+        const thinking_config = options?.reasoning?.budgetTokens ? {
+            include_thoughts: true,
+            include_thoughts_in_response: true,
+            thought_budget: options.reasoning.budgetTokens
+        } : undefined;
+
         if (options?.stream) {
             const stream = await this.client.models.generateContentStream({
                 model: this.config.model,
@@ -390,7 +411,9 @@ export class Google implements StandardLLMShema {
                     topK: this.config.topK,
                     candidateCount: this.config.candidateCount,
                     maxOutputTokens: this.config.maxOutputTokens,
-                    stopSequences: this.config.stopSequences
+                    stopSequences: this.config.stopSequences,
+                    // Specific to Google genai SDK for thinking models
+                    thinkingConfig: thinking_config as any
                 }
             });
 
@@ -408,7 +431,9 @@ export class Google implements StandardLLMShema {
                 topK: this.config.topK,
                 candidateCount: this.config.candidateCount,
                 maxOutputTokens: this.config.maxOutputTokens,
-                stopSequences: this.config.stopSequences
+                stopSequences: this.config.stopSequences,
+                // Specific to Google genai SDK for thinking models
+                thinkingConfig: thinking_config as any
             }
         });
 

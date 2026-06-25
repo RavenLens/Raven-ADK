@@ -31,7 +31,6 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 - Sandboxes - Secure code execution environments designed for RLM and ReAct tools - [check](./documentation/Sandbox.md)
 - Builting tools
     - Browser - run serverless browser on your device - [check](./documentation/tools/Browsing.md)
-<!-- TODO: Add compression showcase and achivements from roadmap -->
 
 ## Installation
 ```bash

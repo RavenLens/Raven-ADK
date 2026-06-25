@@ -15,6 +15,7 @@ export interface AnthropicConfig extends LLMConfig {
 
 interface AnthropicAIEvents {
     stream: (event: AnthropicStandalone.Messages.RawMessageStreamEvent) => void | Promise<void>;
+    reasoning: (content: string) => void | Promise<void>;
 }
 
 export class Anthropic implements StandardLLMShema {
@@ -221,6 +222,11 @@ export class Anthropic implements StandardLLMShema {
     private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>) {
         for await (const event of stream) {
             this.emitEvent("stream", event);
+
+            if (event.type === "content_block_delta" && event.delta.type === "thinking_delta") {
+                this.emitEvent("reasoning", (event.delta as any).thinking);
+            }
+
             yield event;
         }
     }
@@ -253,6 +259,11 @@ export class Anthropic implements StandardLLMShema {
                 content: content.thinking,
                 signature: content.signature
             })) : null;
+
+        if (thinkingReasonMessage && thinkingReasonMessage.length > 0) {
+            this.emitEvent("reasoning", thinkingReasonMessage.map(t => t.content).join("\n"));
+        }
+
         let fileInput: any = null;
         let audioOutput: any = null;
 
@@ -311,13 +322,18 @@ export class Anthropic implements StandardLLMShema {
             this.config.messages = options.messages;
         }
         
+        const thinking = options?.reasoning?.budgetTokens ? {
+            type: "enabled",
+            budget_tokens: options.reasoning.budgetTokens
+        } : this.config.thinking;
+
         const config: AnthropicStandalone.Messages.MessageCreateParamsNonStreaming = {
             model: this.config.model,
-            max_tokens: this.config.max_tokens ?? 1024,
+            max_tokens: (this.config.max_tokens ?? 1024) + (options?.reasoning?.budgetTokens ?? 0),
             system: this.prepareSystemPrompt(),
             messages: this.prepareMessages(),
             tools: this.prepareTools(),
-            thinking: this.config.thinking
+            thinking: thinking as any
         }
         
         if (options?.stream) {

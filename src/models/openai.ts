@@ -3,7 +3,7 @@ import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
 import type * as ChatAPI from "openai/resources/chat/completions";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
-import { AIMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
+import { AIMessage, ToolMessage, ResponseInputVideo, ReasoningMessage } from "../agent/state";
 import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
@@ -19,6 +19,7 @@ export interface OpenAIConfig extends LLMConfig {
 
 interface OpenAIEvents {
     stream: (event: ResponsesAPI.ResponseStreamEvent) => void | Promise<void>;
+    reasoning: (content: string) => void | Promise<void>;
 }
 
 /**
@@ -37,7 +38,7 @@ export class OpenAI implements StandardLLMShema {
 
         this.openai = new OpenAIStandalone({
             apiKey: this.config.apiKey,
-            baseURL: this.baseURL
+            baseURL: this.baseURL,
         })
     }
 
@@ -263,11 +264,11 @@ export class OpenAI implements StandardLLMShema {
         }).join("\n") ?? "";
     }
 
-    private prepareCreatePayload(): Omit<ResponsesAPI.ResponseCreateParamsBase, "stream"> {
+    private prepareCreatePayload(reasoning?: InvokeOptions["reasoning"]): Omit<ResponsesAPI.ResponseCreateParamsBase, "stream"> {
         return {
             model: this.config.model,
             reasoning: {
-                effort: this.config.reasoningEffort ?? undefined
+                effort: reasoning?.effort ?? this.config.reasoningEffort ?? undefined
             },
             input: this.prepareInput(),
             tools: this.prepareTools()
@@ -288,6 +289,23 @@ export class OpenAI implements StandardLLMShema {
                 arguments: parseToolCallContentToParams(toolCall.input)
             } satisfies ToolMessage;
         });
+
+        // Extract reasoning content from output if available
+        let reasoningDetail = "";
+        for (const item of response.output) {
+            if ((item as any).type === "reasoning" || (item as any).type === "reasoning_content") {
+                reasoningDetail += (item as any).reasoning || (item as any).reasoning_content || "";
+            }
+        }
+
+        const thoughts: ReasoningMessage[] = reasoningDetail ? [{
+            type: "thinking",
+            content: reasoningDetail
+        }] : [];
+
+        if (reasoningDetail) {
+            this.emitEvent("reasoning", reasoningDetail);
+        }
 
         let fileInput: any = null;
         let audioInput: any = null;
@@ -318,7 +336,8 @@ export class OpenAI implements StandardLLMShema {
             if (audioOutput) aiAnswer.audioOutput = audioOutput;
         }
 
-        const answer: (AIMessage | ToolMessage)[] = [
+        const answer: (ReasoningMessage | AIMessage | ToolMessage)[] = [
+            ...thoughts,
             ...(aiAnswer ? [aiAnswer] : [])
         ];
 
@@ -342,6 +361,17 @@ export class OpenAI implements StandardLLMShema {
         const choice = response.choices[0];
         const answerContentText = choice.message.content?.trim() ? choice.message.content : null;
         const toolCalls = choice.message.tool_calls ?? [];
+
+        // Extract reasoning content if available
+        const reasoningContent = (choice.message as any).reasoning_content;
+        const thoughts: ReasoningMessage[] = reasoningContent ? [{
+            type: "thinking",
+            content: reasoningContent
+        }] : [];
+
+        if (reasoningContent) {
+            this.emitEvent("reasoning", reasoningContent);
+        }
 
         // Map output for answer
         const calledToolsMessage = toolCalls.map((toolCall: any) => {
@@ -373,7 +403,8 @@ export class OpenAI implements StandardLLMShema {
             if (audioOutput) aiAnswer.audioOutput = audioOutput;
         }
 
-        const answer: (AIMessage | ToolMessage)[] = [
+        const answer: (ReasoningMessage | AIMessage | ToolMessage)[] = [
+            ...thoughts,
             ...(aiAnswer ? [aiAnswer] : [])
         ];
 
@@ -425,6 +456,12 @@ export class OpenAI implements StandardLLMShema {
     private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>) {
         for await (const event of stream) {
             this.emitEvent("stream", event);
+
+            const eventAny = event as any;
+            if (eventAny.type === "reasoning_content" || eventAny.type === "reasoning") {
+                this.emitEvent("reasoning", eventAny.reasoning_content || eventAny.reasoning || "");
+            }
+
             yield event;
         }
     }
@@ -457,13 +494,14 @@ export class OpenAI implements StandardLLMShema {
                 model: this.config.model,
                 messages: this.prepareChatInput(),
                 tools: this.prepareChatTools().length > 0 ? this.prepareChatTools() : undefined,
-                stream: false
-            });
+                stream: false,
+                reasoning_effort: options?.reasoning?.effort ?? undefined
+            } as any);
 
             return this.parseChatResponseToAnswer(response);
         }
         
-        const basePayload = this.prepareCreatePayload();
+        const basePayload = this.prepareCreatePayload(options?.reasoning);
 
         if (options?.stream) {
             const streamPayload: ResponsesAPI.ResponseCreateParamsStreaming = {

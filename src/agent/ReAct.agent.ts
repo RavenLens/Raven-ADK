@@ -1,6 +1,6 @@
 import { Graph, GraphMarkers } from "../graph";
 import { Anthropic } from "../models/anthropic";
-import { LLMAnswer } from "../models/mutual";
+import { InvokeOptions, LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
 import { Google } from "../models/google";
 import { SchemaMemoryStore } from "./memory/stores/schema";
@@ -107,6 +107,8 @@ interface ReActAgentEvents extends SkillEvents {
     llm_result: (result: LLMAnswer) => void | Promise<void>;
     tool_invoked: (toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
     tool_executed: (toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
+    /** Reasoning chunk */
+    reasoning: (content: string) => void | Promise<void>;
     /** Is produced at the end of reasoning phase */
     reasoning_end: (thoughts: string) => void | Promise<void>;
     /** When agent starts to produce output */
@@ -139,10 +141,11 @@ interface ReActAgentStreamEventMap {
             output: string;
         };
     };
+    reasoning: {
+        content: string;
+    };
     reasoning_end: {
-        content: {
-            thoughts: string;
-        };
+        content: string;
     };
     result_producing_start: {
         content: null;
@@ -243,6 +246,13 @@ export class ReActAgent
             output: 0,
             reasoning: 0
         };
+
+        // Register model reasoning event
+        if ((this.agentConfig.model as any).onEvent) {
+            (this.agentConfig.model as any).onEvent("reasoning", (content: string) => {
+                this.emitEvent("reasoning", content);
+            });
+        }
 
         // Add skills exploration feature to standalone agent
         if (this.agentSkillsInterface) {
@@ -351,7 +361,8 @@ export class ReActAgent
                 
                 // Invoke model
                 const modelInvoke = await this.agentConfig.model.invoke({
-                    messages: this.agentConfig.messages
+                    messages: this.agentConfig.messages,
+                    ...state.modelOptions
                 });
 
                 this.calculateUsedTokens(modelInvoke);
@@ -1291,12 +1302,15 @@ ${memoryConclusionSystemPrompt}
                         output: eventArgs[2] as string
                     }
                 };
+            case "reasoning":
+                return {
+                    event: "reasoning",
+                    content: eventArgs[0] as string
+                };
             case "reasoning_end":
                 return {
                     event: "reasoning_end",
-                    content: {
-                        thoughts: eventArgs[0] as string
-                    }
+                    content: eventArgs[0] as string
                 };
             case "result_producing_start":
                 return {
@@ -1393,9 +1407,12 @@ ${memoryConclusionSystemPrompt}
      * @param withGraphState - is the optional parameter with what the graph will start
      * @returns 
      */
-    private async runGraph(withGraphState?: Record<string, any>): Promise<ReActAgentInvokeResult> {
+    private async runGraph(withGraphState?: Record<string, any>, modelOptions?: InvokeOptions): Promise<ReActAgentInvokeResult> {
         // Initialize graph state first so plugins can modify it
-        this.AgentGraph.graphState = withGraphState ?? {};
+        this.AgentGraph.graphState = {
+            ...(withGraphState ?? {}),
+            modelOptions: modelOptions ?? this.AgentGraph.graphState?.modelOptions
+        };
 
         // Runs Plugins
         await this.runPlugins("before_agent_run");
@@ -1418,11 +1435,11 @@ ${memoryConclusionSystemPrompt}
         };
     }
     
-    async invoke(): Promise<ReActAgentInvokeResult> {
-        return await this.runGraph();
+    async invoke(options?: InvokeOptions): Promise<ReActAgentInvokeResult> {
+        return await this.runGraph(undefined, options);
     }
 
-    async invokeStream(): Promise<AsyncIterable<ReActAgentStreamChunk>> {
+    async invokeStream(options?: InvokeOptions): Promise<AsyncIterable<ReActAgentStreamChunk>> {
         // Start the agent in the background and stream each emitted ReAct event immediately.
         const self = this;
 
@@ -1447,7 +1464,7 @@ ${memoryConclusionSystemPrompt}
 
                 self.StreamListeners.add(pushEvent);
 
-                const execution = self.invoke()
+                const execution = self.invoke(options)
                     .catch((error) => {
                         failure = error;
                     })

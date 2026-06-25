@@ -4,7 +4,7 @@ The `ReActAgent` is a standalone agent in RavenADK designed to follow the ReAct 
 
 ## Key Features
 
-- **Reasoning Loop**: The agent generates internal thoughts before making any tool calls or providing a final response.
+- **Reasoning Loop**: The agent generates internal thoughts before making any tool calls or providing a final response. Supports **unified reasoning** across major providers (OpenAI, Anthropic, Google).
 - **Tool Usage**: Native support for standard tools and MCP (Model Context Protocol) tools. Supports both sequential and **parallel tools execution**.
 - **Skills**: Integrates with the RavenADK Skills system for dynamic capability enhancement.
 - **Memory**: Supports persistent memory stores (e.g., ChromaDB) to remember user preferences and session history.
@@ -47,7 +47,8 @@ The `ReActAgent` is built on an event-driven architecture. You can listen to var
 | `llm_result` | Emitted whenever the underlying LLM returns a result. | `result: LLMAnswer` |
 | `tool_invoked` | Emitted just before a tool is called. | `toolName: string`, `toolParams: Record<string, any>` |
 | `tool_executed` | Emitted after a tool has finished execution. | `toolName: string`, `toolParams: Record<string, any>`, `output: string` |
-| `reasoning_end` | Emitted at the end of the reasoning phase when thoughts are produced. | `thoughts: string` |
+| `reasoning` | Emitted during the reasoning phase (useful for streaming chunks). | `content: string` |
+| `reasoning_end` | Emitted at the end of the reasoning phase with the full thought summary. | `thoughts: string` |
 | `result_producing_start` | Emitted when the agent begins to generate its final output. | - |
 | `concluding_start` | Emitted when the agent starts generating the final conclusion summary. | - |
 | `concluding_end` | Emitted when the final conclusion is ready. | `conclusion: string` |
@@ -99,16 +100,20 @@ const reactAgent = new ReActAgent({
 });
 
 // Register event listeners
-reactAgent.onEvent("tool_invoked", (name, params) => {
-    console.log(`Invoking tool: ${name} with`, params);
+reactAgent.onEvent("reasoning", (thought) => {
+    console.log("Thinking...", thought);
 });
 
 reactAgent.onEvent("reasoning_end", (thoughts) => {
-    console.log("Agent Thoughts:", thoughts);
+    console.log("Agent full thoughts:", thoughts);
 });
 
-// Invoke the agent
-const result = await reactAgent.invoke();
+// Invoke the agent with reasoning configuration
+const result = await reactAgent.invoke({
+    reasoning: {
+        budgetTokens: 16000 // For models supporting thought budgets (Claude 3.7 / Gemini)
+    }
+});
 console.log("Final Answer:", result.messages.at(-1).content);
 ```
 

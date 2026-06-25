@@ -101,6 +101,8 @@ export interface AgentMessagesGraphState {
     reasoningRecallsCount?: number;
     toolsOutputRetrived?: boolean;
     parallelRecalls?: string[];
+    /** Model options for the execution */
+    modelOptions?: any;
 }
 
 export type AgentMessagesGraphNodeResult = GraphNodeExecutionResult<AgentMessagesGraphState>;

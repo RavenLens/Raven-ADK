@@ -31,6 +31,22 @@ export interface InvokeOptions {
     stream?: boolean;
     /** Model will override his messages called in initialization with the specified here messages */
     messages?: MessagesVariations[];
+    /** 
+     * Reasoning configuration.
+     * When provided, it enables reasoning for the model call.
+     */
+    reasoning?: {
+        /** 
+         * Amount of tokens allowed for reasoning. 
+         * Specific to Anthropic (budget_tokens) and Google.
+         */
+        budgetTokens?: number;
+        /** 
+         * Effort level for reasoning. 
+         * Specific to OpenAI.
+         */
+        effort?: "low" | "medium" | "high";
+    };
 }
 
 export interface StandardLLMShema {

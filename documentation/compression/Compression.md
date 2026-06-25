@@ -51,7 +51,7 @@ const simpleTokenizer = (text: string) => text.split(/\s+/).filter(Boolean).leng
 // 2. Generate the compression plugin with context listener
 const compressionPlugin = generateCompressReActAgentPlugin(
     {
-        name: "gpt-4o-mini",
+        name: "gpt-5.5-mini",
         contextWindowTokens: 128000 // Target model's context window limit
     },
     simpleTokenizer,

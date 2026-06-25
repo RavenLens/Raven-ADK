@@ -126,6 +126,32 @@ const result = await model.invoke();
 
 ---
 
+## Thoughts (Reasoning)
+RavenADK provides a unified interface for models that support explicit reasoning (thoughts). This allows you to capture the model's "chain of thought" separately from its final answer.
+
+### Unified Configuration
+You can configure reasoning effort or token budgets across different providers using the `reasoning` configuration in `invoke` or `invokeStream`.
+
+```typescript
+const result = await model.invoke({
+    reasoning: {
+        budgetTokens: 16000, // For Anthropic (thinking) & Google (thinkingConfig)
+        effort: "high"       // For OpenAI (o1, o3-mini)
+    }
+});
+```
+
+### Capturing Thoughts
+Reasoning content is extracted into a special `reasoning` event and stored as `thinking` messages in the conversation history.
+
+```typescript
+model.onEvent("reasoning", (thought) => {
+    console.log("Model is thinking:", thought);
+});
+```
+
+---
+
 ## Standard Features
 All model providers in RavenADK implement the `StandardLLMShema` interface, ensuring consistent behavior across different APIs.
 
