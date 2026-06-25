@@ -3,11 +3,16 @@ import {
     GACPEvents, 
     AgentDestination, 
     SuccessStateObj,
-    AgentBoxReturnType
+    AgentBoxReturnType,
+    CallerData,
+    SuccessState,
+    SkillWard,
+    KnowledgeType
 } from './types';
 import { GACPMiddlewareBrokerConnector } from './broker-connectors';
+import { ToolConfig } from '../agent';
 
-export class GACPAgent {
+export class GACPAgent implements AgentBoxReturnType {
     private agentConfig: GACPAgentConfig;
     private broker: GACPMiddlewareBrokerConnector;
     private actionIdentifier: string | Record<string, any>;
@@ -75,33 +80,19 @@ export class GACPAgent {
         };
     }
     
-    /**
-     * Use to get current agents occupation
-     */
-    exploreTasks() {
-        return this.broker.exploreTasks();
+    invoke(task: string, caller: CallerData): Promise<SuccessState> {
+        return this.box!.invoke(task, caller);
     }
 
-    /**
-     * Explore other agents in the network
-     */
-    exploreAgents() {
-        return this.broker.exploreAgents();
+    getSkills(caller: CallerData): SkillWard[] {
+        return this.box!.getSkills(caller);
     }
 
-    /**
-     * Seek a skill from the network
-     */
-    async seekSkill(skillName: string) {
-        this.emit('seek_skill', { id: this.agentConfig.id, name: this.agentConfig.name });
-        // Logic to find and potentially "buy" or acquire skill
+    getKnowledge(caller: CallerData): KnowledgeType[] {
+        return this.box!.getKnowledge(caller);
     }
 
-    /**
-     * Seek knowledge from the network
-     */
-    async seekKnowledge(query: string) {
-        this.emit('seek_knowledge', { id: this.agentConfig.id, name: this.agentConfig.name });
-        // Logic to query the network for specific files or data
+    getTools(caller: CallerData): ToolConfig<any, any>[] {
+        return this.box!.getTools(caller);
     }
 }

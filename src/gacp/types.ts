@@ -1,3 +1,6 @@
+import { ToolConfig } from "../agent/tools";
+import { GACPAgent } from "./agent";
+
 export interface CallerData {
     agent: Pick<GACPAgentConfig, "id" | "name">;
     user?: { 
@@ -13,22 +16,88 @@ export type SuccessStateObj = {
     failureReason?: "payment_required" | "agent_error" | { reason: string };
 };
 
+export interface KnowledgeType {
+    id: string;
+    title: string;
+    keywords: string[];
+    content: string;
+}
+
+export interface SkillFile {
+    type: "file";
+    fileName: string;
+    /** Content includes meta */
+    fileContent: string;
+}
+
+export interface SkillFolder {
+    type: "folder";
+    folderName: string;
+    folderEntries: (SkillFile | SkillFolder)[];
+}
+
+/** 
+ * Otherwise folder with all skills orchestrated
+ * Can be root or specific
+*/
+export type SkillWard = {
+    type: "ward";
+    name: string;
+    isRoot?: boolean;
+    skills: (SkillFile | SkillFolder)[]
+};
+
 export interface AgentBoxReturnType {
     invoke(task: string, caller: CallerData): Promise<SuccessState>;
+    /**
+     * Return list of skills this agent can use
+     * Get list with this agent skills
+    */
+    getSkills(caller: CallerData): SkillWard[];
+    /**
+     * Get list with this agent tools definition
+     * Return list with tools other agents can use
+    */
+    getTools(caller: CallerData): ToolConfig<any, any>[];
     /** 
-     * TODO: Add type in square with agenticskills.io
+     * This is knwoeldge this agent carries
+     * Get list with this agent knowledge aka. memory
+     * Return list with knowledge other agents can use
     */
-    getSkills(caller: CallerData): any;
+    getKnowledge(caller: CallerData): KnowledgeType[];
+}
+
+export type AgentIdentifier = Pick<GACPAgentConfig, "id" | "name">;
+
+export interface GACPConnectorStandardSchema {
+    /** List with agents belongs to the client broker (connector) */
+    agents: GACPAgent[];
+    getAgents(): Omit<GACPAgentConfig, "agentBox">[];
+    getRelationGraph(): RelationsGraph[];
+    getSkills(): {
+        /** Agent identity */
+        agent: AgentIdentifier;
+        /** Root ward has skills */
+        skills: SkillWard;
+    }[];
+    getKnowledge(): {
+       agent: AgentIdentifier;
+       knowledge: KnowledgeType[];
+    }[];
+    getTools(): {
+       agent: AgentIdentifier;
+       tools: Pick<ToolConfig<any, any>, "toolName" | "toolArguments">;
+    }[];
     /**
-     * 
-     * TODO: Add type with 
+     * Executes tool
+     * In async mode doesn't wait for mode
+     * As default synchronous hence tool is execute before
     */
-    getTools(caller: CallerData): any;
-    /**
-     * 
-     * TODO: Add type with 
-    */
-    getKnowledge(caller: CallerData): any;
+    useTool(agent: AgentIdentifier, toolName: string, paramsFeed: Record<string, any>, asyncMode: boolean): { status: boolean, output?: any };
+    getAgentQueueLimits(agent: AgentIdentifier): null | number;
+    getAgentCurrentQueueOccupation(agent: AgentIdentifier): null | number;
+    delegateFullTask(config: { toAgent: Pick<GACPAgentConfig, "id" | "name">, asyncMode: boolean; }, task: string): any;
+    delegateTaskPart(config: { toAgent: Pick<GACPAgentConfig, "id" | "name">, asyncMode: boolean; }, taskPart: string): { operationId: string, result: any };
 }
 
 export interface GACPAgentConfig {
@@ -39,10 +108,12 @@ export interface GACPAgentConfig {
     description: string;
     /** Use to manually specify what is this agent the best for */
     specialization?: string | string[];
+    /** Specify maximal number of tasks can be execute by singular queue */
+    queueMaxTasksLenght?: number | false | undefined;
     /** 
      * Agent Definition Box - it's runnable agent will get the specification to be run
     */
-    agentBox: (gacpAgentInterface: any) => Promise<AgentBoxReturnType>;
+    agentBox: (gacpAgentInterface: GACPAgent) => Promise<AgentBoxReturnType>;
 }
 
 export type ExploredAgent = AgentBoxReturnType | Omit<GACPAgentConfig, "agentBox">;

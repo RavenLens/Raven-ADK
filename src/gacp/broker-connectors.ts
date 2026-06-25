@@ -4,13 +4,14 @@ import {
     RelationGraphID, 
     GACPEvents, 
     ExploredAgent,
-    AgentDestination 
+    AgentDestination, 
+    GACPConnectorStandardSchema
 } from './types';
 
 /** 
  * Use to communicate agents via centralized server to what other agents are connect
 */
-export class GACPMiddlewareBrokerConnector {
+export class GACPMiddlewareBrokerConnector implements GACPConnectorStandardSchema {
     brokerURL: string;
     relationsGraph?: RelationsGraph[] | RelationGraphID;
     private client: mqtt.MqttClient;
@@ -78,7 +79,7 @@ export class GACPMiddlewareBrokerConnector {
 }
 
 /** Use to communicate Agents directly */
-export class GACPServerlessBrokerConnector {
+export class GACPServerlessBrokerConnector implements GACPConnectorStandardSchema {
     agentURLs: string[];
     
     constructor(agentURLs: string[]) {
