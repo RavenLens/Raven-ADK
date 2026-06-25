@@ -4,16 +4,18 @@
 [![npm downloads](https://img.shields.io/npm/dm/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289da?logo=discord&logoColor=white)](https://discord.gg/eFfVjDj7Xd)
+[![Documentation](https://img.shields.io/badge/documentation-read-informational.svg?logo=read-the-docs&logoColor=white)](./documentation/Overview.md)
 <!-- TODO: Someday point to the dedicated webpage -->
 [![Webpage](https://img.shields.io/badge/webpage-visit-blue.svg?logo=google-chrome&logoColor=white)](https://www.ravenalliance.tech)
 
-> Package is in active developement
+> Check documentation: [RavenADK Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
 
 Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor.
 
 #### RavenADK as default supports these SOTA Agentic patterns:
 - ReAct Agent - Design for high performance with **parallel tools** and **parallel subagents** support
 - RLMs - Recursive approach to increase agent accuracy on large set of text with reducing significantly costs
+- **GACP** - Revolutionary **Graph Agent Communication Protocol** that changes how agents communicate and contribute to tasks and their **society** - [check](./documentation/gacp/GACP.md)
 - Skills
     - Exploring and applying
     - Dynamic Skills solutions
@@ -35,6 +37,22 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 ```bash
 npm install @ravenlens/raven-adk
 ```
+
+## Documentation
+[RavenADK Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
+
+- [Overview](./documentation/Overview.md)
+- [Quickstart](./documentation/Quickstart.md)
+- [ReAct Agent](./documentation/ReAct-Agent.md)
+- [RLMs](./documentation/RLMs.md)
+- [Graph Based Workflows](./documentation/Graph.md)
+- [Memory Management](./documentation/Memory.md)
+- [MCP Integration](./documentation/MCP.md)
+- [HITL Support](./documentation/HITL.md)
+- [GACP (Agent Communication)](./documentation/gacp/GACP.md)
+- [Skills System](./documentation/Skills.md)
+- [Secure Sandboxes](./documentation/Sandbox.md)
+- [Supported Models](./documentation/Models.md)
 
 ## GraphBased
 Use graph with this style to make your own workflow
@@ -143,13 +161,13 @@ RLM is a powerful pattern for processing **massive datasets** (100MB+) and **com
 
     const rlmAgent = new RLMAgent(largeDataset, {
         model: new OpenAI({
-            model: "gpt-4o",  // Orchestrator: writes code to explore data
+            model: "gpt-5.5",  // Orchestrator: writes code to explore data
             apiKey: process.env.OPENAI_API_KEY
         }),
         submodels: [
             {
                 model: new OpenAI({
-                    model: "gpt-3.5-turbo",  // Sub-model: fast & cheap
+                    model: "gpt-5.5",  // Sub-model: fast & cheap
                     apiKey: process.env.OPENAI_API_KEY
                 }),
                 instruction: "Analyze patterns and classify data"
@@ -185,7 +203,7 @@ RLM is a powerful pattern for processing **massive datasets** (100MB+) and **com
 
     // Step 2: ReAct Agent acts on findings (uses tools, makes decisions)
     const reactAgent = new ReActAgent({
-        model: new OpenAI({ model: "gpt-4o", apiKey: process.env.OPENAI_API_KEY }),
+        model: new OpenAI({ model: "gpt-5.5", apiKey: process.env.OPENAI_API_KEY }),
         systemPrompt: "You are an operations agent.",
         messages: [
             {
@@ -226,7 +244,7 @@ Skills of RavenADK are compliant with open [skills standard](https://agentskills
 
 
 ## Documentation
-[Check Documentation](https://app.gitbook.com/invite/ntFRoMEZ2t1Dk0CcVggr/MrsYwAwWVVYKPpgcNpjk)
+[Check Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
 
 ## Contribution
 If you would like to become official contributor contact with one of bellow channels
