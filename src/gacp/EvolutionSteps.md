@@ -10,7 +10,7 @@
 2. Make posts and Blog article about GACP
 3. Make RavenHub as broker for GACP
 4. Make posts about RavenHub and GACP
-5. Make GACP as separate package if it'll find the adoption in community
+5. Make GACP as separate package if it would find the adoption in community
 
 ## Meanwhile
 - Seek customers for this technology

@@ -28,7 +28,7 @@ interface AgentBoxReturnType {
      * 
      * TODO: Add type with 
     */
-    getKnowledge(): any;
+    getKnowledge(caller: CallerData): any;
 }
 
 type ExploredAgent = AgentBoxReturnType | Omit<GACPAgentConfig, "agentBox">;
@@ -180,9 +180,25 @@ const g = new GACPAgent(
         description: "Agent ideal to play music",
         specialization: "Use this agent to play music in realtime for user",
         agentBox: async (agentInterface) => {
+            // Listen here events calls to this agent
             agentInterface.onEvent("delegate_task", () => {
                 // Play your agent with task delegated from another agent
             })
+
+            return {
+                invoke(task, caller) {
+                    
+                },
+                getSkills(caller) {
+                    // Return skills for caller - here can be verified
+                },
+                getKnowledge(caller) {
+                    // Return skills for caller - here can be verified
+                },
+                getTools(caller) {
+
+                }
+            }
         }
     },
     connector,
