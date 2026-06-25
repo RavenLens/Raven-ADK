@@ -104,3 +104,9 @@ const musicAgent = new GACPAgent(
 - **Task Acceleration**: Background sub-tasking and shared reasoning traces speed up complex processing.
 - **Cost Efficiency**: Reuse skills across the organization instead of re-training or re-implementing logic for every new agent.
 
+
+## Real-world usecases
+Thanks to GACP your Agent/Agentic-Assistant can:
+- Mention it's knowledge about something
+- Mention it's friends to where can delegate knowledge
+- Mention in agent minds the flow of tasks and took knowledge

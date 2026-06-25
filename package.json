@@ -136,6 +136,7 @@
     "@google/genai": "^2.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chromadb": "^3.4.3",
+    "mqtt": "^5.15.1",
     "openai": "^6.36.0",
     "runpod-sdk": "^1.1.2",
     "socket.io": "^4.8.3",
