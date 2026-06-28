@@ -74,9 +74,9 @@ export interface GACPConnectorStandardSchema {
     agents: GACPAgent[];
     getAgents(): Omit<GACPAgentConfig, "agentBox">[];
     getRelationGraph(): RelationsGraph[];
-    getSkills(): {
+    getSkills(agent?: AgentIdentifier): {
         /** Agent identity */
-        agent: AgentIdentifier;
+        agent?: AgentIdentifier;
         /** Root ward has skills */
         skills: SkillWard;
     }[];
@@ -89,7 +89,8 @@ export interface GACPConnectorStandardSchema {
        tools: Pick<ToolConfig<any, any>, "toolName" | "toolArguments">;
     }[];
     /**
-     * Executes tool
+     * Executes tool remotelly
+     * 
      * In async mode doesn't wait for mode
      * As default synchronous hence tool is execute before
     */
