@@ -26,6 +26,7 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
         - ChromaDB
         - Expand by writing your own memory store - [check tutorial](./documentation/Memory.md#creating-custom-memory-store)
 - MCP - Model context protocol is to your disposition - [check it](./documentation/MCP.md)
+- **Self-Improvement** - Agents can improve themselves through CASCADE pattern and recursive memory consolidation - [check](./documentation/Self-Improvement.md)
 - Events - Listen agent events and transfer this to UI/TUI to show user what your agent is doing
 - HITL - sometimes actions are risky or agent needs more information and it can ask you for that - [check](./documentation/HITL.md)
 - Sandboxes - Secure code execution environments designed for RLM and ReAct tools - [check](./documentation/Sandbox.md)
@@ -50,6 +51,7 @@ npm install @ravenlens/raven-adk
 - [HITL Support](./documentation/HITL.md)
 - [GACP (Agent Communication)](./documentation/gacp/GACP.md)
 - [Skills System](./documentation/Skills.md)
+- [Self-Improvement](./documentation/Self-Improvement.md)
 - [Secure Sandboxes](./documentation/Sandbox.md)
 - [Supported Models](./documentation/Models.md)
 
@@ -126,7 +128,7 @@ ReAct Agent is the standalone agent of RavenADK -> it's about to Reason atop of 
 
     const reactAgent = new ReActAgent({
         model: new OpenAI({
-            model: "gpt-4",
+            model: "gpt-5.6",
             apiKey: "your-api-key",
         }),
         systemPrompt: "Your system prompt",
@@ -160,13 +162,13 @@ RLM is a powerful pattern for processing **massive datasets** (100MB+) and **com
 
     const rlmAgent = new RLMAgent(largeDataset, {
         model: new OpenAI({
-            model: "gpt-5.5",  // Orchestrator: writes code to explore data
+            model: "gpt-5.6",  // Orchestrator: writes code to explore data
             apiKey: process.env.OPENAI_API_KEY
         }),
         submodels: [
             {
                 model: new OpenAI({
-                    model: "gpt-5.5",  // Sub-model: fast & cheap
+                    model: "gpt-5.6",  // Sub-model: fast & cheap
                     apiKey: process.env.OPENAI_API_KEY
                 }),
                 instruction: "Analyze patterns and classify data"
@@ -241,6 +243,10 @@ Skills of RavenADK are compliant with open [skills standard](https://agentskills
 - Skills can be downloaded from outside of the Agent - from some skill hub (beware of malicious scripts within some community skills)
 - Agent can automatically create new skills if option is turn on
 
+### Self-Improvement
+RavenADK allows agents to evolve through interaction. By leveraging the **CASCADE** pattern, agents can develop their own expertise by creating and refining new skills dynamically. Additionally, the **Memory Conclusion** system recursively consolidates interaction history into durable knowledge, allowing the agent to "remember more" by abstracting specific events into general principles.
+
+> [Check more about Self-Improvement](./documentation/Self-Improvement.md)
 
 ## Documentation
 [Check Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
