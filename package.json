@@ -1,6 +1,6 @@
 {
   "name": "@ravenlens/raven-adk",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightful UI assemblies gorgeous UX. Made by RavenAlliance",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
