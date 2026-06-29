@@ -128,6 +128,26 @@
       "types": "./dist/agent/abstract/sequential/index.d.ts",
       "import": "./dist/agent/abstract/sequential/index.js",
       "require": "./dist/agent/abstract/sequential/index.js"
+    },
+    "./augmented_generation": {
+      "types": "./dist/augmented_generation/index.d.ts",
+      "import": "./dist/augmented_generation/index.js",
+      "require": "./dist/augmented_generation/index.js"
+    },
+    "./vector_databases": {
+      "types": "./dist/augmented_generation/rag/vector_databases/index.d.ts",
+      "import": "./dist/augmented_generation/rag/vector_databases/index.js",
+      "require": "./dist/augmented_generation/rag/vector_databases/index.js"
+    },
+    "./vector_databases/chromadb": {
+      "types": "./dist/augmented_generation/rag/vector_databases/chromadb/index.d.ts",
+      "import": "./dist/augmented_generation/rag/vector_databases/chromadb/index.js",
+      "require": "./dist/augmented_generation/rag/vector_databases/chromadb/index.js"
+    },
+    "./vector_databases/pinecone": {
+      "types": "./dist/augmented_generation/rag/vector_databases/pinecone/index.d.ts",
+      "import": "./dist/augmented_generation/rag/vector_databases/pinecone/index.js",
+      "require": "./dist/augmented_generation/rag/vector_databases/pinecone/index.js"
     }
   },
   "dependencies": {
@@ -136,6 +156,7 @@
     "@google/genai": "^2.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "chromadb": "^3.4.3",
+    "@pinecone-database/pinecone": "^4.0.0",
     "mqtt": "^5.15.1",
     "openai": "^6.36.0",
     "runpod-sdk": "^1.1.2",

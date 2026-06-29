@@ -1,4 +1,4 @@
-import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { GoogleGenAI } from "@google/genai";
 import type { 
     GenerateContentResponse, 
@@ -30,6 +30,15 @@ export interface GoogleConfig extends LLMConfig {
     candidateCount?: number;
     maxOutputTokens?: number;
     stopSequences?: string[];
+}
+
+export interface GoogleEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
+    model: "gemini-embedding-2" | (string & {});
+    /** 
+     * Optional. Determines whether to use the Vertex AI or the Gemini API.
+     * When true, the Gemini Enterprise Agent Platform API (Vertex AI) will used.
+     */
+    vertexai?: boolean;
 }
 
 interface GoogleAIEvents {
@@ -477,5 +486,39 @@ export class Google implements StandardLLMShema {
     /** Google doesn't provide stt in their generative ai api */
     async stt(speechFile: File, options?: any): Promise<string> {
         throw new Error("STT is not supported by Google provider in Raven ADK.");
+    }
+}
+
+/**
+ * Wrapper for Google embedding models for RavenADK
+ */
+export class GoogleEmbedding implements EmbeddingModel {
+    apiName = "Google" as const;
+    private client: GoogleGenAI;
+    config: GoogleEmbeddingConfig;
+
+    constructor(config: GoogleEmbeddingConfig) {
+        this.config = config as any;
+        this.client = new GoogleGenAI({
+            apiKey: this.config.apiKey,
+        });
+    }
+
+    async embed(text: string | string[]): Promise<number[][]> {
+        if (Array.isArray(text)) {
+            const response = await Promise.all(
+                text.map(t => this.client.models.embedContent({
+                    model: this.config.model,
+                    contents: [{ role: "user", parts: [{ text: t }] }]
+                }))
+            );
+            return response.map(r => r.embeddings?.[0]?.values || []);
+        } else {
+            const response = await this.client.models.embedContent({
+                model: this.config.model,
+                contents: [{ role: "user", parts: [{ text: text }] }]
+            });
+            return [response.embeddings?.[0]?.values || []];
+        }
     }
 }

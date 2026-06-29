@@ -57,3 +57,8 @@ export interface StandardLLMShema {
     tts(text: string, options?: any): Promise<Buffer | undefined>;
     stt(speechFile: File, options?: any): Promise<string>;
 }
+
+/** Extension of StandardLLMShema for RAG */
+export interface EmbeddingModel extends Omit<StandardLLMShema, "invoke" | "invokeStructuredOutput" | "tts" | "stt"> {
+    embed(text: string | string[]): Promise<number[][]>;
+}

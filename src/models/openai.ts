@@ -1,4 +1,4 @@
-import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
 import type * as ChatAPI from "openai/resources/chat/completions";
@@ -15,6 +15,10 @@ export interface OpenAIConfig extends LLMConfig {
      * Useful for base models that don't support chat templates.
      */
     useCompletionsApi?: boolean;
+}
+
+export interface OpenAIEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
+    model: "text-embedding-3-small" | "text-embedding-3-large" | "text-embedding-ada-002" | (string & {});
 }
 
 interface OpenAIEvents {
@@ -555,5 +559,31 @@ export class OpenAI implements StandardLLMShema {
         });
 
         return response.text;
+    }
+}
+
+/**
+ * Wrapper for OpenAI embedding models for RavenADK
+ */
+export class OpenAIEmbedding implements EmbeddingModel {
+    apiName = "OpenAI" as const;
+    private openai: OpenAIStandalone;
+    config: OpenAIEmbeddingConfig;
+
+    constructor(config: OpenAIEmbeddingConfig, baseURL?: string) {
+        this.config = config as any;
+        this.openai = new OpenAIStandalone({
+            apiKey: this.config.apiKey,
+            baseURL: (config as any).baseURL ?? baseURL,
+        });
+    }
+
+    async embed(text: string | string[]): Promise<number[][]> {
+        const response = await this.openai.embeddings.create({
+            model: this.config.model,
+            input: text,
+        });
+
+        return response.data.map((d) => d.embedding);
     }
 }

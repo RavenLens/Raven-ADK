@@ -139,3 +139,7 @@ console.log(result.messages.at(-1).structuredOutput);
 ```
 
 > **Note**: To produce structured output, you must set `withConclusion: false` in the agent configuration. This prevents the agent from generating a natural language summary, which would otherwise interfere with the structured extraction process. For more details, see the [Structured Output documentation](./StructuredOutput.md).
+
+
+## RAG
+Combine your ReAct Agent with RAG for better outcomes check more at [RAG Documentation](./augmented%20generation/RAG.md)

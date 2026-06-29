@@ -1,16 +1,27 @@
-import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
-import { MessageParam, Tool, ToolUseBlock } from "@anthropic-ai/sdk/resources/messages";
+import { MessageParam, Tool, ToolUseBlock, TextBlock } from "@anthropic-ai/sdk/resources/messages";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 
+// Defined locally if not exported from SDK or just to be safe
+interface ThinkingBlock {
+    type: "thinking";
+    thinking: string;
+    signature: string;
+}
+
 export interface AnthropicConfig extends LLMConfig {
     thinking?: ThinkingConfigParam;
     /** As default max tokens are 1024 */
     max_tokens?: number;
+}
+
+export interface AnthropicEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
+    model: string;
 }
 
 interface AnthropicAIEvents {
@@ -44,127 +55,132 @@ export class Anthropic implements StandardLLMShema {
     }
 
     private prepareMessages(): MessageParam[] {
-        return this.config.messages?.filter((message) => message.type !== "system")
-            .map((message) => {
-            switch (message.type) {
-                case "user":
-                    if (message.imageInput || message.audioInput || message.fileInput || message.videoInput) {
-                        const contentParts: any[] = [{ type: "text", text: message.content }];
+        const messages = this.config.messages ?? [];
+        return messages
+            .filter((message) => message.type !== "system")
+            .map((message): MessageParam | undefined => {
+                switch (message.type) {
+                    case "user":
+                        if (message.imageInput || message.audioInput || message.fileInput || message.videoInput) {
+                            const contentParts: any[] = [{ type: "text", text: message.content }];
 
-                        if (message.imageInput) {
-                            const url = message.imageInput.image_url;
-                            if (url && url.startsWith("data:")) {
-                                const parsed = this.parseBase64DataUrl(url);
-                                if (parsed) {
-                                    contentParts.push({
-                                        type: "image",
-                                        source: {
-                                            type: "base64",
-                                            media_type: parsed.media_type as any,
-                                            data: parsed.data
-                                        }
-                                    });
-                                }
-                            } else if (url) {
-                                contentParts.push({
-                                    type: "text",
-                                    text: `[Image URL: ${url}]`
-                                });
-                            }
-                        }
-
-                        if (message.audioInput) {
-                            contentParts.push({
-                                type: "text",
-                                text: `[Audio input: ${message.audioInput.input_audio?.format || "audio"}]`
-                            });
-                        }
-
-                        if (message.fileInput) {
-                            const data = message.fileInput.file_data;
-                            if (data && data.startsWith("data:")) {
-                                const parsed = this.parseBase64DataUrl(data);
-                                if (parsed && parsed.media_type === "application/pdf") {
-                                    contentParts.push({
-                                        type: "document",
-                                        source: {
-                                            type: "base64",
-                                            media_type: "application/pdf" as any,
-                                            data: parsed.data
-                                        }
-                                    } as any);
-                                } else if (parsed) {
+                            if (message.imageInput) {
+                                const url = message.imageInput.image_url;
+                                if (url && url.startsWith("data:")) {
+                                    const parsed = this.parseBase64DataUrl(url);
+                                    if (parsed) {
+                                        contentParts.push({
+                                            type: "image",
+                                            source: {
+                                                type: "base64",
+                                                media_type: parsed.media_type as any,
+                                                data: parsed.data
+                                            }
+                                        });
+                                    }
+                                } else if (url) {
                                     contentParts.push({
                                         type: "text",
-                                        text: `[File input: ${message.fileInput.filename || "file"}, type=${parsed.media_type}]`
+                                        text: `[Image URL: ${url}]`
                                     });
                                 }
-                            } else {
+                            }
+
+                            if (message.audioInput) {
                                 contentParts.push({
                                     type: "text",
-                                    text: `[File input: ${message.fileInput.filename || "file"}]`
+                                    text: `[Audio input: ${message.audioInput.input_audio?.format || "audio"}]`
                                 });
                             }
-                        }
 
-                        if (message.videoInput) {
-                            contentParts.push({
-                                type: "text",
-                                text: `[Video input: ${message.videoInput.video_url || "video data"}]`
-                            });
-                        }
+                            if (message.fileInput) {
+                                const data = message.fileInput.file_data;
+                                if (data && data.startsWith("data:")) {
+                                    const parsed = this.parseBase64DataUrl(data);
+                                    if (parsed && parsed.media_type === "application/pdf") {
+                                        contentParts.push({
+                                            type: "document",
+                                            source: {
+                                                type: "base64",
+                                                media_type: "application/pdf" as any,
+                                                data: parsed.data
+                                            }
+                                        } as any);
+                                    } else if (parsed) {
+                                        contentParts.push({
+                                            type: "text",
+                                            text: `[File input: ${message.fileInput.filename || "file"}, type=${parsed.media_type}]`
+                                        });
+                                    }
+                                } else {
+                                    contentParts.push({
+                                        type: "text",
+                                        text: `[File input: ${message.fileInput.filename || "file"}]`
+                                    });
+                                }
+                            }
 
+                            if (message.videoInput) {
+                                contentParts.push({
+                                    type: "text",
+                                    text: `[Video input: ${message.videoInput.video_url || "video data"}]`
+                                });
+                            }
+
+                            return {
+                                role: "user",
+                                content: contentParts
+                            } satisfies MessageParam;
+                        }
                         return {
                             role: "user",
-                            content: contentParts
+                            content: message.content
                         } satisfies MessageParam;
-                    }
-                    return {
-                        role: "user",
-                        content: message.content
-                    } satisfies MessageParam;
-                case "ai":
-                    return {
-                        role: "assistant",
-                        content: message.content ?? ""
-                    } satisfies MessageParam;
-                case "thinking":
-                    // Anthropic requires model-issued signatures for thinking blocks.
-                    // If no signature is present, degrade to assistant text instead of sending an invalid block.
-                    if (!message.signature) {
+                    case "ai":
                         return {
                             role: "assistant",
-                            content: `Assistant thoughts: ${message.content}`
+                            content: message.content ?? ""
                         } satisfies MessageParam;
-                    }
+                    case "thinking":
+                        // Anthropic requires model-issued signatures for thinking blocks.
+                        // If no signature is present, degrade to assistant text instead of sending an invalid block.
+                        if (!message.signature) {
+                            return {
+                                role: "assistant",
+                                content: `Assistant thoughts: ${message.content}`
+                            } satisfies MessageParam;
+                        }
 
-                    return {
-                        role: "assistant",
-                        content: [
-                            {
-                                type: "thinking",
-                                thinking: message.content,
-                                signature: message.signature
-                            }
-                        ]
-                    } satisfies MessageParam
-                case "tool":
-                    const anthropicToolContent = message.content;
-                    const truncatedAnthropicToolContent = anthropicToolContent.length > 60000
-                        ? anthropicToolContent.slice(0, 60000) + "... [Truncated due to size limits]"
-                        : anthropicToolContent;
-                    return {
-                        role: "user",
-                        content: [
-                            {
-                                type: "tool_result",
-                                tool_use_id: message.tool_id,
-                                content: truncatedAnthropicToolContent
-                            }
-                        ]
-                    } satisfies MessageParam;
-            }
-        }) ?? [];
+                        return {
+                            role: "assistant",
+                            content: [
+                                {
+                                    type: "thinking",
+                                    thinking: message.content,
+                                    signature: message.signature
+                                }
+                            ]
+                        } satisfies MessageParam
+                    case "tool":
+                        const anthropicToolContent = message.content;
+                        const truncatedAnthropicToolContent = anthropicToolContent.length > 60000
+                            ? anthropicToolContent.slice(0, 60000) + "... [Truncated due to size limits]"
+                            : anthropicToolContent;
+                        return {
+                            role: "user",
+                            content: [
+                                {
+                                    type: "tool_result",
+                                    tool_use_id: message.tool_id,
+                                    content: truncatedAnthropicToolContent
+                                }
+                            ]
+                        } satisfies MessageParam;
+                    default:
+                        return undefined;
+                }
+            })
+            .filter((m): m is MessageParam => !!m);
     }
 
     private prepareSystemPrompt(): string | undefined {
@@ -234,7 +250,7 @@ export class Anthropic implements StandardLLMShema {
     private prepareSyncAnswer(completion: AnthropicStandalone.Messages.Message & { _request_id?: string | null; }) {
         // Obtain answer content
         const answerContentText = completion.content
-            .filter((block) => block.type === "text")
+            .filter((block): block is TextBlock => block.type === "text")
             .map((block) => block.text)
             .join("\n")
             .trim();
@@ -253,7 +269,7 @@ export class Anthropic implements StandardLLMShema {
             } satisfies ToolMessage;
         });
         const thinkingReasonMessage: ReasoningMessage[] | null = completion.content.some(content => content.type === "thinking") ? completion.content
-            .filter(content => content.type === "thinking")
+            .filter((content): content is ThinkingBlock => content.type === "thinking")
             .map(content => ({
                 type: "thinking",
                 content: content.thinking,

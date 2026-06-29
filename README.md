@@ -32,6 +32,7 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 - Sandboxes - Secure code execution environments designed for RLM and ReAct tools - [check](./documentation/Sandbox.md)
 - Builting tools
     - Browser - run serverless browser on your device - [check](./documentation/tools/Browsing.md)
+- RAG (Resource-Augmented-Generation) - Use to enforce responses with documents from your vector-database. Retriver loads these documents matches to the Semantic Similarity of query given to llm. It's usefull when you've huge documents database cannot be treat as CAG. - [check](./documentation/augmented%20generation/RAG.md)
 
 ## Installation
 ```bash

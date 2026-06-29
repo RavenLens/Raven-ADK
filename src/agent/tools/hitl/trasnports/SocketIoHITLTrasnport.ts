@@ -179,16 +179,17 @@ export class HITLSocketIo implements HITLTransportSchema {
             );
 
             // Delay handling -> when passed
-            if (this.config.toolsUsage && typeof this.config.toolsUsage[toolName] === "object") {
+            const toolConf = this.config.toolsUsage?.[toolName];
+            if (toolConf && typeof toolConf === "object") {
                 setTimeout(() => {
-                    if (!isAnswer && typeof this.config.toolsUsage?.[toolName] === "object") {
+                    if (!isAnswer) {
                         isAnswer = true;
                         return res({
-                            answer: this.config.toolsUsage[toolName].defaultAnswer,
-                            reason:"delay_pass"
-                        })
+                            answer: toolConf.defaultAnswer,
+                            reason: "delay_pass"
+                        });
                     }
-                }, this.config.toolsUsage[toolName].delayMs)
+                }, toolConf.delayMs);
             }
         });
     }

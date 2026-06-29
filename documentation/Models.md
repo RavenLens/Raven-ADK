@@ -185,3 +185,18 @@ for await (const chunk of stream) {
     }
 }
 ```
+
+## RAG
+Combine your models with RAG for better outcomes check more at [RAG Documentation](./augmented%20generation/RAG.md)
+
+
+## Embedding models
+RavenADK as default support these embedding model families:
+
+> Always use the same embedding model as you've used to compose the RAG database in order to always get the similar documents.
+
+1. OpenAI - models used by openai. Use by import `OpenAIEmbedding` class
+2. VoyageAI - models used by anthropic. Use by import `VoyageEmbedding` class
+3. Google Gemini - Google models used by Gemini. Use by import `GoogleEmbeddingConfig` class
+
+> Check how to use RAG with your models at [RAG Documentation](./augmented%20generation/RAG.md)
