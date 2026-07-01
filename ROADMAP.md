@@ -110,7 +110,17 @@
 17. Add router model to scale the execution to particular model according to specification
     - This is to optimize costs
     - User writes his own conditions what model has to be triggered+
-18. Prepare the TODO component as ReAct Agent plugin
+18. Prepare the TODO component as ReAct Agent plugin (done)
     - It's to modify prompt - to isntruct llm to use planning
     - It's to give the tools to allow to construct todo list and update its state: planned, doing, done
     - It's to be in feature comptaoble with next core patterns for scalling for businesses
+19. Loops engineering - Where the agent figures what todo and does it
+    Base on this article: https://levelup.gitconnected.com/what-is-loop-engineering-how-it-is-different-than-harness-engineering-0e764f373fb1
+    1. Implement
+    2. Make post to LinkedIn
+    3. Make post to Medium, Dev.to
+    4. RavenHub has to base on orchestrating loops of agents
+20. CodeAct Pattern
+21. CoT with supports for agents in
+22. CoT with Self-Consistance
+23. ToT with support for 2 algorithm DFS and BFS
