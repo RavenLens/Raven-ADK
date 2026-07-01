@@ -4,7 +4,9 @@
 
 **RLM (Recurrent Language Models)** is a powerful agent pattern that enables efficient processing of large, complex datasets by using an orchestrator LLM to write and execute code that progressively analyzes data through recursive delegation to smaller, more cost-effective sub-models.
 
+> RavenADK RLM inolementstion base on original document from arxiv.com [RLM](https://arxiv.org/pdf/2512.24601)
 > RLM Drastically Improves a cost-efficiency ratio for your application reducing the problems of SOTA LLMs such as: Positioning Errors e.g: Lost-in-the-middle
+
 ![](./images/RLM%20performance.png)
 
 RLM implements the **CodeAct pattern** ([learn more](https://learn.microsoft.com/en-us/agent-framework/agents/code_act?pivots=programming-language-csharp)), where:
@@ -17,6 +19,7 @@ This approach dramatically **reduces token costs** and **improves latency** when
 
 ## Key Benefits
 
+- **Go beyond context window**: Process hige documents are out of space of even very capable LLM
 - **Cost Efficiency**: Use expensive large models (GPT-4, Claude) only for orchestration; delegate analysis to cheaper models (GPT-3.5, Claude-Instant)
 - **Context Handling**: Process gigabytes of data without hitting context limits
 - **Recursive Analysis**: Delegate sub-tasks to specialized models
@@ -28,7 +31,7 @@ This approach dramatically **reduces token costs** and **improves latency** when
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     RLM Orchestrator                        │
-│  (Expensive LLM: GPT-4, Claude 3.5-Sonnet, etc.)           │
+│  (Expensive LLM: GPT-5.5, Claude 4.8-Sonnet, etc.)           │
 │  - Writes JavaScript code to explore data                  │
 │  - Decides when to delegate to sub-models                  │
 │  - Interprets execution results                            │
@@ -41,7 +44,7 @@ This approach dramatically **reduces token costs** and **improves latency** when
         │ RLM Environment │  │  Sub-Models    │
         │                │  │  (CodeAct)     │
         │ - Sandbox exec │  │                │
-        │ - contextData  │  │ GPT-3.5,       │
+        │ - contextData  │  │ GPT-5.5/GLM-5.2│
         │ - llmQuery()   │  │ Claude-Instant │
         │ - console.log()│  │ Specialized    │
         └─────────────────┘  │ Models         │
