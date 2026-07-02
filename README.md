@@ -15,6 +15,7 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 #### RavenADK as default supports these SOTA Agentic patterns:
 - ReAct Agent - Design for high performance with **parallel tools** and **parallel subagents** support
 - RLMs - Recursive approach to increase agent accuracy on large set of text with reducing significantly costs
+- **ToT (Tree-of-Thoughts)** - Advanced reasoning framework for exploring multiple solution paths with parallel evaluation and backtracking - [check](./documentation/chains/Tree-of-Thoughts%20(ToT).md)
 - **GACP** - Revolutionary **Graph Agent Communication Protocol** that changes how agents communicate and contribute to tasks and their **society** - [check](./documentation/gacp/GACP.md)
 - Skills
     - Exploring and applying
@@ -45,6 +46,7 @@ npm install @ravenlens/raven-adk
 - [Overview](./documentation/Overview.md)
 - [Quickstart](./documentation/Quickstart.md)
 - [ReAct Agent](./documentation/ReAct-Agent.md)
+- [Tree-of-Thoughts (ToT)](./documentation/chains/Tree-of-Thoughts%20(ToT).md)
 - [RLMs](./documentation/RLMs.md)
 - [Graph Based Workflows](./documentation/Graph.md)
 - [Memory Management](./documentation/Memory.md)

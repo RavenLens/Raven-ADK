@@ -121,6 +121,7 @@
     3. Make post to Medium, Dev.to
     4. RavenHub has to base on orchestrating loops of agents
 20. CodeAct Pattern
+    - Description is here: https://share.gemini.google/EiQcLCaU7nnH
 21. CoT with supports for agents in
 22. CoT with Self-Consistance
 23. ToT with support for 2 algorithm DFS and BFS
