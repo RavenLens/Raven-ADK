@@ -30,6 +30,7 @@ interface OpenAIEvents {
  * Wrapper for OpenAI for RavenADK
 */
 export class OpenAI implements StandardLLMShema {    
+    typeAPI: "model" = "model";
     apiName = "OpenAI" as const;
     private openai: OpenAIStandalone;
     private EventsListeners: Partial<{ [EventName in keyof OpenAIEvents]: OpenAIEvents[EventName] }> = {};
@@ -566,6 +567,7 @@ export class OpenAI implements StandardLLMShema {
  * Wrapper for OpenAI embedding models for RavenADK
  */
 export class OpenAIEmbedding implements EmbeddingModel {
+    typeAPI: "model" = "model";
     apiName = "OpenAI" as const;
     private openai: OpenAIStandalone;
     config: OpenAIEmbeddingConfig;

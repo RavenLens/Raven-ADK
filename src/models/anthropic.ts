@@ -30,6 +30,7 @@ interface AnthropicAIEvents {
 }
 
 export class Anthropic implements StandardLLMShema {
+    typeAPI: "model" = "model";
     apiName = "Anthropic" as const;
     private anthropic: AnthropicStandalone;
     private EventsListeners: Partial<{ [EventName in keyof AnthropicAIEvents]: AnthropicAIEvents[EventName] }> = {};

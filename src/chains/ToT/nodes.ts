@@ -1,3 +1,5 @@
+import z4, { z } from "zod/v4";
+
 export interface Rate {
     /**
      * BFS:
@@ -9,20 +11,55 @@ export interface Rate {
     justification: string;
 }
 
+export const zodRateSchema = z4.object({
+    decision: z4.union([
+        z4.literal("good").describe("The option/thought is promising and should be kept"),
+        z4.literal("the-best").describe("The single best option/thought identified so far"),
+        z4.literal("declined").describe("The option/thought is beyond top-k or insufficient, global pruning recommended")
+    ]),
+    score: z4.number().describe("Floating point number in range 0.0 to 1.0. Higher is better"),
+    justification: z4.string().describe("Justification of your decision")
+}).describe("Rate schema")
+
 export interface OptionNode {
     /** Unique id used to track the decision took for node */
     id: string;
     type: "option-node";
-    rate: Rate;
+    content: string;
+    /** Rate is attached in 2nd operation after original generation */
+    initialRate?: Rate;
+    /** Rate is  */
+    finalRate?: Rate;
+    /** Justification for the final decision/selection */
+    justification?: string;
 }
+
+export const zodOptionSchema: z4.ZodType<OptionNode> = z4.object({
+    id: z4.string().describe("Identifier of existsing option node from your awareness"),
+    type: z4.enum(["option-node"]).describe("type of option node"),
+    content: z4.string().describe("Description of the candidate solution/option"),
+    initialRate: zodRateSchema.optional().describe("Score compoind at the begining to calculate the best option without having thoights present"),
+    finalRate: zodRateSchema.optional().describe("Rating floating point 0.0 - 1.0 score generated for the option at the end by comparing all thoughts"),
+    justification: z4.string().optional().describe("Justification for the selection if it was picked as the best final option")
+});
 
 export interface ThoughtNode {
     id: string;
     type: "though-node";
-    rate: Rate;
+    content: string;
+    /** Rate is attached in 2nd operation after original generation */
+    rate?: Rate;
     /** List with thought backs this thought */
     dependingThoughNodes: ThoughtNode[];
 }
+
+export const zodThoughtNodeSchema: z4.ZodType<ThoughtNode> = z4.lazy(() => z4.object({
+    id: z4.string().describe("Identifier of existsing thought node from your awareness"),
+    type: z4.enum(["though-node"]).describe("type of thought node"),
+    content: z4.string().describe("The specific thought or reasoning step"),
+    rate: zodRateSchema.optional(),
+    dependingThoughNodes: z4.array(zodThoughtNodeSchema).describe("List with thought backs this thought")
+}));
 
 export type NodeDecisions =  {
     type: "explore-node-thoughts";

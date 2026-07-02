@@ -12,6 +12,7 @@ export interface VoyageEmbeddingConfig extends Omit<LLMConfig, "messages" | "too
  * Wrapper for Voyage AI embedding models for RavenADK
  */
 export class VoyageEmbedding implements EmbeddingModel {
+    typeAPI: "model" = "model";
     apiName = { custom: "VoyageAI" } as const;
     config: VoyageEmbeddingConfig;
 

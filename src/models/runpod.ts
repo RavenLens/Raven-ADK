@@ -41,6 +41,7 @@ type RunPodEndpoint = NonNullable<ReturnType<RunPodSdkInstance["endpoint"]>>;
  * Wrapper for RunPod Serverless vLLM endpoints.
  */
 export class RunPod implements StandardLLMShema {
+	typeAPI: "model" = "model";
 	apiName = { custom: "RunPod" } as const;
 	config: RunPodConfig;
 	baseURL?: string;

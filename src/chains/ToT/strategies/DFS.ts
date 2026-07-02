@@ -1,5 +1,6 @@
+import { OptionNode } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { StrategySchema } from "./strategy";
+import { LogicReturnType, StrategySchema } from "./strategy";
 
 export class DFSToT implements StrategySchema {
     static name = "DFS-ToT";
@@ -18,7 +19,7 @@ export class DFSToT implements StrategySchema {
         this.treshold = treshold;
     }
 
-    async logic(tot: TreeOfThoughts) {
+    async logic(tot: TreeOfThoughts): Promise<LogicReturnType> {
         
     }
 }

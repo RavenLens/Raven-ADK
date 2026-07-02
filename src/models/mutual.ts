@@ -50,6 +50,7 @@ export interface InvokeOptions {
 }
 
 export interface StandardLLMShema {
+    typeAPI: "model";
     apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
     config: LLMConfig;
     invoke(): Promise<LLMAnswer>;

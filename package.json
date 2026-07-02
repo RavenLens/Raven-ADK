@@ -134,6 +134,21 @@
       "import": "./dist/augmented_generation/index.js",
       "require": "./dist/augmented_generation/index.js"
     },
+    "./utils": {
+      "types": "./dist/utils/files.d.ts",
+      "import": "./dist/utils/files.js",
+      "require": "./dist/utils/files.js"
+    },
+    "./gacp": {
+      "types": "./dist/gacp/index.d.ts",
+      "import": "./dist/gacp/index.js",
+      "require": "./dist/gacp/index.js"
+    },
+    "./chains": {
+      "types": "./dist/chains/index.d.ts",
+      "import": "./dist/chains/index.js",
+      "require": "./dist/chains/index.js"
+    },
     "./vector_databases": {
       "types": "./dist/augmented_generation/rag/vector_databases/index.d.ts",
       "import": "./dist/augmented_generation/rag/vector_databases/index.js",

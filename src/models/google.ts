@@ -50,6 +50,7 @@ interface GoogleAIEvents {
  * Wrapper for Google Gemini models for RavenADK
  */
 export class Google implements StandardLLMShema {
+    typeAPI: "model" = "model";
     apiName = "Google" as const;
     private client: GoogleGenAI;
     private EventsListeners: Partial<{ [EventName in keyof GoogleAIEvents]: GoogleAIEvents[EventName] }> = {};
@@ -493,6 +494,7 @@ export class Google implements StandardLLMShema {
  * Wrapper for Google embedding models for RavenADK
  */
 export class GoogleEmbedding implements EmbeddingModel {
+    typeAPI: "model" = "model";
     apiName = "Google" as const;
     private client: GoogleGenAI;
     config: GoogleEmbeddingConfig;
