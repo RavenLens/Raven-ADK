@@ -7,6 +7,7 @@ import { AIMessage, ToolMessage, ResponseInputVideo, ReasoningMessage } from "..
 import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
 
 export interface OpenAIConfig extends LLMConfig {
     reasoningEffort?: ReasoningEffort | null;
@@ -479,53 +480,68 @@ export class OpenAI implements StandardLLMShema {
             this.config.messages = options.messages;
         }
 
-        if (this.isLegacy) {
-            if (options?.stream) {
-                // For now, we don't support streaming events for legacy chat completions 
-                // because the types are quite different and require more extensive mapping.
-                throw new Error("Streaming is not yet supported for legacy OpenAI compatible providers in Raven ADK.");
-            }
+        return await withTelemetry(`llm.openai.${options?.stream ? 'stream' : 'invoke'}`, {
+            model: this.config.model,
+            stream: !!options?.stream
+        }, async () => {
+            if (this.isLegacy) {
+                if (options?.stream) {
+                    // For now, we don't support streaming events for legacy chat completions 
+                    // because the types are quite different and require more extensive mapping.
+                    throw new Error("Streaming is not yet supported for legacy OpenAI compatible providers in Raven ADK.");
+                }
 
-            if (this.useCompletions) {
-                const response = await this.openai.completions.create({
+                if (this.useCompletions) {
+                    const response = await this.openai.completions.create({
+                        model: this.config.model,
+                        prompt: this.prepareCompletionInput(),
+                        stream: false
+                    });
+                    const result = this.parseCompletionResponseToAnswer(response);
+                    this.recordTokenMetrics(result.tokens);
+                    return result;
+                }
+
+                const response = await this.openai.chat.completions.create({
                     model: this.config.model,
-                    prompt: this.prepareCompletionInput(),
-                    stream: false
-                });
-                return this.parseCompletionResponseToAnswer(response);
+                    messages: this.prepareChatInput(),
+                    tools: this.prepareChatTools().length > 0 ? this.prepareChatTools() : undefined,
+                    stream: false,
+                    reasoning_effort: options?.reasoning?.effort ?? undefined
+                } as any);
+
+                const result = this.parseChatResponseToAnswer(response);
+                this.recordTokenMetrics(result.tokens);
+                return result;
+            }
+            
+            const basePayload = this.prepareCreatePayload(options?.reasoning);
+
+            if (options?.stream) {
+                const streamPayload: ResponsesAPI.ResponseCreateParamsStreaming = {
+                    ...basePayload,
+                    stream: true
+                };
+
+                const stream = await this.openai.responses.create(streamPayload);
+
+                return this.streamWithEvents(stream);
             }
 
-            const response = await this.openai.chat.completions.create({
-                model: this.config.model,
-                messages: this.prepareChatInput(),
-                tools: this.prepareChatTools().length > 0 ? this.prepareChatTools() : undefined,
-                stream: false,
-                reasoning_effort: options?.reasoning?.effort ?? undefined
-            } as any);
-
-            return this.parseChatResponseToAnswer(response);
-        }
-        
-        const basePayload = this.prepareCreatePayload(options?.reasoning);
-
-        if (options?.stream) {
-            const streamPayload: ResponsesAPI.ResponseCreateParamsStreaming = {
+            const responsePayload: ResponsesAPI.ResponseCreateParamsNonStreaming = {
                 ...basePayload,
-                stream: true
+                stream: false
             };
 
-            const stream = await this.openai.responses.create(streamPayload);
+            const response = await this.openai.responses.create(responsePayload);
+            const result = this.parseResponseToAnswer(response);
+            this.recordTokenMetrics(result.tokens);
+            return result;
+        });
+    }
 
-            return this.streamWithEvents(stream);
-        }
-
-        const responsePayload: ResponsesAPI.ResponseCreateParamsNonStreaming = {
-            ...basePayload,
-            stream: false
-        };
-
-        const response = await this.openai.responses.create(responsePayload);
-        return this.parseResponseToAnswer(response);
+    private recordTokenMetrics(tokens: LLMAnswer["tokens"]) {
+        recordTokenUsage("openai", this.config.model, tokens);
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {

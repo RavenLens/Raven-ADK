@@ -6,6 +6,7 @@ import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "..
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
 
 // Defined locally if not exported from SDK or just to be safe
 interface ThinkingBlock {
@@ -358,8 +359,20 @@ export class Anthropic implements StandardLLMShema {
             return this.streamWithEvents(streamCompletion);
         } else {
             // Execute llm
-            const completion = await this.anthropic.messages.create(config);
-            return this.prepareSyncAnswer(completion);
+            const result = await withTelemetry(
+                `LLM Call: Anthropic ${this.config.model}`,
+                { 
+                    "llm.provider": "anthropic",
+                    "llm.model": this.config.model,
+                },
+                async () => {
+                    const completion = await this.anthropic.messages.create(config);
+                    const answer = this.prepareSyncAnswer(completion);
+                    recordTokenUsage("anthropic", this.config.model, answer.tokens);
+                    return answer;
+                }
+            );
+            return result;
         }
     }
 

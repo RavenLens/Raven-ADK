@@ -13,6 +13,7 @@ import { parseToolCallContentToParams, parseToolDescription } from "../agent/too
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
 
 export interface GoogleConfig extends LLMConfig {
     /** 
@@ -430,24 +431,36 @@ export class Google implements StandardLLMShema {
             return this.streamWithEvents(stream);
         }
 
-        const response = await this.client.models.generateContent({
-            model: this.config.model,
-            contents,
-            config: {
-                systemInstruction,
-                tools,
-                temperature: this.config.temperature,
-                topP: this.config.topP,
-                topK: this.config.topK,
-                candidateCount: this.config.candidateCount,
-                maxOutputTokens: this.config.maxOutputTokens,
-                stopSequences: this.config.stopSequences,
-                // Specific to Google genai SDK for thinking models
-                thinkingConfig: thinking_config as any
-            }
-        });
+        const result = await withTelemetry(
+            `LLM Call: Google ${this.config.model}`,
+            { 
+                "llm.provider": "google",
+                "llm.model": this.config.model,
+            },
+            async () => {
+                const response = await this.client.models.generateContent({
+                    model: this.config.model,
+                    contents,
+                    config: {
+                        systemInstruction,
+                        tools,
+                        temperature: this.config.temperature,
+                        topP: this.config.topP,
+                        topK: this.config.topK,
+                        candidateCount: this.config.candidateCount,
+                        maxOutputTokens: this.config.maxOutputTokens,
+                        stopSequences: this.config.stopSequences,
+                        // Specific to Google genai SDK for thinking models
+                        thinkingConfig: thinking_config as any
+                    }
+                });
 
-        return this.parseResponseToAnswer(response);
+                const answer = this.parseResponseToAnswer(response);
+                recordTokenUsage("google", this.config.model, answer.tokens);
+                return answer;
+            }
+        );
+        return result;
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {

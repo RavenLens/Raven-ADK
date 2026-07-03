@@ -3,6 +3,7 @@ import * as z from "zod";
 import { AIMessage, ResponseInputVideo } from "../agent/state";
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
 
 export interface RunPodConfig extends LLMConfig {
 	endpointId: string;
@@ -443,9 +444,22 @@ export class RunPod implements StandardLLMShema {
 		const payload = {
 			input: this.buildInput(false)
 		};
-		const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
 
-		return this.parseResponseToAnswer(response);
+		const result = await withTelemetry(
+			`LLM Call: RunPod ${this.config.model}`,
+			{
+				"llm.provider": "runpod",
+				"llm.model": this.config.model,
+				"runpod.endpoint": this.config.endpointId
+			},
+			async () => {
+				const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
+				const answer = this.parseResponseToAnswer(response);
+				recordTokenUsage("runpod", this.config.model, answer.tokens);
+				return answer;
+			}
+		);
+		return result;
 	}
 
 	async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {

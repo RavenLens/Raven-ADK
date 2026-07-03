@@ -10,10 +10,11 @@
 
 > Check documentation: [RavenADK Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
 
-Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor.
+Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Now featuring **OpenTelemetry** as the native observability standard for professional-grade monitoring. Open from definition; Anyone can become contributor.
 
 #### RavenADK as default supports these SOTA Agentic patterns:
 - ReAct Agent - Design for high performance with **parallel tools** and **parallel subagents** support
+- **OpenTelemetry** - Industry standard observability for tracking token usage, performance, and reasoning traces - [check](./documentation/Telemetry.md)
 - RLMs - Recursive approach to increase agent accuracy on large set of text with reducing significantly costs
 - **ToT (Tree-of-Thoughts)** - Advanced reasoning framework for exploring multiple solution paths with parallel evaluation and backtracking - [check](./documentation/chains/Tree-of-Thoughts%20(ToT).md)
 - **GACP** - Revolutionary **Graph Agent Communication Protocol** that changes how agents communicate and contribute to tasks and their **society** - [check](./documentation/gacp/GACP.md)
@@ -50,6 +51,7 @@ npm install @ravenlens/raven-adk
 - [RLMs](./documentation/RLMs.md)
 - [Graph Based Workflows](./documentation/Graph.md)
 - [Memory Management](./documentation/Memory.md)
+- [Telemetry & Observability](./documentation/Telemetry.md)
 - [MCP Integration](./documentation/MCP.md)
 - [HITL Support](./documentation/HITL.md)
 - [GACP (Agent Communication)](./documentation/gacp/GACP.md)

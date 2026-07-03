@@ -1,6 +1,7 @@
 import * as z from "zod";
 import { AIMessage, MessagesVariations, ReasoningMessage, ToolMessage } from "../agent/state";
 import { Tool } from "../agent/tools/tools";
+import { TelemetryProviderSchema } from "../telemetry/providers/schema";
 
 export interface LLMConfig {
     /** The model ID for specified provider e.g: GPT-5.5 */
@@ -49,10 +50,11 @@ export interface InvokeOptions {
     };
 }
 
-export interface StandardLLMShema {
+export interface StandardLLMShema<TelemetryProviderSchemaSkew extends TelemetryProviderSchema | undefined = undefined> {
     typeAPI: "model";
     apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
     config: LLMConfig;
+    telemetry?: TelemetryProviderSchemaSkew;
     invoke(): Promise<LLMAnswer>;
     invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer>;
     tts(text: string, options?: any): Promise<Buffer | undefined>;

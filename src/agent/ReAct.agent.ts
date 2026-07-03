@@ -15,6 +15,8 @@ import { RunPod } from "../models/runpod";
 import z from "zod";
 import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
+import { TelemetryProviderSchema } from "../telemetry/providers/schema";
+import { tokenCounter, agentRunCounter, withTelemetry, tracer, recordLog } from "../telemetry/telemetry";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -101,6 +103,8 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     parallelizeSubagents?: boolean;
     /** As default is `false` boolean */
     parallelTools?: boolean;
+    /** It's the telemetry protocol */
+    telemetry?: TelemetryProviderSchema;
 }
 
 interface ReActAgentEvents extends SkillEvents {
@@ -1377,6 +1381,21 @@ ${memoryConclusionSystemPrompt}
             output: this.usedTokens.output + llmAnswer.tokens.output,
             reasoning: this.usedTokens.reasoning + llmAnswer.tokens.reasoning
         };
+
+        // Record to OpenTelemetry Metrics
+        const modelName = this.agentConfig.model.config.model;
+        tokenCounter.add(llmAnswer.tokens.input, { type: "input", model: modelName });
+        tokenCounter.add(llmAnswer.tokens.output, { type: "output", model: modelName });
+
+        if (llmAnswer.tokens.reasoning > 0) {
+            tokenCounter.add(llmAnswer.tokens.reasoning, { type: "reasoning", model: modelName });
+        }
+
+        recordLog({
+            event: "token_usage",
+            model: modelName,
+            tokens: llmAnswer.tokens
+        });
     }
 
     /** It's responsible to run agent plugins have the specific execution way
@@ -1408,31 +1427,61 @@ ${memoryConclusionSystemPrompt}
      * @returns 
      */
     private async runGraph(withGraphState?: Record<string, any>, modelOptions?: InvokeOptions): Promise<ReActAgentInvokeResult> {
-        // Initialize graph state first so plugins can modify it
-        this.AgentGraph.graphState = {
-            ...(withGraphState ?? {}),
-            modelOptions: modelOptions ?? this.AgentGraph.graphState?.modelOptions
-        };
+        return await withTelemetry("agent.react_run", {
+            model: this.agentConfig.model.config.model,
+            parallel_tools: !!this.agentConfig.parallelTools
+        }, async () => {
+            agentRunCounter.add(1);
 
-        // Runs Plugins
-        await this.runPlugins("before_agent_run");
-        
-        await this.ensureWrappedSystemPrompt();
-        this.synchronizeModelConfig();
+            try {
+                // Initialize graph state first so plugins can modify it
+                this.AgentGraph.graphState = {
+                    ...(withGraphState ?? {}),
+                    modelOptions: modelOptions ?? this.AgentGraph.graphState?.modelOptions
+                };
 
-        // Run Agent
-        await this.AgentGraph.start();
+                // Runs Plugins
+                await this.runPlugins("before_agent_run");
 
-        // Sync
-        this.synchronizeModelConfig();
+                await this.ensureWrappedSystemPrompt();
+                this.synchronizeModelConfig();
 
-        // Runs plugins
-        await this.runPlugins("after_agent_run");
-        
-        return {
-            messages: this.agentConfig.messages,
-            state: this.AgentGraph.getState()
-        };
+                // Run Agent
+                await this.AgentGraph.start();
+
+                // Sync
+                this.synchronizeModelConfig();
+
+                // Runs plugins
+                await this.runPlugins("after_agent_run");
+
+                // Attach final statistics to the active trace span
+                tracer.startActiveSpan("agent.finalize", (span) => {
+                    span.setAttribute("agent.total_tokens_input", this.usedTokens.input);
+                    span.setAttribute("agent.total_tokens_output", this.usedTokens.output);
+                    span.setAttribute("agent.total_tokens_reasoning", this.usedTokens.reasoning);
+                    span.setAttribute("agent.recalls", this.AgentGraph.graphState.reasoningRecallsCount ?? 0);
+                    span.end();
+                });
+
+                recordLog({
+                    event: "agent_finish",
+                    model: this.agentConfig.model.config.model,
+                    totalTokens: this.usedTokens,
+                    recalls: this.AgentGraph.graphState.reasoningRecallsCount ?? 0
+                });
+
+                return {
+                    messages: this.agentConfig.messages,
+                    state: this.AgentGraph.getState()
+                };
+            } finally {
+                // Automatically flush/send data via the provider schema
+                if (this.agentConfig.telemetry) {
+                    await this.agentConfig.telemetry?.send();
+                }
+            }
+        });
     }
     
     async invoke(options?: InvokeOptions): Promise<ReActAgentInvokeResult> {
