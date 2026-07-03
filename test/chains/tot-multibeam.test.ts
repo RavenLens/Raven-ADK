@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { TreeOfThoughts } from "../../src/chains/ToT/ToT";
-import { BFSToT } from "../../src/chains/ToT/strategies/BFS";
+import { MultiBeamToT } from "../../src/chains/ToT/strategies/MultiBeam";
 import { OptionNode, ThoughtNode } from "../../src/chains/ToT/nodes";
 import * as crypto from "node:crypto";
 
@@ -8,7 +8,7 @@ vi.mock("node:crypto", () => ({
     randomUUID: vi.fn(),
 }));
 
-describe("Tree of Thoughts - BFS Logic Unit Test", () => {
+describe("Tree of Thoughts - Multi-Beam Logic Unit Test", () => {
     let mockGenerator: any;
     let mockEvaluator: any;
 
@@ -24,15 +24,10 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
         };
     });
 
-    it("should correctly trigger events and follow BFS logic with mocked outputs", async () => {
-        // Mock UUIDs for predictable testing
+    it("should correctly trigger events and follow BFS logic with mocked outputs", async () => {        // Mock UUIDs for predictable testing
         const mockedUUIDs = ["opt-1-uuid", "opt-2-uuid", "opt-3-uuid", "opt-4-uuid", "th-1-uuid"];
         let uuidIndex = 0;
-        (crypto.randomUUID as any).mockImplementation(() => {
-            if (uuidIndex < mockedUUIDs.length) return mockedUUIDs[uuidIndex++];
-            return `generated-uuid-${uuidIndex++}`;
-        });
-
+        (crypto.randomUUID as any).mockImplementation(() => mockedUUIDs[uuidIndex++]);
         const events = {
             optionGenerated: vi.fn(),
             optionEvaluated: vi.fn(),
@@ -43,7 +38,7 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
             finalOptionSelected: vi.fn(),
         };
 
-        // Mock option generation - 1 call expected (2/5 = 1 batch)
+        // Mock option generation - 2 calls expected
         const optionGenOutput = {
             messages: [{
                 type: "ai",
@@ -55,6 +50,7 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
                 }
             }]
         };
+        mockGenerator.invokeStructuredOutput.mockResolvedValueOnce(optionGenOutput);
         mockGenerator.invokeStructuredOutput.mockResolvedValueOnce(optionGenOutput);
 
         // Mock option evaluation (rateNodes)
@@ -72,7 +68,7 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
             }]
         });
 
-        // Mock getTheBestOptionsGlobal (pruning)
+        // Mock getTheBestOptions (pruning)
         mockEvaluator.invokeStructuredOutput.mockResolvedValueOnce({
             messages: [{
                 type: "ai",
@@ -82,38 +78,48 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
             }]
         });
 
-        // Mock thought generation for level 1
+        // Mock thought generation for the branch
         mockGenerator.invokeStructuredOutput.mockResolvedValueOnce({
             messages: [{
                 type: "ai",
                 structuredOutput: {
                     thoughts: [
-                        { id: "ignored-th-1", type: "though-node", content: "Thought 1", dependingThoughNodes: [] },
-                        { id: "ignored-th-2", type: "though-node", content: "Thought 2", dependingThoughNodes: [] }
+                        { id: "ignored-th-1", type: "though-node", content: "Step 1", dependingThoughNodes: [] }
                     ]
                 }
             }]
         });
 
-        // Mock thought evaluation (rateNodes)
+        // Mock thought evaluation
         mockEvaluator.invokeStructuredOutput.mockResolvedValueOnce({
             messages: [{
                 type: "ai",
                 structuredOutput: {
                     ratings: [
-                        { id: "opt-3-uuid", rate: { decision: "good", score: 0.95, justification: "Logical" } },
-                        { id: "opt-4-uuid", rate: { decision: "meh", score: 0.5, justification: "Not so good" } }
+                        { id: "th-1-uuid", rate: { decision: "good", score: 0.95, justification: "Logical step" } }
                     ]
                 }
             }]
         });
 
-        // Mock getTheBestThoughtsGlobal (pruning)
+        // Mock getTheBestThoughts (pruning)
         mockEvaluator.invokeStructuredOutput.mockResolvedValueOnce({
             messages: [{
                 type: "ai",
                 structuredOutput: {
-                    topThoughts: [{ id: "opt-3-uuid", type: "though-node", content: "Thought 1", dependingThoughNodes: [] }]
+                    topThoughts: [{ id: "th-1-uuid", type: "though-node", content: "Step 1", dependingThoughNodes: [] }]
+                }
+            }]
+        });
+
+        // Mock final scoring for the branch (before final selection)
+        mockEvaluator.invokeStructuredOutput.mockResolvedValueOnce({
+            messages: [{
+                type: "ai",
+                structuredOutput: {
+                    ratings: [
+                        { id: "opt-1-uuid", rate: { decision: "good", score: 0.99, justification: "Verified chain" } }
+                    ]
                 }
             }]
         });
@@ -128,12 +134,14 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
             }]
         });
 
+        // ToT instance is needed because callableUnitInvokeStructured checks for instance type
+        // We'll mock the internal call instead of passing the plain mock object
         const tot = new TreeOfThoughts({
-            query: "test query",
+            query: "test",
             initialOptionsCount: 2,
             maxThoughtsDepth: 1,
             thoughtsCount: 1,
-            graphSearchAlgorithm: new BFSToT({ topK: 1 }),
+            graphSearchAlgorithm: new MultiBeamToT({ topK: 1, pruneAtBegining: true }),
             optionGenerator: mockGenerator as any,
             thoughtGenerator: mockGenerator as any,
             evaluator: mockEvaluator as any
@@ -142,6 +150,7 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
         // Register all events
         Object.keys(events).forEach(evt => tot.onEvent(evt as any, events[evt as keyof typeof events]));
 
+        // Override callableUnitInvokeStructured to bypass the ReActAgent vs AgentModel checks for this unit test
         tot.callableUnitInvokeStructured = async (unit, schema, instruction) => {
             const target = unit === "evaluator" ? mockEvaluator : mockGenerator;
             const res = await target.invokeStructuredOutput(schema);
@@ -152,12 +161,14 @@ describe("Tree of Thoughts - BFS Logic Unit Test", () => {
 
         expect(result.theBestOption.content).toBe("Option 1");
         expect(result.reasoningChains.length).toBe(1); // topK is 1
-        
+        expect(result.allOptions.length).toBe(4); // 2 calls * 2 options each
+
         expect(events.optionGenerated).toHaveBeenCalled();
         expect(events.optionEvaluated).toHaveBeenCalled();
         expect(events.optionsPruned).toHaveBeenCalled();
         expect(events.thoughtsGenerated).toHaveBeenCalled();
         expect(events.thoughtEvaluated).toHaveBeenCalled();
         expect(events.thoughtsPruned).toHaveBeenCalled();
+        expect(events.finalOptionSelected).toHaveBeenCalled();
     });
 });

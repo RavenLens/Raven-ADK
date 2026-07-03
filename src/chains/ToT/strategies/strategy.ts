@@ -1,6 +1,7 @@
-import { OptionNode } from "../nodes";
+import { OptionNode, ThoughtNode } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { ReasoningChain } from "./BFS";
+
+export type ReasoningChain = [ThoughtNode[], ReasoningChain[] | undefined | null];
 
 export interface LogicReturnType {
     theBestOption: OptionNode;

@@ -2,7 +2,7 @@ import z4, { z } from "zod/v4";
 
 export interface Rate {
     /**
-     * BFS:
+     * Multi-Beam:
      *  - declined - option/thought is beyond top-k it global prunes the works and chooses the best
      */
     decision: "good" | "the-best" | "declined";

@@ -3,6 +3,7 @@ import { ReActAgent } from "../../agent";
 import { AgentModel } from "../../agent/ReAct.agent";
 import { AIMessage, MessagesVariations, OpenAI } from "../../models";
 import { OptionNode, ThoughtNode } from "./nodes";
+import { MultiBeamToT } from "./strategies/MultiBeam";
 import { BFSToT } from "./strategies/BFS";
 import { DFSToT } from "./strategies/DFS";
 
@@ -35,14 +36,26 @@ type CallUnit = ReActAgent<any, any, any, any> | AgentModel | CustomCallUnit;
 export interface TreeOfThoughtsConfig {
     /** User given task */
     query: string;
-    /** Maximum depth of the thoughts tree for full-tree. Default is 10. */
+    /** 
+     * Maximum depth of the thoughts tree for the search process. 
+     * - **MultiBeam**: Determines the number of iterative parallel expansion steps performed for each active beam. Winner is chosen after reviewing the full path.
+     * - **BFS**: Determines the number of global frontier expansion levels (breadth steps) before final selection. Winner is chosen after reviewing the full path.
+     * - **DFS**: Determines the maximum recursion depth (length of a single reasoning path) before stopping or backtracking. Winner is chosen after reviewing the full path.
+     * @default 10
+     */
     maxThoughtsDepth?: number;
-    /** Number of thoughts is generated for each option and next thought. Default: 3. Cannot be smaller neither equal than BFS TopK */
+    /**
+     * If any thought or option reaches this score (0.0 - 1.0), the search will terminate immediately 
+     * and proceed to final evaluation with the current findings.
+     * Use this to save tokens and time when a definitive answer is found early.
+     */
+    earlyExitThreshold?: number;
+    /** Number of thoughts is generated for each option and next thought. Default: 3. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
     thoughtsCount?: number;
-    /** How many options generates initially. Cannot be 0. Cannot be smaller neither equal than BFS TopK */
+    /** How many options generates initially. Cannot be 0. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
     initialOptionsCount: number;
     /** Use to search graph accordingly */
-    graphSearchAlgorithm: BFSToT | DFSToT;
+    graphSearchAlgorithm: BFSToT | MultiBeamToT | DFSToT;
     /**
      * Generates different options for the 1st step of run
      * 1st param: is user prompt - you can embedd this in whatever wrapper or process directly
