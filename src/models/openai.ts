@@ -480,7 +480,7 @@ export class OpenAI implements StandardLLMShema {
             this.config.messages = options.messages;
         }
 
-        return await withTelemetry(`llm.openai.${options?.stream ? 'stream' : 'invoke'}`, {
+        return await withTelemetry(`llm.run.openai.${options?.stream ? 'stream' : 'invoke'}`, {
             model: this.config.model,
             stream: !!options?.stream
         }, async () => {

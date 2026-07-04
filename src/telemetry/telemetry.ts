@@ -14,6 +14,18 @@ export function recordLog(data: any) {
     }
 }
 
+/**
+ * Records tge event with data
+ * @param event is the name of custom event
+ * @param data is the object with data
+ */
+export function recordEventWithData(event: string, data: any) {
+    const activeSpan = trace.getActiveSpan();
+    if (activeSpan) {
+        activeSpan.addEvent(event, data);
+    }
+}
+
 // Metrics for token usage
 export const tokenCounter = meter.createCounter("raven_adk.tokens_usage", {
     description: "Tracks total token usage across model calls",

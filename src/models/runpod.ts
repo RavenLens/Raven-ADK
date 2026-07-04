@@ -446,7 +446,7 @@ export class RunPod implements StandardLLMShema {
 		};
 
 		const result = await withTelemetry(
-			`LLM Call: RunPod ${this.config.model}`,
+			`llm.run.runpod.${options?.stream ? 'stream' : 'invoke'}`,
 			{
 				"llm.provider": "runpod",
 				"llm.model": this.config.model,

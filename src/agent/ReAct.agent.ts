@@ -91,7 +91,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     /** It's list with agent plugins are going to be execute and can */
     plugins?: ReActAgentPluginSpec[];
     tools: Tool<any, any>[];
-    /** specify this schema to use the Human In The Loop */
+    /** specify this schema to use the Human In The Loop. Default: HITL Call stops execution till result or default delay is resolved (if setted up) */
     hitl?: HITL;
     /** Subagents definition */
     subagents?: SubAgent[];

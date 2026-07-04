@@ -10,7 +10,7 @@ HITL currently supports two interaction types.
 - Before executing selected tools, the agent asks the user for permission.
 - Allowed answers are allow or deny.
 - If delay rules are configured for a tool, a default answer can be applied after a timeout.
-- Tool approvals are requested in parallel for all configured tool calls in the same step, and the step is blocked until all approvals are resolved.
+- Tool approvals are requested in parallel for all configured tool calls in the same step, and the **`execution step` is blocked until all approvals are resolved.**
 
 2. User questions
 - The agent can ask the user for information when context is missing.

@@ -432,7 +432,7 @@ export class Google implements StandardLLMShema {
         }
 
         const result = await withTelemetry(
-            `LLM Call: Google ${this.config.model}`,
+            `llm.run.google.${options?.stream ? 'stream' : 'invoke'}`,
             { 
                 "llm.provider": "google",
                 "llm.model": this.config.model,

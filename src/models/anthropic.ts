@@ -360,7 +360,7 @@ export class Anthropic implements StandardLLMShema {
         } else {
             // Execute llm
             const result = await withTelemetry(
-                `LLM Call: Anthropic ${this.config.model}`,
+                `llm.run.anthropic.${options?.stream ? 'stream' : 'invoke'}`,
                 { 
                     "llm.provider": "anthropic",
                     "llm.model": this.config.model,
