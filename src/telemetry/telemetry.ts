@@ -1,4 +1,6 @@
-import { trace, metrics, type Tracer, type Meter, SpanStatusCode } from "@opentelemetry/api";
+import { trace, metrics, type Tracer, type Meter, SpanStatusCode, Span } from "@opentelemetry/api";
+import { LLMAnswer, LLMConfig } from "../models/mutual";
+import { ReActAgentConfig } from "../agent";
 
 export const tracer: Tracer = trace.getTracer("raven-adk");
 export const meter: Meter = metrics.getMeter("raven-adk");
@@ -26,6 +28,120 @@ export function recordEventWithData(event: string, data: any) {
     }
 }
 
+export enum RecordTrackerType {
+    LLM,
+    Embedding,
+    Agent
+}
+
+/**
+ * Use to track the llm progress
+ */
+export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any, any>> {
+    private config: Config;
+    private TimestampOfUsage: number | undefined = undefined;
+    private trackerType: RecordTrackerType;
+    private provider: string;
+
+    constructor(config: Config, trackerType: RecordTrackerType, provider: string) {
+        this.config = config;
+        this.trackerType = trackerType;
+        this.provider = provider;
+    }
+
+    private getPrefix() {
+        switch(this.trackerType) {
+            case RecordTrackerType.Agent:
+                return "agent";
+            case RecordTrackerType.LLM:
+                return "llm";
+            case RecordTrackerType.Embedding:
+                return "embedding";
+        }
+    }
+    
+    registerConfig() {
+        const activeSpan = trace.getActiveSpan();
+        activeSpan?.setAttribute(`${this.getPrefix()}.config`, JSON.stringify(this.config, null, 4))
+        return this;
+    }
+
+    registerTimeTracker(timezoneAttr?: string) {
+        this.TimestampOfUsage = Date.now();
+        
+        const activeSpan = trace.getActiveSpan();
+
+        // Setup time start
+        activeSpan?.setAttribute(`${this.getPrefix()}.timestamp_start`, this.TimestampOfUsage);
+
+        // Setup timezone
+        const timezone = timezoneAttr ? timezoneAttr : Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (timezone) {
+            activeSpan?.setAttribute(`${this.getPrefix()}.timezone`, timezone);
+        }
+
+        //
+        return this;
+    }
+
+    finishTimeTracker() {
+        if (this.TimestampOfUsage === undefined) {
+            console.warn("Cannot finish timetracker because it wasn't initialized");
+            return this;
+        }
+        
+        const activeSpan = trace.getActiveSpan();
+
+        // Register end
+        const timeEnd = Date.now();
+        activeSpan?.setAttribute(`${this.getPrefix()}.timestamp_end`, timeEnd);
+
+        // Reset
+        this.TimestampOfUsage = undefined;
+
+        //
+        return this;
+    }
+    
+    /** Setup user attribute as query */
+    setUserQueryActiveSpanAttribute() {
+        const activeSpan = trace.getActiveSpan();
+        activeSpan?.setAttribute(`${this.getPrefix()}.task_query`, JSON.stringify(this.config.messages ?? [], null, 4))
+        return this;
+    }
+    
+    setAnswerActiveSpanAttribute(answer: LLMAnswer) {
+        const activeSpan = trace.getActiveSpan();
+        activeSpan?.setAttribute(`${this.getPrefix()}.answer`, JSON.stringify(answer, null, 4));
+        return this;
+    }
+
+    setEmbeddingAnswer(embedding: any) {
+        if (this.trackerType !== RecordTrackerType.Embedding) {
+            console.warn("Cannot use embedding registering for different tracking initialized than `embedding`")
+            return this;
+        }
+        
+        const activeSpan = trace.getActiveSpan();
+        activeSpan?.setAttribute(`${this.getPrefix()}.embedding`, JSON.stringify(embedding, null, 4));
+        return this;
+    }
+
+    setUsage(usageObject: LLMAnswer["tokens"]) {
+        const activeSpan = trace.getActiveSpan();
+        activeSpan?.setAttribute(`${this.getPrefix()}.usage`, JSON.stringify(usageObject, null, 4));
+        
+        recordTokenUsage(
+            this.provider,
+            typeof this.config.model === "string" ? this.config.model : this.config.model.config.model,
+            usageObject
+        );
+
+        return this;
+    }
+    
+}
+
 // Metrics for token usage
 export const tokenCounter = meter.createCounter("raven_adk.tokens_usage", {
     description: "Tracks total token usage across model calls",
@@ -43,7 +159,7 @@ export const agentRunCounter = meter.createCounter("raven_adk.agent_runs", {
 export async function withTelemetry<T>(
     name: string, 
     attributes: Record<string, any>, 
-    fn: () => Promise<T>
+    fn: (span?: Span) => Promise<T>
 ): Promise<T> {
     return tracer.startActiveSpan(name, { attributes }, async (span) => {
         try {
@@ -74,11 +190,4 @@ export function recordTokenUsage(
     if (tokens.reasoning && tokens.reasoning > 0) {
         tokenCounter.add(tokens.reasoning, { provider, model, type: "reasoning" });
     }
-
-    recordLog({
-        event: "llm_call",
-        provider,
-        model,
-        tokens
-    });
 }

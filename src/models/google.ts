@@ -13,7 +13,7 @@ import { parseToolCallContentToParams, parseToolDescription } from "../agent/too
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
+import { withTelemetry, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
 
 export interface GoogleConfig extends LLMConfig {
     /** 
@@ -56,6 +56,7 @@ export class Google implements StandardLLMShema {
     private client: GoogleGenAI;
     private EventsListeners: Partial<{ [EventName in keyof GoogleAIEvents]: GoogleAIEvents[EventName] }> = {};
     config: GoogleConfig;
+    private Tracker: RecordTracker<GoogleConfig>;
 
     constructor(config: GoogleConfig) {
         this.config = config;
@@ -68,6 +69,8 @@ export class Google implements StandardLLMShema {
             project: this.config.project,
             location: this.config.location */
         });
+
+        this.Tracker = new RecordTracker(this.config, RecordTrackerType.LLM, "google");
     }
 
     onEvent<EventName extends keyof GoogleAIEvents>(eventName: EventName, eventListener: GoogleAIEvents[EventName]): this {
@@ -375,7 +378,8 @@ export class Google implements StandardLLMShema {
         };
     }
 
-    private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>) {
+    private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>): AsyncGenerator<GenerateContentResponse, LLMAnswer | undefined> {
+        let lastEvent: GenerateContentResponse | null = null;
         for await (const event of stream) {
             this.emitEvent("stream", event);
 
@@ -387,7 +391,17 @@ export class Google implements StandardLLMShema {
                 }
             }
 
+            lastEvent = event;
             yield event;
+        }
+
+        if (lastEvent) {
+            const result = this.parseResponseToAnswer(lastEvent);
+            this.Tracker
+                .setAnswerActiveSpanAttribute(result)
+                .finishTimeTracker()
+                .setUsage(result.tokens);
+            return result;
         }
     }
 
@@ -410,34 +424,39 @@ export class Google implements StandardLLMShema {
             thought_budget: options.reasoning.budgetTokens
         } : undefined;
 
-        if (options?.stream) {
-            const stream = await this.client.models.generateContentStream({
-                model: this.config.model,
-                contents,
-                config: {
-                    systemInstruction,
-                    tools,
-                    temperature: this.config.temperature,
-                    topP: this.config.topP,
-                    topK: this.config.topK,
-                    candidateCount: this.config.candidateCount,
-                    maxOutputTokens: this.config.maxOutputTokens,
-                    stopSequences: this.config.stopSequences,
-                    // Specific to Google genai SDK for thinking models
-                    thinkingConfig: thinking_config as any
-                }
-            });
-
-            return this.streamWithEvents(stream);
-        }
-
-        const result = await withTelemetry(
+        return await withTelemetry(
             `llm.run.google.${options?.stream ? 'stream' : 'invoke'}`,
             { 
                 "llm.provider": "google",
                 "llm.model": this.config.model,
             },
             async () => {
+                this.Tracker
+                    .registerConfig()
+                    .setUserQueryActiveSpanAttribute()
+                    .registerTimeTracker();
+
+                if (options?.stream) {
+                    const stream = await this.client.models.generateContentStream({
+                        model: this.config.model,
+                        contents,
+                        config: {
+                            systemInstruction,
+                            tools,
+                            temperature: this.config.temperature,
+                            topP: this.config.topP,
+                            topK: this.config.topK,
+                            candidateCount: this.config.candidateCount,
+                            maxOutputTokens: this.config.maxOutputTokens,
+                            stopSequences: this.config.stopSequences,
+                            // Specific to Google genai SDK for thinking models
+                            thinkingConfig: thinking_config as any
+                        }
+                    });
+
+                    return this.streamWithEvents(stream);
+                }
+
                 const response = await this.client.models.generateContent({
                     model: this.config.model,
                     contents,
@@ -456,11 +475,13 @@ export class Google implements StandardLLMShema {
                 });
 
                 const answer = this.parseResponseToAnswer(response);
-                recordTokenUsage("google", this.config.model, answer.tokens);
+                this.Tracker
+                    .setAnswerActiveSpanAttribute(answer)
+                    .finishTimeTracker()
+                    .setUsage(answer.tokens);
                 return answer;
             }
         );
-        return result;
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
@@ -511,29 +532,58 @@ export class GoogleEmbedding implements EmbeddingModel {
     apiName = "Google" as const;
     private client: GoogleGenAI;
     config: GoogleEmbeddingConfig;
+    private Tracker: RecordTracker<GoogleEmbeddingConfig>;
 
     constructor(config: GoogleEmbeddingConfig) {
         this.config = config as any;
         this.client = new GoogleGenAI({
             apiKey: this.config.apiKey,
         });
+
+        this.Tracker = new RecordTracker(this.config, RecordTrackerType.Embedding, "google");
     }
 
     async embed(text: string | string[]): Promise<number[][]> {
-        if (Array.isArray(text)) {
-            const response = await Promise.all(
-                text.map(t => this.client.models.embedContent({
-                    model: this.config.model,
-                    contents: [{ role: "user", parts: [{ text: t }] }]
-                }))
-            );
-            return response.map(r => r.embeddings?.[0]?.values || []);
-        } else {
-            const response = await this.client.models.embedContent({
-                model: this.config.model,
-                contents: [{ role: "user", parts: [{ text: text }] }]
-            });
-            return [response.embeddings?.[0]?.values || []];
-        }
+        return await withTelemetry(
+            `llm.embedding.google`,
+            {
+                "llm.provider": "google",
+                "llm.model": this.config.model,
+                "llm.task_query": text instanceof Array ? JSON.stringify(text, null, 4) : text
+            },
+            async () => {
+                this.Tracker
+                    .registerConfig()
+                    .registerTimeTracker("embedding");
+
+                let result: number[][];
+                if (Array.isArray(text)) {
+                    const response = await Promise.all(
+                        text.map(t => this.client.models.embedContent({
+                            model: this.config.model,
+                            contents: [{ role: "user", parts: [{ text: t }] }]
+                        }))
+                    );
+                    result = response.map(r => r.embeddings?.[0]?.values || []);
+                } else {
+                    const response = await this.client.models.embedContent({
+                        model: this.config.model,
+                        contents: [{ role: "user", parts: [{ text: text }] }]
+                    });
+                    result = [response.embeddings?.[0]?.values || []];
+                }
+
+                this.Tracker
+                    .finishTimeTracker()
+                    .setUsage({
+                        input: 0,
+                        output: 0,
+                        reasoning: 0
+                    })
+                    .setEmbeddingAnswer(result);
+        
+                return result;
+            }
+        );
     }
 }

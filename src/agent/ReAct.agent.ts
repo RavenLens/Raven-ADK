@@ -9,14 +9,14 @@ import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcp/mcpTools";
-import { Tool } from "./tools/tools";
+import { tool, Tool } from "./tools/tools";
 import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
 import { RunPod } from "../models/runpod";
 import z from "zod";
 import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
 import { TelemetryProviderSchema } from "../telemetry/providers/schema";
-import { tokenCounter, agentRunCounter, withTelemetry, tracer, recordLog } from "../telemetry/telemetry";
+import { tokenCounter, agentRunCounter, withTelemetry, tracer, recordLog, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -224,6 +224,7 @@ export class ReActAgent
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
     agentMemoryInterface: MemoryInterface<Memory> | undefined = undefined;
     /** It's overall amount of used tokens by the ReAct agent */
+    private Tracker: RecordTracker<ReActAgentConfig<Skills, Memory, HITL>>;
     usedTokens: LLMAnswer["tokens"];
 
     private cachedWrappedSystemPrompt?: string;
@@ -250,6 +251,53 @@ export class ReActAgent
             output: 0,
             reasoning: 0
         };
+        this.Tracker = new RecordTracker(this.agentConfig, RecordTrackerType.Agent, "react_agent");
+
+        // Registers config
+        tracer.startActiveSpan("agent.config", (span) => {
+            span.setAttribute("config.body", JSON.stringify(this.agentConfig, null, 4));
+            span.setAttribute("agent.task_query", config.messages.at(-1)?.content ?? "");
+            span.setAttribute("agent.main_model", config.model.config.model);
+            
+            // Subagents list
+            const toolsMapper = (tool: Tool<any, any>) => {
+                return {
+                    toolName: tool.toolConfig.toolName,
+                    toolDescription: tool.toolConfig.toolDescription,
+                    configFull: tool.toolConfig,
+                }
+            }
+            const subagents = this.agentConfig.subagents?.map(subagent => {
+                delete subagent.model.config.apiKey;
+
+                return {
+                    ...subagent,
+                    tools: subagent.tools.map(toolsMapper)
+                }
+            })
+            span.setAttribute("agent.subagents", JSON.stringify(subagents, null, 4));
+
+            // Availability of skills
+            span.setAttribute("agent.skillsAvailable", this.agentConfig.skills ? true : false);
+
+            // Availability of memory
+            span.setAttribute("agent.memoryAvailable", this.agentConfig.memory ? true : false);
+
+            // List with plugins
+            const plugins = this.agentConfig.plugins?.map(plugin => {
+                delete (plugin as any).execute;
+                return plugin;
+            }) ?? []
+            
+            span.setAttribute("agent.plugins", JSON.stringify(plugins, null, 4));
+
+            // Tools
+            const tools = config.tools.map(toolsMapper);
+            span.setAttribute("agent.tools", JSON.stringify(tools, null, 4));
+
+
+            span.end();
+        });
 
         // Register model reasoning event
         if ((this.agentConfig.model as any).onEvent) {
@@ -1433,6 +1481,11 @@ ${memoryConclusionSystemPrompt}
         }, async () => {
             agentRunCounter.add(1);
 
+            this.Tracker
+                .registerConfig()
+                .setUserQueryActiveSpanAttribute()
+                .registerTimeTracker();
+
             try {
                 // Initialize graph state first so plugins can modify it
                 this.AgentGraph.graphState = {
@@ -1456,11 +1509,26 @@ ${memoryConclusionSystemPrompt}
                 await this.runPlugins("after_agent_run");
 
                 // Attach final statistics to the active trace span
-                tracer.startActiveSpan("agent.finalize", (span) => {
+                const result = {
+                    state: this.AgentGraph.getState(),
+                    messages: this.agentConfig.messages
+                };
+
+                this.Tracker
+                    .setAnswerActiveSpanAttribute({
+                        answer: result.messages, // Agent result doesn't quite map to LLMAnswer answer but we can leave it empty or map it
+                        messages: this.agentConfig.messages,
+                        tokens: this.usedTokens
+                    })
+                    .finishTimeTracker()
+                    .setUsage(this.usedTokens);
+
+                const activeSpan = tracer.startActiveSpan("agent.finalize", (span) => {
                     span.setAttribute("agent.total_tokens_input", this.usedTokens.input);
                     span.setAttribute("agent.total_tokens_output", this.usedTokens.output);
                     span.setAttribute("agent.total_tokens_reasoning", this.usedTokens.reasoning);
                     span.setAttribute("agent.recalls", this.AgentGraph.graphState.reasoningRecallsCount ?? 0);
+                    span.setAttribute("agent.task_result", JSON.stringify(result, null, 4));
                     span.end();
                 });
 

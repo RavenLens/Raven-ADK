@@ -6,7 +6,7 @@ import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "..
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
+import { withTelemetry, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
 
 // Defined locally if not exported from SDK or just to be safe
 interface ThinkingBlock {
@@ -33,10 +33,11 @@ interface AnthropicAIEvents {
 export class Anthropic implements StandardLLMShema {
     typeAPI: "model" = "model";
     apiName = "Anthropic" as const;
-    private anthropic: AnthropicStandalone;
-    private EventsListeners: Partial<{ [EventName in keyof AnthropicAIEvents]: AnthropicAIEvents[EventName] }> = {};
     baseURL?: string;
     config: AnthropicConfig;
+    private anthropic: AnthropicStandalone;
+    private EventsListeners: Partial<{ [EventName in keyof AnthropicAIEvents]: AnthropicAIEvents[EventName] }> = {};
+    private Tracker: RecordTracker<AnthropicConfig>;
     
     constructor(config: AnthropicConfig, baseURL?: string) {
         this.config = config;
@@ -46,6 +47,8 @@ export class Anthropic implements StandardLLMShema {
             apiKey: this.config.apiKey,
             baseURL: this.baseURL
         })
+
+        this.Tracker = new RecordTracker(this.config, RecordTrackerType.LLM, "anthropic");
     }
 
     private parseBase64DataUrl(dataUrl: string): { media_type: string; data: string } | null {
@@ -237,7 +240,8 @@ export class Anthropic implements StandardLLMShema {
         });
     }
     
-    private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>) {
+    private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>): AsyncGenerator<AnthropicStandalone.Messages.RawMessageStreamEvent, LLMAnswer | undefined> {
+        let finalMessage: AnthropicStandalone.Messages.Message | null = null;
         for await (const event of stream) {
             this.emitEvent("stream", event);
 
@@ -245,7 +249,20 @@ export class Anthropic implements StandardLLMShema {
                 this.emitEvent("reasoning", (event.delta as any).thinking);
             }
 
+            if (event.type === "message_stop") {
+                finalMessage = (event as any).message;
+            }
+
             yield event;
+        }
+
+        if (finalMessage) {
+            const result = this.prepareSyncAnswer(finalMessage);
+            this.Tracker
+                .setAnswerActiveSpanAttribute(result)
+                .finishTimeTracker()
+                .setUsage(result.tokens);
+            return result;
         }
     }
 
@@ -354,26 +371,33 @@ export class Anthropic implements StandardLLMShema {
             thinking: thinking as any
         }
         
-        if (options?.stream) {
-            const streamCompletion = this.anthropic.messages.stream(config);
-            return this.streamWithEvents(streamCompletion);
-        } else {
-            // Execute llm
-            const result = await withTelemetry(
-                `llm.run.anthropic.${options?.stream ? 'stream' : 'invoke'}`,
-                { 
-                    "llm.provider": "anthropic",
-                    "llm.model": this.config.model,
-                },
-                async () => {
+        return await withTelemetry(
+            `llm.run.anthropic.${options?.stream ? 'stream' : 'invoke'}`,
+            { 
+                "llm.provider": "anthropic",
+                "llm.model": this.config.model,
+            },
+            async () => {
+                this.Tracker
+                    .registerConfig()
+                    .setUserQueryActiveSpanAttribute()
+                    .registerTimeTracker();
+
+                if (options?.stream) {
+                    const streamCompletion = this.anthropic.messages.stream(config);
+                    return this.streamWithEvents(streamCompletion);
+                } else {
+                    // Execute llm
                     const completion = await this.anthropic.messages.create(config);
                     const answer = this.prepareSyncAnswer(completion);
-                    recordTokenUsage("anthropic", this.config.model, answer.tokens);
+                    this.Tracker
+                        .setAnswerActiveSpanAttribute(answer)
+                        .finishTimeTracker()
+                        .setUsage(answer.tokens);
                     return answer;
                 }
-            );
-            return result;
-        }
+            }
+        );
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {

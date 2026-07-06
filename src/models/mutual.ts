@@ -19,7 +19,7 @@ export interface LLMAnswer {
     /** Set with all messages llm got and the answers as the last message/s */
     messages: MessagesVariations[];
     /** Are only the answer messages for this model call */
-    answer: (ReasoningMessage | AIMessage | ToolMessage)[];
+    answer: MessagesVariations[];
     tokens: {
         input: number;
         output: number;

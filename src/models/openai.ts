@@ -7,7 +7,7 @@ import { AIMessage, ToolMessage, ResponseInputVideo, ReasoningMessage } from "..
 import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
+import { withTelemetry, recordTokenUsage, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
 
 export interface OpenAIConfig extends LLMConfig {
     reasoningEffort?: ReasoningEffort | null;
@@ -33,10 +33,11 @@ interface OpenAIEvents {
 export class OpenAI implements StandardLLMShema {    
     typeAPI: "model" = "model";
     apiName = "OpenAI" as const;
-    private openai: OpenAIStandalone;
-    private EventsListeners: Partial<{ [EventName in keyof OpenAIEvents]: OpenAIEvents[EventName] }> = {};
     config: OpenAIConfig;
     baseURL?: string;
+    private openai: OpenAIStandalone;
+    private EventsListeners: Partial<{ [EventName in keyof OpenAIEvents]: OpenAIEvents[EventName] }> = {};
+    private Tracker: RecordTracker<OpenAIConfig>;
 
     constructor(config: OpenAIConfig, baseURL?: string) {
         this.config = config;
@@ -46,6 +47,8 @@ export class OpenAI implements StandardLLMShema {
             apiKey: this.config.apiKey,
             baseURL: this.baseURL,
         })
+
+        this.Tracker = new RecordTracker(this.config, RecordTrackerType.LLM, "openai");
     }
 
     private get isLegacy(): boolean {
@@ -459,7 +462,10 @@ export class OpenAI implements StandardLLMShema {
         };
     }
 
-    private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>) {
+    private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>): AsyncGenerator<ResponsesAPI.ResponseStreamEvent, LLMAnswer | undefined> {
+        // Collect for telemetry
+        let finalResponse: ResponsesAPI.Response | null = null;
+        
         for await (const event of stream) {
             this.emitEvent("stream", event);
 
@@ -468,7 +474,23 @@ export class OpenAI implements StandardLLMShema {
                 this.emitEvent("reasoning", eventAny.reasoning_content || eventAny.reasoning || "");
             }
 
+            if (eventAny.type === "response.done") {
+                finalResponse = eventAny.response;
+            }
+
             yield event;
+        }
+
+        // Record telemetry
+        if (finalResponse) {
+            const result = this.parseResponseToAnswer(finalResponse);
+
+            this.Tracker
+                .setAnswerActiveSpanAttribute(result)
+                .finishTimeTracker()
+                .setUsage(result.tokens);
+                
+            return result;
         }
     }
 
@@ -484,6 +506,11 @@ export class OpenAI implements StandardLLMShema {
             model: this.config.model,
             stream: !!options?.stream
         }, async () => {
+            this.Tracker
+                .registerConfig()
+                .setUserQueryActiveSpanAttribute()
+                .registerTimeTracker();
+            
             if (this.isLegacy) {
                 if (options?.stream) {
                     // For now, we don't support streaming events for legacy chat completions 
@@ -498,7 +525,11 @@ export class OpenAI implements StandardLLMShema {
                         stream: false
                     });
                     const result = this.parseCompletionResponseToAnswer(response);
-                    this.recordTokenMetrics(result.tokens);
+                    
+                    this.Tracker
+                        .setAnswerActiveSpanAttribute(result)
+                        .setUsage(result.tokens);
+                    
                     return result;
                 }
 
@@ -511,7 +542,11 @@ export class OpenAI implements StandardLLMShema {
                 } as any);
 
                 const result = this.parseChatResponseToAnswer(response);
-                this.recordTokenMetrics(result.tokens);
+                
+                this.Tracker
+                    .setAnswerActiveSpanAttribute(result)
+                    .setUsage(result.tokens);
+
                 return result;
             }
             
@@ -535,13 +570,14 @@ export class OpenAI implements StandardLLMShema {
 
             const response = await this.openai.responses.create(responsePayload);
             const result = this.parseResponseToAnswer(response);
-            this.recordTokenMetrics(result.tokens);
+            
+            this.Tracker
+                .setAnswerActiveSpanAttribute(result)
+                .finishTimeTracker()
+                .setUsage(result.tokens);
+            
             return result;
         });
-    }
-
-    private recordTokenMetrics(tokens: LLMAnswer["tokens"]) {
-        recordTokenUsage("openai", this.config.model, tokens);
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
@@ -585,23 +621,50 @@ export class OpenAI implements StandardLLMShema {
 export class OpenAIEmbedding implements EmbeddingModel {
     typeAPI: "model" = "model";
     apiName = "OpenAI" as const;
-    private openai: OpenAIStandalone;
     config: OpenAIEmbeddingConfig;
+    private openai: OpenAIStandalone;
+    private Tracker: RecordTracker<OpenAIConfig>;
 
     constructor(config: OpenAIEmbeddingConfig, baseURL?: string) {
         this.config = config as any;
+
         this.openai = new OpenAIStandalone({
             apiKey: this.config.apiKey,
             baseURL: (config as any).baseURL ?? baseURL,
         });
+
+        this.Tracker = new RecordTracker(this.config, RecordTrackerType.Embedding, "openai");
     }
 
     async embed(text: string | string[]): Promise<number[][]> {
-        const response = await this.openai.embeddings.create({
-            model: this.config.model,
-            input: text,
-        });
+        return withTelemetry(
+            `llm.embedding.openai`,
+            {
+                model: this.config.model,
+                user_query: text instanceof Array ? JSON.stringify(text, null, 4) : text
+            },
+            async (span) => {
+                this.Tracker
+                    .registerConfig()
+                    .registerTimeTracker("embedding");
 
-        return response.data.map((d) => d.embedding);
+                const response = await this.openai.embeddings.create({
+                    model: this.config.model,
+                    input: text,
+                });
+                const embedding = response.data.map((d) => d.embedding);
+
+                this.Tracker
+                    .finishTimeTracker()
+                    .setUsage({
+                        input: response.usage.prompt_tokens,
+                        output: response.usage.total_tokens - response.usage.prompt_tokens,
+                        reasoning: 0
+                    })
+                    .setEmbeddingAnswer(embedding);
+        
+                return embedding;
+            }
+        )
     }
 }

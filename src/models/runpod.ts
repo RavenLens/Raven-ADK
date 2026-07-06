@@ -3,7 +3,7 @@ import * as z from "zod";
 import { AIMessage, ResponseInputVideo } from "../agent/state";
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, recordTokenUsage } from "../telemetry/telemetry";
+import { withTelemetry, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
 
 export interface RunPodConfig extends LLMConfig {
 	endpointId: string;
@@ -48,6 +48,7 @@ export class RunPod implements StandardLLMShema {
 	baseURL?: string;
 
 	private endpoint: RunPodEndpoint;
+	private Tracker: RecordTracker<RunPodConfig>;
 
 	constructor(config: RunPodConfig, baseURL?: string) {
 		this.config = config;
@@ -73,6 +74,8 @@ export class RunPod implements StandardLLMShema {
 		}
 
 		this.endpoint = endpoint;
+
+		this.Tracker = new RecordTracker(this.config, RecordTrackerType.LLM, "runpod");
 	}
 
 	private getInputMode(): "messages" | "prompt" {
@@ -414,7 +417,7 @@ export class RunPod implements StandardLLMShema {
 		};
 	}
 
-	async *stream(options?: InvokeOptions): AsyncGenerator<unknown, void, unknown> {
+	async *stream(options?: InvokeOptions): AsyncGenerator<unknown, LLMAnswer | undefined, unknown> {
 		if (options?.messages) {
 			this.config.messages = options.messages;
 		}
@@ -423,10 +426,33 @@ export class RunPod implements StandardLLMShema {
 			input: this.buildInput(true)
 		};
 		const request = await this.endpoint.run(payload, this.config.requestTimeout);
+		let finalChunk: any = null;
 
 		for await (const chunk of this.endpoint.stream(request.id, this.config.streamTimeout)) {
+			finalChunk = chunk;
 			yield chunk;
 		}
+
+		// Try to extract usage from final results if available in the stream
+		let answer: LLMAnswer | undefined = undefined;
+		try {
+			// Some vLLM deployments return the final response as the last chunk
+			if (finalChunk && (finalChunk.output || finalChunk.usage)) {
+				answer = this.parseResponseToAnswer(finalChunk);
+			}
+		} catch (e) {
+			// Ignore errors for telemetry
+		}
+
+		if (answer) {
+			this.Tracker
+				.setAnswerActiveSpanAttribute(answer)
+				.finishTimeTracker()
+				.setUsage(answer.tokens);
+			return answer;
+		}
+
+		this.Tracker.finishTimeTracker();
 	}
 
 	async invoke(): Promise<LLMAnswer>;
@@ -437,29 +463,38 @@ export class RunPod implements StandardLLMShema {
 			this.config.messages = options.messages;
 		}
 
-		if (options?.stream) {
-			return this.stream(options);
-		}
-
-		const payload = {
-			input: this.buildInput(false)
-		};
-
-		const result = await withTelemetry(
-			`llm.run.runpod.${options?.stream ? 'stream' : 'invoke'}`,
+		return await withTelemetry(
+			`llm.run.runpod.${options?.stream ? "stream" : "invoke"}`,
 			{
 				"llm.provider": "runpod",
 				"llm.model": this.config.model,
-				"runpod.endpoint": this.config.endpointId
+				"runpod.endpoint": this.config.endpointId,
+				"llm.stream": !!options?.stream
 			},
 			async () => {
+				this.Tracker
+					.registerConfig()
+					.setUserQueryActiveSpanAttribute()
+					.registerTimeTracker();
+
+				if (options?.stream) {
+					return this.stream(options);
+				}
+
+				const payload = {
+					input: this.buildInput(false)
+				};
 				const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
 				const answer = this.parseResponseToAnswer(response);
-				recordTokenUsage("runpod", this.config.model, answer.tokens);
+
+				this.Tracker
+					.setAnswerActiveSpanAttribute(answer)
+					.finishTimeTracker()
+					.setUsage(answer.tokens);
+
 				return answer;
 			}
 		);
-		return result;
 	}
 
 	async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {

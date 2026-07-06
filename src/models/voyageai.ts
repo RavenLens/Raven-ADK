@@ -1,4 +1,5 @@
-import { EmbeddingModel, LLMConfig } from "./mutual";
+import { EmbeddingModel, LLMAnswer, LLMConfig } from "./mutual";
+import { withTelemetry, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
 
 export interface VoyageEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
     /** 
@@ -15,31 +16,59 @@ export class VoyageEmbedding implements EmbeddingModel {
     typeAPI: "model" = "model";
     apiName = { custom: "VoyageAI" } as const;
     config: VoyageEmbeddingConfig;
+    private Tracker: RecordTracker<VoyageEmbeddingConfig>;
 
     constructor(config: VoyageEmbeddingConfig) {
         this.config = config;
+        this.Tracker = new RecordTracker(this.config, RecordTrackerType.Embedding, "voyageai");
     }
 
     async embed(text: string | string[]): Promise<number[][]> {
-        const url = this.config.baseURL ?? "https://api.voyageai.com/v1/embeddings";
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${this.config.apiKey}`,
-                "Content-Type": "application/json"
+        return await withTelemetry(
+            `llm.embedding.voyageai`,
+            {
+                "llm.provider": "voyageai",
+                "llm.model": this.config.model,
+                "llm.task_query": text instanceof Array ? JSON.stringify(text, null, 4) : text
             },
-            body: JSON.stringify({
-                input: Array.isArray(text) ? text : [text],
-                model: this.config.model
-            })
-        });
+            async () => {
+                this.Tracker
+                    .registerConfig()
+                    .registerTimeTracker("embedding");
 
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`Voyage AI Embedding failed: ${response.status} ${response.statusText} - ${error}`);
-        }
+                const url = this.config.baseURL ?? "https://api.voyageai.com/v1/embeddings";
+                const response = await fetch(url, {
+                    method: "POST",
+                    headers: {
+                        "Authorization": `Bearer ${this.config.apiKey}`,
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({
+                        input: Array.isArray(text) ? text : [text],
+                        model: this.config.model
+                    })
+                });
 
-        const result = await response.json() as any;
-        return result.data.map((d: any) => d.embedding);
+                if (!response.ok) {
+                    const error = await response.text();
+                    throw new Error(`Voyage AI Embedding failed: ${response.status} ${response.statusText} - ${error}`);
+                }
+
+                const result = await response.json() as any;
+                const embedding = result.data.map((d: any) => d.embedding);
+                const tokens = {
+                    input: result.usage.total_tokens,
+                    output: 0,
+                    reasoning: 0
+                };
+
+                this.Tracker
+                    .finishTimeTracker()
+                    .setUsage(tokens)
+                    .setEmbeddingAnswer(embedding);
+
+                return embedding;
+            }
+        );
     }
 }
