@@ -10,6 +10,7 @@
 
 > Check documentation: [RavenADK Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
 
+
 Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor.
 
 #### RavenADK as default supports these SOTA Agentic patterns:
@@ -60,6 +61,10 @@ npm install @ravenlens/raven-adk
 
 ## GraphBased
 Use graph with this style to make your own workflow
+
+## Motivation for library
+<!-- TODO: Base on: https://www.ibm.com/think/insights/ai-adoption-challenges and current AI libraries compose motivation formula here -->
+Our motivation for Raven Agent-Developmenet-Kit is to build an ai-agentic library is cleaver in its engineering and gives programmers ability to ship an ai apps with sota patterns along a UI/UX experiences delivering via native-javascript appraoach is events propagation. Extension of standalone is also benefit of RavenADK - extend the basic functionality base on your needances and current kit documentation
 
 ```typescript
 import { Graph, GraphMarkers } from "@ravenlens/raven-adk/graph";
