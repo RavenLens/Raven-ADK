@@ -10,7 +10,7 @@ export interface GraphNodeExecutionResult<GraphState extends Record<string, any>
 
 type NodeLogic<GraphState extends Record<string, any>> = (graphState: GraphState, nodeId: string) => GraphNodeExecutionResult<GraphState> | Promise<GraphNodeExecutionResult<GraphState> | undefined> | undefined;
 
-interface GraphEvents<GraphState extends Record<string, any>> {
+export interface GraphEvents<GraphState extends Record<string, any>> {
     node_start: (nodeId: string, state: GraphState) => void | Promise<void>;
     node_end: (nodeId: string, state: GraphState) => void | Promise<void>;
     state_change: (nodeId: string, stateBefore: GraphState, stateAfter: GraphState) => void | Promise<void>;
@@ -34,6 +34,7 @@ export class Graph<GraphState extends Record<string, any>> {
     private NodeCompletionCounts: Record<string, number> = {};
     private HasReachedEnd = false;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private AnyEventListeners: ((eventName: string, ...args: any[]) => void | Promise<void>)[] = [];
     graphState: GraphState;
     
     constructor(graphState: GraphState) {
@@ -240,7 +241,18 @@ export class Graph<GraphState extends Record<string, any>> {
         return this;
     }
 
+    onAnyEvent(eventListener: (eventName: string, ...args: any[]) => void | Promise<void>): this {
+        this.AnyEventListeners.push(eventListener);
+        return this;
+    }
+
     protected emitEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, ...eventArgs: Parameters<GraphEvents<GraphState>[EventName]>) {
+        for (const anyListener of this.AnyEventListeners) {
+            void Promise.resolve(anyListener(eventName as string, ...eventArgs)).catch((error) => {
+                console.warn(`Catch-all event listener failed during execution for event "${String(eventName)}".`, error);
+            });
+        }
+
         const eventListener = this.EventsListeners[eventName];
 
         if (!eventListener) {

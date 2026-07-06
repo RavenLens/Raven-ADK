@@ -1,4 +1,4 @@
-import { Graph, GraphMarkers } from "../graph";
+import { Graph, GraphEvents, GraphMarkers } from "../graph";
 import { Anthropic } from "../models/anthropic";
 import { InvokeOptions, LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
@@ -17,6 +17,7 @@ import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
 import { TelemetryProviderSchema } from "../telemetry/providers/schema";
 import { tokenCounter, agentRunCounter, withTelemetry, tracer, recordLog, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
+import { trace } from "@opentelemetry/api";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -121,6 +122,8 @@ interface ReActAgentEvents extends SkillEvents {
     concluding_end: (conclusion: string) => void | Promise<void>;
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
     plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => void | Promise<void>;
+    /** Error event */
+    error: (error: any) => void | Promise<void>;
 }
 
 interface ReActAgentInvokeResult {
@@ -161,6 +164,9 @@ interface ReActAgentStreamEventMap {
         content: {
             conclusion: string;
         };
+    };
+    error: {
+        content: any;
     };
 }
 
@@ -219,14 +225,20 @@ export class ReActAgent
 > {
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private AnyEventListeners: ((eventName: string, ...args: any[]) => void | Promise<void>)[] = [];
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
+    private TelemetryTracker: RecordTracker<ReActAgentConfig<Skills, Memory, HITL>> | undefined = undefined;
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
     agentMemoryInterface: MemoryInterface<Memory> | undefined = undefined;
     /** It's overall amount of used tokens by the ReAct agent */
-    private Tracker: RecordTracker<ReActAgentConfig<Skills, Memory, HITL>>;
     usedTokens: LLMAnswer["tokens"];
+    /** Contains all activity of agent registered. Access it to get log */
+    AgentReasoningPath: { event: string; isGraphEvent?: boolean; attributes: any[], timestamp: number; timezone: string; }[] = [];
 
+    /** Collective token usage by type and model */
+    private particularTokenUsage: Record<string, LLMAnswer["tokens"]> = {};
+    /**  */
     private cachedWrappedSystemPrompt?: string;
     private cachedUserSystemPrompt?: string;
     private cachedToolsCount?: number;
@@ -251,10 +263,13 @@ export class ReActAgent
             output: 0,
             reasoning: 0
         };
-        this.Tracker = new RecordTracker(this.agentConfig, RecordTrackerType.Agent, "react_agent");
+
+        if (config.telemetry) {
+            this.TelemetryTracker = new RecordTracker(this.agentConfig, RecordTrackerType.Agent, "react_agent");
+        }
 
         // Registers config
-        tracer.startActiveSpan("agent.config", (span) => {
+        tracer.startActiveSpan("agent.config_constructor_details", (span) => {
             span.setAttribute("config.body", JSON.stringify(this.agentConfig, null, 4));
             span.setAttribute("agent.task_query", config.messages.at(-1)?.content ?? "");
             span.setAttribute("agent.main_model", config.model.config.model);
@@ -305,7 +320,7 @@ export class ReActAgent
                 this.emitEvent("reasoning", content);
             });
         }
-
+        
         // Add skills exploration feature to standalone agent
         if (this.agentSkillsInterface) {
             const exploreSkillTools = this.agentSkillsInterface.createExploreSkillsAgentTools();
@@ -373,7 +388,6 @@ export class ReActAgent
         this.synchronizeModelConfig();
 
         const reactAgentGraph = new Graph<AgentMessagesGraphState>({});
-
         reactAgentGraph
             .addNode("main_node", async state => {
                 let currentState = state;
@@ -417,7 +431,7 @@ export class ReActAgent
                     ...state.modelOptions
                 });
 
-                this.calculateUsedTokens(modelInvoke);
+                this.calculateUsedTokens("agent", modelInvoke);
                 this.agentConfig.messages = modelInvoke.messages;
                 this.emitEvent("llm_result", modelInvoke);
 
@@ -544,7 +558,14 @@ export class ReActAgent
 
                                 const result = await subagent.invoke();
 
-                                this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
+                                // 
+                                this.calculateUsedTokens(
+                                    "subagent",
+                                    { tokens: subagent.usedTokens } as LLMAnswer,
+                                    agent.model.config.model,
+                                    agent.role,
+                                    true
+                                );
 
                                 // Detect if subagent requested an internal recall
                                 const subagentRecall = this.parseRecallInstruction(result.messages);
@@ -870,7 +891,13 @@ export class ReActAgent
 
                     const result = await subagent.invoke();
 
-                    this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
+                    this.calculateUsedTokens(
+                        "subagent",
+                        { tokens: subagent.usedTokens } as LLMAnswer,
+                        agent.model.config.model,
+                        agent.role,
+                        true
+                    );
 
                     // Detect if subagent requested an internal recall for the main node
                     const subagentRecall = this.parseRecallInstruction(result.messages);
@@ -944,6 +971,36 @@ export class ReActAgent
         }
         
         this.AgentGraph = reactAgentGraph;
+
+        // Register each model reasoning and include in `AgentReasoningPath`
+        this.recordGraphReasoningPath();
+    }
+
+    /** Record everything was emitted for ReAct Agent */
+    private recordGraphReasoningPath() {
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        
+        /**  Registers graph events */
+        this.AgentGraph.onAnyEvent((eventName, ...args) => {
+            this.AgentReasoningPath.push({
+                event: eventName,
+                isGraphEvent: true,
+                attributes: args,
+                timezone: timezone,
+                timestamp: Date.now(),
+            });
+        });
+
+        /** Registers each ReActAgent event */
+        this.onAnyEvent((eventName, ...args) => {
+            this.AgentReasoningPath.push({
+                event: eventName,
+                isGraphEvent: false,
+                attributes: args,
+                timezone: timezone,
+                timestamp: Date.now(),
+            });
+        });
     }
 
     private async buildWrappedSystemPrompt(userSystemPrompt: string): Promise<string> {
@@ -1225,7 +1282,8 @@ ${memoryConclusionSystemPrompt}
             const conclusionResult = await this.agentConfig.model.invoke({
                 messages: this.agentConfig.model.config.messages
             });
-            this.calculateUsedTokens(conclusionResult);
+
+            this.calculateUsedTokens("conclusion", conclusionResult);
 
             this.emitEvent("llm_result", conclusionResult);
 
@@ -1280,7 +1338,7 @@ ${memoryConclusionSystemPrompt}
             ];
 
             const structuredResult = await this.agentConfig.model.invokeStructuredOutput(zodSchema, retriesCount);
-            this.calculateUsedTokens(structuredResult);
+            this.calculateUsedTokens("conclusion", structuredResult);
             this.emitEvent("llm_result", structuredResult);
 
             const aiMessage = structuredResult.answer.find(
@@ -1381,6 +1439,11 @@ ${memoryConclusionSystemPrompt}
                         conclusion: eventArgs[0] as string
                     }
                 };
+            case "error":
+                return {
+                    event: "error",
+                    content: eventArgs[0]
+                };
             default:
                 return null;
         }
@@ -1399,6 +1462,14 @@ ${memoryConclusionSystemPrompt}
         return this;
     }
 
+    onAnyEvent(
+        eventListener: (eventName: string, ...args: any[]) => void | Promise<void>
+    ): this {
+        this.AnyEventListeners.push(eventListener);
+        return this;
+    }
+
+    // TODO: today only one event can be registered of same type and each next overrides old - fix it then
     protected emitEvent<EventName extends keyof ReActAgentEvents>(
         eventName: EventName,
         ...eventArgs: Parameters<ReActAgentEvents[EventName]>
@@ -1408,6 +1479,19 @@ ${memoryConclusionSystemPrompt}
         // Emit stream event
         if (streamEvent) {
             this.emitStreamEvent(streamEvent);
+        }
+
+        for (const anyListener of this.AnyEventListeners) {
+            void Promise.resolve(anyListener(eventName as string, ...eventArgs)).catch(
+                (error) => {
+                    console.warn(
+                        `Catch-all event listener failed during execution for event "${String(
+                            eventName
+                        )}".`,
+                        error
+                    );
+                }
+            );
         }
 
         const eventListener = this.EventsListeners[eventName];
@@ -1423,25 +1507,46 @@ ${memoryConclusionSystemPrompt}
         });
     }
 
-    calculateUsedTokens(llmAnswer: LLMAnswer) {
+    calculateUsedTokens(
+        type: "agent" | "subagent" | "conclusion",
+        llmAnswer: LLMAnswer,
+        modelName?: string,
+        subagentName?: string,
+        skipMetrics = false
+    ) {
+        const actualModelName = modelName ?? this.agentConfig.model.config.model;
+
+        // Collective usage calculus
         this.usedTokens = {
             input: this.usedTokens.input + llmAnswer.tokens.input,
             output: this.usedTokens.output + llmAnswer.tokens.output,
             reasoning: this.usedTokens.reasoning + llmAnswer.tokens.reasoning
         };
 
+        // Usage for partocular entry
+        const collectiveKey = `${type}:${actualModelName}${subagentName ? `:${subagentName}` : ""}`;
+        if (!this.particularTokenUsage[collectiveKey]) {
+            this.particularTokenUsage[collectiveKey] = { input: 0, output: 0, reasoning: 0 };
+        }
+        this.particularTokenUsage[collectiveKey].input += llmAnswer.tokens.input;
+        this.particularTokenUsage[collectiveKey].output += llmAnswer.tokens.output;
+        this.particularTokenUsage[collectiveKey].reasoning += llmAnswer.tokens.reasoning;
+
+        if (skipMetrics) return;
+
         // Record to OpenTelemetry Metrics
-        const modelName = this.agentConfig.model.config.model;
-        tokenCounter.add(llmAnswer.tokens.input, { type: "input", model: modelName });
-        tokenCounter.add(llmAnswer.tokens.output, { type: "output", model: modelName });
+        tokenCounter.add(llmAnswer.tokens.input, { type: "input", model: actualModelName, subagentName: subagentName || undefined, phase: type });
+        tokenCounter.add(llmAnswer.tokens.output, { type: "output", model: actualModelName, subagentName: subagentName || undefined, phase: type });
 
         if (llmAnswer.tokens.reasoning > 0) {
-            tokenCounter.add(llmAnswer.tokens.reasoning, { type: "reasoning", model: modelName });
+            tokenCounter.add(llmAnswer.tokens.reasoning, { type: "reasoning", model: actualModelName, subagentName: subagentName || undefined, phase: type });
         }
 
         recordLog({
             event: "token_usage",
-            model: modelName,
+            model: actualModelName,
+            subagentName: subagentName || undefined,
+            phase: type,
             tokens: llmAnswer.tokens
         });
     }
@@ -1478,11 +1583,19 @@ ${memoryConclusionSystemPrompt}
         return await withTelemetry("agent.react_run", {
             model: this.agentConfig.model.config.model,
             parallel_tools: !!this.agentConfig.parallelTools
-        }, async () => {
+        }, async (span) => {
             agentRunCounter.add(1);
 
-            this.Tracker
-                .registerConfig()
+            // Starts from begining for this call
+            /// ... Resets tokens usage
+            this.usedTokens = { input: 0, output: 0, reasoning: 0 };
+            this.particularTokenUsage = {};
+
+            /// ... Resets Path of reasoning
+            this.AgentReasoningPath = [];
+
+            // Setups
+            this.TelemetryTracker?.registerConfig()
                 .setUserQueryActiveSpanAttribute()
                 .registerTimeTracker();
 
@@ -1514,8 +1627,7 @@ ${memoryConclusionSystemPrompt}
                     messages: this.agentConfig.messages
                 };
 
-                this.Tracker
-                    .setAnswerActiveSpanAttribute({
+                this.TelemetryTracker?.setAnswerActiveSpanAttribute({
                         answer: result.messages, // Agent result doesn't quite map to LLMAnswer answer but we can leave it empty or map it
                         messages: this.agentConfig.messages,
                         tokens: this.usedTokens
@@ -1523,7 +1635,10 @@ ${memoryConclusionSystemPrompt}
                     .finishTimeTracker()
                     .setUsage(this.usedTokens);
 
+                span?.setAttribute("agent_reasoning_path", JSON.stringify(this.AgentReasoningPath, null, 4))
+
                 const activeSpan = tracer.startActiveSpan("agent.finalize", (span) => {
+                    span.setAttribute("agent.graph_path", JSON.stringify(this.AgentReasoningPath));
                     span.setAttribute("agent.total_tokens_input", this.usedTokens.input);
                     span.setAttribute("agent.total_tokens_output", this.usedTokens.output);
                     span.setAttribute("agent.total_tokens_reasoning", this.usedTokens.reasoning);
@@ -1543,7 +1658,17 @@ ${memoryConclusionSystemPrompt}
                     messages: this.agentConfig.messages,
                     state: this.AgentGraph.getState()
                 };
-            } finally {
+            } 
+            catch(err: any) {
+                this.emitEvent("error", err);
+                recordLog({
+                    event: "agent_error",
+                    error: err.message || err,
+                    stack: err.stack
+                });
+                throw err;
+            }
+            finally {
                 // Automatically flush/send data via the provider schema
                 if (this.agentConfig.telemetry) {
                     await this.agentConfig.telemetry?.send();
@@ -1625,5 +1750,12 @@ ${memoryConclusionSystemPrompt}
 
     public get messages() {
         return this.agentConfig.messages;
+    }
+
+    public get tokenUsageSummary() {
+        return {
+            total: this.usedTokens,
+            collective: this.particularTokenUsage
+        };
     }
 }
