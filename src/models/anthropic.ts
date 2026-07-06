@@ -1,12 +1,13 @@
-import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
 import { MessageParam, Tool, ToolUseBlock, TextBlock } from "@anthropic-ai/sdk/resources/messages";
 import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
-import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
+import { AIMessage, ReasoningMessage, ToolMessage } from "../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
+import { withTelemetry, RecordTracker, RecordTrackerType, recordLog } from "../telemetry/telemetry";
+import { TelemetryProviderSchema } from "../telemetry/providers/schema";
 
 // Defined locally if not exported from SDK or just to be safe
 interface ThinkingBlock {
@@ -19,10 +20,12 @@ export interface AnthropicConfig extends LLMConfig {
     thinking?: ThinkingConfigParam;
     /** As default max tokens are 1024 */
     max_tokens?: number;
+    telemetry?: TelemetryProviderSchema;
 }
 
 export interface AnthropicEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
     model: string;
+    telemetry?: TelemetryProviderSchema;
 }
 
 interface AnthropicAIEvents {
@@ -35,12 +38,14 @@ export class Anthropic implements StandardLLMShema {
     apiName = "Anthropic" as const;
     baseURL?: string;
     config: AnthropicConfig;
+    telemetry?: TelemetryProviderSchema;
     private anthropic: AnthropicStandalone;
     private EventsListeners: Partial<{ [EventName in keyof AnthropicAIEvents]: AnthropicAIEvents[EventName] }> = {};
     private Tracker: RecordTracker<AnthropicConfig>;
     
     constructor(config: AnthropicConfig, baseURL?: string) {
         this.config = config;
+        this.telemetry = config.telemetry;
         this.baseURL = config.baseURL ?? baseURL;
 
         this.anthropic = new AnthropicStandalone({
@@ -378,51 +383,135 @@ export class Anthropic implements StandardLLMShema {
                 "llm.model": this.config.model,
             },
             async () => {
-                this.Tracker
-                    .registerConfig()
-                    .setUserQueryActiveSpanAttribute()
-                    .registerTimeTracker();
-
-                if (options?.stream) {
-                    const streamCompletion = this.anthropic.messages.stream(config);
-                    return this.streamWithEvents(streamCompletion);
-                } else {
-                    // Execute llm
-                    const completion = await this.anthropic.messages.create(config);
-                    const answer = this.prepareSyncAnswer(completion);
+                try {
                     this.Tracker
-                        .setAnswerActiveSpanAttribute(answer)
-                        .finishTimeTracker()
-                        .setUsage(answer.tokens);
-                    return answer;
+                        .registerConfig()
+                        .setUserQueryActiveSpanAttribute()
+                        .registerTimeTracker();
+
+                    if (options?.stream) {
+                        const streamCompletion = this.anthropic.messages.stream(config);
+                        return this.streamWithEvents(streamCompletion);
+                    } else {
+                        // Execute llm
+                        const completion = await this.anthropic.messages.create(config);
+                        const answer = this.prepareSyncAnswer(completion);
+                        this.Tracker
+                            .setAnswerActiveSpanAttribute(answer)
+                            .finishTimeTracker()
+                            .setUsage(answer.tokens);
+                        
+                        recordLog({
+                            event: "llm_invoke_success",
+                            model: this.config.model,
+                            tokens: answer.tokens
+                        });
+
+                        return answer;
+                    }
+                } catch (error: any) {
+                    recordLog({
+                        event: "llm_invoke_error",
+                        model: this.config.model,
+                        error: error.message || error,
+                        stack: error.stack
+                    });
+                    throw error;
+                } finally {
+                    if (this.telemetry) {
+                        await this.telemetry.send();
+                    }
                 }
             }
         );
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
-        return invokeStructuredOutputWithRetries({
-            schema,
-            maxRecallTries,
-            messages: this.config.messages,
-            getTools: () => this.config.tools,
-            setMessages: (messages) => {
-                this.config.messages = messages;
-            },
-            setTools: (tools) => {
-                this.config.tools = tools;
-            },
-            invoke: () => this.invoke()
+        return await withTelemetry(`llm.run.anthropic.structured_output`, {
+            model: this.config.model,
+            schema: (schema as any).name || "unnamed_schema"
+        }, async () => {
+            try {
+                const result = await invokeStructuredOutputWithRetries({
+                    schema,
+                    maxRecallTries,
+                    messages: this.config.messages,
+                    getTools: () => this.config.tools,
+                    setMessages: (messages) => {
+                        this.config.messages = messages;
+                    },
+                    setTools: (tools) => {
+                        this.config.tools = tools;
+                    },
+                    invoke: () => this.invoke()
+                });
+
+                recordLog({
+                    event: "llm_structured_output_success",
+                    model: this.config.model,
+                    tokens: result.tokens
+                });
+
+                return result;
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_structured_output_error",
+                    model: this.config.model,
+                    error: error.message || error,
+                    stack: error.stack
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
         });
     }
 
     /** Anthropic doesn't provide tts */
     async tts(text: string): Promise<Buffer> {
-        throw new Error("TTS is not supported by Anthropic provider in Raven ADK.");
+        return await withTelemetry(`llm.run.anthropic.tts`, {
+            model: this.config.model
+        }, async () => {
+            try {
+                this.Tracker.registerTimeTracker();
+                throw new Error("TTS is not supported by Anthropic provider in Raven ADK.");
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_tts_error",
+                    model: this.config.model,
+                    error: error.message || error
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
+        });
     }
 
     /** Anthropic doesn't provide stt */
     async stt(speechFile: File, options?: any): Promise<string> {
-        throw new Error("STT is not supported by Anthropic provider in Raven ADK.");
+        return await withTelemetry(`llm.run.anthropic.stt`, {
+            model: this.config.model
+        }, async () => {
+            try {
+                this.Tracker.registerTimeTracker();
+                throw new Error("STT is not supported by Anthropic provider in Raven ADK.");
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_stt_error",
+                    model: this.config.model,
+                    error: error.message || error
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
+        });
     }
 }

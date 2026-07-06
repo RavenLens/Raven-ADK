@@ -3,7 +3,8 @@ import * as z from "zod";
 import { AIMessage, ResponseInputVideo } from "../agent/state";
 import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
+import { withTelemetry, RecordTracker, RecordTrackerType, recordLog } from "../telemetry/telemetry";
+import { TelemetryProviderSchema } from "../telemetry/providers/schema";
 
 export interface RunPodConfig extends LLMConfig {
 	endpointId: string;
@@ -20,6 +21,7 @@ export interface RunPodConfig extends LLMConfig {
 	 * Timeout in milliseconds for streaming polling.
 	 */
 	streamTimeout?: number;
+	telemetry?: TelemetryProviderSchema;
 }
 
 type RunPodChatMessage = {
@@ -45,6 +47,7 @@ export class RunPod implements StandardLLMShema {
 	typeAPI: "model" = "model";
 	apiName = { custom: "RunPod" } as const;
 	config: RunPodConfig;
+	telemetry?: TelemetryProviderSchema;
 	baseURL?: string;
 
 	private endpoint: RunPodEndpoint;
@@ -52,6 +55,7 @@ export class RunPod implements StandardLLMShema {
 
 	constructor(config: RunPodConfig, baseURL?: string) {
 		this.config = config;
+		this.telemetry = config.telemetry;
 		this.baseURL = config.baseURL ?? baseURL;
 
 		if (!this.config.apiKey) {
@@ -472,52 +476,135 @@ export class RunPod implements StandardLLMShema {
 				"llm.stream": !!options?.stream
 			},
 			async () => {
-				this.Tracker
-					.registerConfig()
-					.setUserQueryActiveSpanAttribute()
-					.registerTimeTracker();
+				try {
+					this.Tracker
+						.registerConfig()
+						.setUserQueryActiveSpanAttribute()
+						.registerTimeTracker();
 
-				if (options?.stream) {
-					return this.stream(options);
+					if (options?.stream) {
+						return this.stream(options);
+					}
+
+					const payload = {
+						input: this.buildInput(false)
+					};
+					const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
+					const answer = this.parseResponseToAnswer(response);
+
+					this.Tracker
+						.setAnswerActiveSpanAttribute(answer)
+						.finishTimeTracker()
+						.setUsage(answer.tokens);
+					
+					recordLog({
+						event: "llm_invoke_success",
+						model: this.config.model,
+						tokens: answer.tokens
+					});
+
+					return answer;
+				} catch (error: any) {
+					recordLog({
+						event: "llm_invoke_error",
+						model: this.config.model,
+						error: error.message || error,
+						stack: error.stack
+					});
+					throw error;
+				} finally {
+					if (this.telemetry) {
+						await this.telemetry.send();
+					}
 				}
-
-				const payload = {
-					input: this.buildInput(false)
-				};
-				const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
-				const answer = this.parseResponseToAnswer(response);
-
-				this.Tracker
-					.setAnswerActiveSpanAttribute(answer)
-					.finishTimeTracker()
-					.setUsage(answer.tokens);
-
-				return answer;
 			}
 		);
 	}
 
 	async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
-		return invokeStructuredOutputWithRetries({
-			schema,
-			maxRecallTries,
-			messages: this.config.messages,
-			getTools: () => this.config.tools,
-			setMessages: (messages) => {
-				this.config.messages = messages;
-			},
-			setTools: (tools) => {
-				this.config.tools = tools;
-			},
-			invoke: () => this.invoke()
+		return await withTelemetry(`llm.run.runpod.structured_output`, {
+			model: this.config.model,
+			schema: (schema as any).name || "unnamed_schema"
+		}, async () => {
+			try {
+				const result = await invokeStructuredOutputWithRetries({
+					schema,
+					maxRecallTries,
+					messages: this.config.messages,
+					getTools: () => this.config.tools,
+					setMessages: (messages) => {
+						this.config.messages = messages;
+					},
+					setTools: (tools) => {
+						this.config.tools = tools;
+					},
+					invoke: () => this.invoke()
+				});
+
+				recordLog({
+					event: "llm_structured_output_success",
+					model: this.config.model,
+					tokens: result.tokens
+				});
+
+				return result;
+			} catch (error: any) {
+				recordLog({
+					event: "llm_structured_output_error",
+					model: this.config.model,
+					error: error.message || error,
+					stack: error.stack
+				});
+				throw error;
+			} finally {
+				if (this.telemetry) {
+					await this.telemetry.send();
+				}
+			}
 		});
 	}
 
     async tts(text: string): Promise<Buffer> {
-        throw new Error("TTS is not supported by RunPod provider in Raven ADK.");
+        return await withTelemetry(`llm.run.runpod.tts`, {
+			model: this.config.model
+		}, async () => {
+			try {
+				this.Tracker.registerTimeTracker();
+				throw new Error("TTS is not supported by RunPod provider in Raven ADK.");
+			} catch (error: any) {
+				recordLog({
+					event: "llm_tts_error",
+					model: this.config.model,
+					error: error.message || error
+				});
+				throw error;
+			} finally {
+				if (this.telemetry) {
+					await this.telemetry.send();
+				}
+			}
+		});
     }
 
     async stt(speechFile: File, options?: any): Promise<string> {
-        throw new Error("STT is not supported by RunPod provider in Raven ADK.");
+        return await withTelemetry(`llm.run.runpod.stt`, {
+			model: this.config.model
+		}, async () => {
+			try {
+				this.Tracker.registerTimeTracker();
+				throw new Error("STT is not supported by RunPod provider in Raven ADK.");
+			} catch (error: any) {
+				recordLog({
+					event: "llm_stt_error",
+					model: this.config.model,
+					error: error.message || error
+				});
+				throw error;
+			} finally {
+				if (this.telemetry) {
+					await this.telemetry.send();
+				}
+			}
+		});
     }
 }

@@ -714,12 +714,26 @@ export class ReActAgent
                                 try {
                                     const allowance = await hitlTransport.emitToolUsage(toolName);
 
+                                    recordLog({
+                                        event: "hitl_tool_approval",
+                                        toolName,
+                                        allowance: allowance,
+                                        timestamp: Math.floor(Date.now() / 1000)
+                                    });
+
                                     return {
                                         callIndex,
                                         allowance
                                     };
                                 } catch (error) {
                                     const errorMessage = error instanceof Error ? error.message : "Unknown HITL approval error";
+
+                                    recordLog({
+                                        event: "hitl_tool_approval_error",
+                                        toolName,
+                                        error: errorMessage,
+                                        timestamp: Math.floor(Date.now() / 1000)
+                                    });
 
                                     return {
                                         callIndex,
@@ -786,11 +800,27 @@ export class ReActAgent
 
                         this.emitEvent("tool_invoked", toolName, toolParams);
 
+                        recordLog({
+                            event: "tool_call_registered",
+                            toolName,
+                            toolParams,
+                            timestamp: Math.floor(Date.now() / 1000),
+                            status: "invoked"
+                        });
+
                         try {
                             const toolOutput = definedTool instanceof MCPTool
                                 ? await definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
                                 : await definedTool.invoke(toolParams as never);
                             this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
+
+                            recordLog({
+                                event: "tool_call_registered",
+                                toolName,
+                                toolParams,
+                                timestamp: Math.floor(Date.now() / 1000),
+                                status: "executed"
+                            });
 
                             return {
                                 ...tool,
@@ -802,6 +832,15 @@ export class ReActAgent
                         } catch (error) {
                             const errorMessage = error instanceof Error ? error.message : "Unknown tool execution error";
                             const toolFailureOutput = `Tool "${toolName}" failed during execution: ${errorMessage}`;
+
+                            recordLog({
+                                event: "tool_call_registered",
+                                toolName,
+                                toolParams,
+                                timestamp: Math.floor(Date.now() / 1000),
+                                status: "failed",
+                                error: errorMessage
+                            });
 
                             return {
                                 ...tool,

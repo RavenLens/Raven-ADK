@@ -3,6 +3,7 @@ import * as z from "zod";
 import { Server, Socket } from "socket.io";
 import { DEFAULT_ABC_ANSWERS_RANGE, EmitToolUsageBody, HITLConfigSchema, HITLToolAllowancePossibleAnswer, HITLTransportSchema } from "../hitlToolSchema";
 import { tool, Tool } from "../../tools";
+import { recordLog } from "../../../../telemetry/telemetry";
 
 const DEFAULT_SOCKETIO_PORT = 3000;
 const HITL_ABC_QUESTION_TOOL_NAME = "hitl_ask_abc_question";
@@ -68,6 +69,12 @@ export class HITLSocketIo implements HITLTransportSchema {
         this.config = config;
         this.questionHITLPrompt = this.buildQuestionPrompt();
         this.runServer();
+
+        recordLog({
+            event: "hitl_config",
+            type: "socket.io",
+            config: config
+        });
     }
 
     private buildQuestionPrompt() {
@@ -91,6 +98,7 @@ export class HITLSocketIo implements HITLTransportSchema {
     private runServer() {
         const httpServer = createServer();
         const io = new Server(httpServer);
+        const PORT = this.config.port || DEFAULT_SOCKETIO_PORT;
 
         if (this.config.socketServerMiddleware) {
             this.config.socketServerMiddleware.forEach(middleware => {
@@ -110,7 +118,12 @@ export class HITLSocketIo implements HITLTransportSchema {
             this.connectionSocket = socket;
         });
         
-        httpServer.listen(this.config.port || DEFAULT_SOCKETIO_PORT);
+        recordLog({
+            event: "hitl_run_server",
+            type: "socket.io",
+            port: PORT
+        });
+        httpServer.listen(PORT);
     }
 
     emitAbcQuestion(question: string, abcOptions: [string, string][]) {
@@ -136,6 +149,12 @@ export class HITLSocketIo implements HITLTransportSchema {
                 question,
                 abcOptions,
                 (answer: [string, string]) => {
+                    recordLog({
+                        event: "hitl_abc_question_result",
+                        question,
+                        answer,
+                        timestamp: Math.floor(Date.now() / 1000)
+                    });
                     res(answer);
                 }
             );
@@ -152,6 +171,12 @@ export class HITLSocketIo implements HITLTransportSchema {
                 "openQuestion" as HITLEvents,
                 question,
                 (answer: string) => {
+                    recordLog({
+                        event: "hitl_open_question_result",
+                        question,
+                        answer,
+                        timestamp: Math.floor(Date.now() / 1000)
+                    });
                     res(answer);
                 }
             );
@@ -173,7 +198,14 @@ export class HITLSocketIo implements HITLTransportSchema {
                 (allowanceAnswer: HITLToolAllowancePossibleAnswer) => {
                     if (!isAnswer) {
                         isAnswer = true;
-                        return res({ answer: allowanceAnswer, reason: "user_answer" });
+                        const obj = { answer: allowanceAnswer, reason: "user_answer" } satisfies EmitToolUsageBody;
+                        
+                        recordLog({
+                            ...obj,
+                            event: "hitl_tool_usage_result",
+                            timestamp: Math.floor(Date.now() / 1000)
+                        });
+                        return res(obj);
                     }
                 }
             );
@@ -205,6 +237,13 @@ export class HITLSocketIo implements HITLTransportSchema {
                 question,
                 context,
                 (answer: HITLToolAllowancePossibleAnswer) => {
+                    recordLog({
+                        event: "hitl_acceptance_result",
+                        question,
+                        context,
+                        answer,
+                        timestamp: Math.floor(Date.now() / 1000)
+                    });
                     res(answer);
                 }
             );

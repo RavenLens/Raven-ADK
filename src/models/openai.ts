@@ -7,7 +7,8 @@ import { AIMessage, ToolMessage, ResponseInputVideo, ReasoningMessage } from "..
 import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, recordTokenUsage, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
+import { withTelemetry, recordTokenUsage, RecordTracker, RecordTrackerType, recordLog } from "../telemetry/telemetry";
+import { TelemetryProviderSchema } from "../telemetry/providers/schema";
 
 export interface OpenAIConfig extends LLMConfig {
     reasoningEffort?: ReasoningEffort | null;
@@ -16,10 +17,12 @@ export interface OpenAIConfig extends LLMConfig {
      * Useful for base models that don't support chat templates.
      */
     useCompletionsApi?: boolean;
+    telemetry?: TelemetryProviderSchema;
 }
 
 export interface OpenAIEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
     model: "text-embedding-3-small" | "text-embedding-3-large" | "text-embedding-ada-002" | (string & {});
+    telemetry?: TelemetryProviderSchema;
 }
 
 interface OpenAIEvents {
@@ -35,12 +38,14 @@ export class OpenAI implements StandardLLMShema {
     apiName = "OpenAI" as const;
     config: OpenAIConfig;
     baseURL?: string;
+    telemetry?: TelemetryProviderSchema | undefined;
     private openai: OpenAIStandalone;
     private EventsListeners: Partial<{ [EventName in keyof OpenAIEvents]: OpenAIEvents[EventName] }> = {};
     private Tracker: RecordTracker<OpenAIConfig>;
 
     constructor(config: OpenAIConfig, baseURL?: string) {
         this.config = config;
+        this.telemetry = config.telemetry;
         this.baseURL = config.baseURL ?? baseURL;
 
         this.openai = new OpenAIStandalone({
@@ -506,112 +511,211 @@ export class OpenAI implements StandardLLMShema {
             model: this.config.model,
             stream: !!options?.stream
         }, async () => {
-            this.Tracker
-                .registerConfig()
-                .setUserQueryActiveSpanAttribute()
-                .registerTimeTracker();
-            
-            if (this.isLegacy) {
-                if (options?.stream) {
-                    // For now, we don't support streaming events for legacy chat completions 
-                    // because the types are quite different and require more extensive mapping.
-                    throw new Error("Streaming is not yet supported for legacy OpenAI compatible providers in Raven ADK.");
-                }
+            try {
+                this.Tracker
+                    .registerConfig()
+                    .setUserQueryActiveSpanAttribute()
+                    .registerTimeTracker();
+                
+                if (this.isLegacy) {
+                    if (options?.stream) {
+                        // For now, we don't support streaming events for legacy chat completions 
+                        // because the types are quite different and require more extensive mapping.
+                        throw new Error("Streaming is not yet supported for legacy OpenAI compatible providers in Raven ADK.");
+                    }
 
-                if (this.useCompletions) {
-                    const response = await this.openai.completions.create({
+                    if (this.useCompletions) {
+                        const response = await this.openai.completions.create({
+                            model: this.config.model,
+                            prompt: this.prepareCompletionInput(),
+                            stream: false
+                        });
+                        const result = this.parseCompletionResponseToAnswer(response);
+                        
+                        this.Tracker
+                            .setAnswerActiveSpanAttribute(result)
+                            .setUsage(result.tokens);
+                        
+                        return result;
+                    }
+
+                    const response = await this.openai.chat.completions.create({
                         model: this.config.model,
-                        prompt: this.prepareCompletionInput(),
-                        stream: false
-                    });
-                    const result = this.parseCompletionResponseToAnswer(response);
+                        messages: this.prepareChatInput(),
+                        tools: this.prepareChatTools().length > 0 ? this.prepareChatTools() : undefined,
+                        stream: false,
+                        reasoning_effort: options?.reasoning?.effort ?? undefined
+                    } as any);
+
+                    const result = this.parseChatResponseToAnswer(response);
                     
                     this.Tracker
                         .setAnswerActiveSpanAttribute(result)
                         .setUsage(result.tokens);
-                    
+
                     return result;
                 }
+                
+                const basePayload = this.prepareCreatePayload(options?.reasoning);
 
-                const response = await this.openai.chat.completions.create({
-                    model: this.config.model,
-                    messages: this.prepareChatInput(),
-                    tools: this.prepareChatTools().length > 0 ? this.prepareChatTools() : undefined,
-                    stream: false,
-                    reasoning_effort: options?.reasoning?.effort ?? undefined
-                } as any);
+                if (options?.stream) {
+                    const streamPayload: ResponsesAPI.ResponseCreateParamsStreaming = {
+                        ...basePayload,
+                        stream: true
+                    };
 
-                const result = this.parseChatResponseToAnswer(response);
+                    const stream = await this.openai.responses.create(streamPayload);
+
+                    return this.streamWithEvents(stream);
+                }
+
+                const responsePayload: ResponsesAPI.ResponseCreateParamsNonStreaming = {
+                    ...basePayload,
+                    stream: false
+                };
+
+                const response = await this.openai.responses.create(responsePayload);
+                const result = this.parseResponseToAnswer(response);
                 
                 this.Tracker
                     .setAnswerActiveSpanAttribute(result)
+                    .finishTimeTracker()
                     .setUsage(result.tokens);
-
+                
                 return result;
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_error",
+                    provider: "openai",
+                    model: this.config.model,
+                    error: error.message || error,
+                    stack: error.stack
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
             }
-            
-            const basePayload = this.prepareCreatePayload(options?.reasoning);
-
-            if (options?.stream) {
-                const streamPayload: ResponsesAPI.ResponseCreateParamsStreaming = {
-                    ...basePayload,
-                    stream: true
-                };
-
-                const stream = await this.openai.responses.create(streamPayload);
-
-                return this.streamWithEvents(stream);
-            }
-
-            const responsePayload: ResponsesAPI.ResponseCreateParamsNonStreaming = {
-                ...basePayload,
-                stream: false
-            };
-
-            const response = await this.openai.responses.create(responsePayload);
-            const result = this.parseResponseToAnswer(response);
-            
-            this.Tracker
-                .setAnswerActiveSpanAttribute(result)
-                .finishTimeTracker()
-                .setUsage(result.tokens);
-            
-            return result;
         });
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
-        return invokeStructuredOutputWithRetries({
-            schema,
-            maxRecallTries,
-            messages: this.config.messages,
-            getTools: () => this.config.tools,
-            setMessages: (messages) => {
-                this.config.messages = messages;
-            },
-            setTools: (tools) => {
-                this.config.tools = tools;
-            },
-            invoke: () => this.invoke()
+        return await withTelemetry(`llm.run.openai.structured_output`, {
+            model: this.config.model,
+            schema: (schema as any).name || "unnamed_schema"
+        }, async () => {
+            try {
+                const result = await invokeStructuredOutputWithRetries({
+                    schema,
+                    maxRecallTries,
+                    messages: this.config.messages,
+                    getTools: () => this.config.tools,
+                    setMessages: (messages) => {
+                        this.config.messages = messages;
+                    },
+                    setTools: (tools) => {
+                        this.config.tools = tools;
+                    },
+                    invoke: () => this.invoke()
+                });
+
+                recordLog({
+                    event: "llm_structured_output_success",
+                    model: this.config.model,
+                    tokens: result.tokens
+                });
+
+                return result;
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_structured_output_error",
+                    model: this.config.model,
+                    error: error.message || error,
+                    stack: error.stack
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
         });
     }
 
     async tts(text: string, options: OpenAIStandalone.Audio.Speech.SpeechCreateParams): Promise<Buffer> {
-        const response = await this.openai.audio.speech.create({
-            ...options,
-            input: text,
-        });
+        return await withTelemetry(`llm.run.openai.tts`, {
+            model: options.model,
+            voice: options.voice
+        }, async () => {
+            try {
+                this.Tracker.registerTimeTracker();
+                const response = await this.openai.audio.speech.create({
+                    ...options,
+                    input: text,
+                });
 
-        return Buffer.from(await response.arrayBuffer());
+                const buffer = Buffer.from(await response.arrayBuffer());
+                
+                this.Tracker.finishTimeTracker();
+                
+                recordLog({
+                    event: "llm_tts_success",
+                    model: options.model,
+                    input_length: text.length,
+                    output_size: buffer.length
+                });
+
+                return buffer;
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_tts_error",
+                    model: options.model,
+                    error: error.message || error
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
+        });
     }
 
     async stt(speechFile: File, options: OpenAIStandalone.Audio.Transcriptions.TranscriptionCreateParamsNonStreaming): Promise<string> {
-        const response = await this.openai.audio.transcriptions.create({
-            ...options,
-            file: speechFile,
-        });
+        return await withTelemetry(`llm.run.openai.stt`, {
+            model: options.model
+        }, async () => {
+            try {
+                this.Tracker.registerTimeTracker();
+                const response = await this.openai.audio.transcriptions.create({
+                    ...options,
+                    file: speechFile,
+                });
 
-        return response.text;
+                this.Tracker.finishTimeTracker();
+                
+                recordLog({
+                    event: "llm_stt_success",
+                    model: options.model,
+                    filename: speechFile.name,
+                    text_length: response.text.length
+                });
+
+                return response.text;
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_stt_error",
+                    model: options.model,
+                    error: error.message || error
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
+        });
     }
 }
 
@@ -622,11 +726,13 @@ export class OpenAIEmbedding implements EmbeddingModel {
     typeAPI: "model" = "model";
     apiName = "OpenAI" as const;
     config: OpenAIEmbeddingConfig;
+    telemetry?: TelemetryProviderSchema;
     private openai: OpenAIStandalone;
     private Tracker: RecordTracker<OpenAIConfig>;
 
     constructor(config: OpenAIEmbeddingConfig, baseURL?: string) {
         this.config = config as any;
+        this.telemetry = config.telemetry;
 
         this.openai = new OpenAIStandalone({
             apiKey: this.config.apiKey,
@@ -637,33 +743,54 @@ export class OpenAIEmbedding implements EmbeddingModel {
     }
 
     async embed(text: string | string[]): Promise<number[][]> {
-        return withTelemetry(
+        return await withTelemetry(
             `llm.embedding.openai`,
             {
                 model: this.config.model,
                 user_query: text instanceof Array ? JSON.stringify(text, null, 4) : text
             },
             async (span) => {
-                this.Tracker
-                    .registerConfig()
-                    .registerTimeTracker("embedding");
+                try {
+                    this.Tracker
+                        .registerConfig()
+                        .registerTimeTracker("embedding");
 
-                const response = await this.openai.embeddings.create({
-                    model: this.config.model,
-                    input: text,
-                });
-                const embedding = response.data.map((d) => d.embedding);
+                    const response = await this.openai.embeddings.create({
+                        model: this.config.model,
+                        input: text,
+                    });
+                    const embedding = response.data.map((d) => d.embedding);
 
-                this.Tracker
-                    .finishTimeTracker()
-                    .setUsage({
-                        input: response.usage.prompt_tokens,
-                        output: response.usage.total_tokens - response.usage.prompt_tokens,
-                        reasoning: 0
-                    })
-                    .setEmbeddingAnswer(embedding);
-        
-                return embedding;
+                    this.Tracker
+                        .finishTimeTracker()
+                        .setUsage({
+                            input: response.usage.prompt_tokens,
+                            output: response.usage.total_tokens - response.usage.prompt_tokens,
+                            reasoning: 0
+                        })
+                        .setEmbeddingAnswer(embedding);
+                    
+                    recordLog({
+                        event: "llm_embedding_success",
+                        model: this.config.model,
+                        input_type: typeof text === 'string' ? 'string' : 'array',
+                        tokens: response.usage.total_tokens
+                    });
+            
+                    return embedding;
+                } catch (error: any) {
+                    recordLog({
+                        event: "llm_embedding_error",
+                        model: this.config.model,
+                        error: error.message || error,
+                        stack: error.stack
+                    });
+                    throw error;
+                } finally {
+                    if (this.telemetry) {
+                        await this.telemetry.send();
+                    }
+                }
             }
         )
     }

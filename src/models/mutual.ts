@@ -50,11 +50,11 @@ export interface InvokeOptions {
     };
 }
 
-export interface StandardLLMShema<TelemetryProviderSchemaSkew extends TelemetryProviderSchema | undefined = undefined> {
+export interface StandardLLMShema {
     typeAPI: "model";
     apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
     config: LLMConfig;
-    telemetry?: TelemetryProviderSchemaSkew;
+    telemetry?: TelemetryProviderSchema;
     invoke(): Promise<LLMAnswer>;
     invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer>;
     tts(text: string, options?: any): Promise<Buffer | undefined>;
@@ -62,6 +62,7 @@ export interface StandardLLMShema<TelemetryProviderSchemaSkew extends TelemetryP
 }
 
 /** Extension of StandardLLMShema for RAG */
-export interface EmbeddingModel extends Omit<StandardLLMShema, "invoke" | "invokeStructuredOutput" | "tts" | "stt"> {
+export interface EmbeddingModel 
+    extends Omit<StandardLLMShema, "invoke" | "invokeStructuredOutput" | "tts" | "stt"> {
     embed(text: string | string[]): Promise<number[][]>;
 }

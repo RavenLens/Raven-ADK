@@ -1,8 +1,8 @@
 import z from "zod";
-import { AgentModel, ReActAgent, ReActAgentConfig, ReActAgentPluginSpec } from "../../ReAct.agent";
+import { ReActAgent, ReActAgentConfig, ReActAgentPluginSpec } from "../../ReAct.agent";
 import { tool, Tool } from "../../tools/tools";
-import { AIMessage, MessagesVariations } from "../../state";
 import EventEmitter from "node:events";
+import { recordLog } from "../../../telemetry/telemetry";
 
 export interface TodoPoint {
     name: string;
@@ -229,10 +229,18 @@ IMPORTANT: Previous history is provided below for context. Focus on finishing th
                     
                     const structuredOutputResult = (result.state.produceStructuredOutput as any)?.result as z.infer<typeof todoStruggleSchema>;
 
-                    TODOPluginEventEmitter.emit("todo_struggle_finished", {
+                    const eventData = {
                         unresolvedTasksReason: structuredOutputResult?.unresolvedTasksReason || "Agent could not complete all tasks and did not provide a specific reason.",
                         todoPoints: todoStorage[0]?.todoPoints || []
+                    };
+
+                    recordLog({
+                        event: "todo_struggle_finished",
+                        ...eventData,
+                        timestamp: Math.floor(Date.now() / 1000)
                     });
+
+                    TODOPluginEventEmitter.emit("todo_struggle_finished", eventData);
                 }
             }
 

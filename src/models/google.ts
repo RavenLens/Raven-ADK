@@ -13,7 +13,8 @@ import { parseToolCallContentToParams, parseToolDescription } from "../agent/too
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
-import { withTelemetry, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
+import { withTelemetry, RecordTracker, RecordTrackerType, recordLog } from "../telemetry/telemetry";
+import { TelemetryProviderSchema } from "../telemetry/providers/schema";
 
 export interface GoogleConfig extends LLMConfig {
     /** 
@@ -31,6 +32,7 @@ export interface GoogleConfig extends LLMConfig {
     candidateCount?: number;
     maxOutputTokens?: number;
     stopSequences?: string[];
+    telemetry?: TelemetryProviderSchema;
 }
 
 export interface GoogleEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
@@ -40,6 +42,7 @@ export interface GoogleEmbeddingConfig extends Omit<LLMConfig, "messages" | "too
      * When true, the Gemini Enterprise Agent Platform API (Vertex AI) will used.
      */
     vertexai?: boolean;
+    telemetry?: TelemetryProviderSchema;
 }
 
 interface GoogleAIEvents {
@@ -56,10 +59,12 @@ export class Google implements StandardLLMShema {
     private client: GoogleGenAI;
     private EventsListeners: Partial<{ [EventName in keyof GoogleAIEvents]: GoogleAIEvents[EventName] }> = {};
     config: GoogleConfig;
+    telemetry?: TelemetryProviderSchema;
     private Tracker: RecordTracker<GoogleConfig>;
 
     constructor(config: GoogleConfig) {
         this.config = config;
+        this.telemetry = config.telemetry;
         if (!this.config.apiKey && !this.config.vertexai) {
             console.warn("Google model initialized without apiKey or vertexai config. Calls may fail.");
         }
@@ -431,13 +436,34 @@ export class Google implements StandardLLMShema {
                 "llm.model": this.config.model,
             },
             async () => {
-                this.Tracker
-                    .registerConfig()
-                    .setUserQueryActiveSpanAttribute()
-                    .registerTimeTracker();
+                try {
+                    this.Tracker
+                        .registerConfig()
+                        .setUserQueryActiveSpanAttribute()
+                        .registerTimeTracker();
 
-                if (options?.stream) {
-                    const stream = await this.client.models.generateContentStream({
+                    if (options?.stream) {
+                        const stream = await this.client.models.generateContentStream({
+                            model: this.config.model,
+                            contents,
+                            config: {
+                                systemInstruction,
+                                tools,
+                                temperature: this.config.temperature,
+                                topP: this.config.topP,
+                                topK: this.config.topK,
+                                candidateCount: this.config.candidateCount,
+                                maxOutputTokens: this.config.maxOutputTokens,
+                                stopSequences: this.config.stopSequences,
+                                // Specific to Google genai SDK for thinking models
+                                thinkingConfig: thinking_config as any
+                            }
+                        });
+
+                        return this.streamWithEvents(stream);
+                    }
+
+                    const response = await this.client.models.generateContent({
                         model: this.config.model,
                         contents,
                         config: {
@@ -454,73 +480,146 @@ export class Google implements StandardLLMShema {
                         }
                     });
 
-                    return this.streamWithEvents(stream);
-                }
+                    const answer = this.parseResponseToAnswer(response);
+                    this.Tracker
+                        .setAnswerActiveSpanAttribute(answer)
+                        .finishTimeTracker()
+                        .setUsage(answer.tokens);
+                    
+                    recordLog({
+                        event: "llm_invoke_success",
+                        model: this.config.model,
+                        tokens: answer.tokens
+                    });
 
-                const response = await this.client.models.generateContent({
-                    model: this.config.model,
-                    contents,
-                    config: {
-                        systemInstruction,
-                        tools,
-                        temperature: this.config.temperature,
-                        topP: this.config.topP,
-                        topK: this.config.topK,
-                        candidateCount: this.config.candidateCount,
-                        maxOutputTokens: this.config.maxOutputTokens,
-                        stopSequences: this.config.stopSequences,
-                        // Specific to Google genai SDK for thinking models
-                        thinkingConfig: thinking_config as any
+                    return answer;
+                } catch (error: any) {
+                    recordLog({
+                        event: "llm_invoke_error",
+                        model: this.config.model,
+                        error: error.message || error,
+                        stack: error.stack
+                    });
+                    throw error;
+                } finally {
+                    if (this.telemetry) {
+                        await this.telemetry.send();
                     }
-                });
-
-                const answer = this.parseResponseToAnswer(response);
-                this.Tracker
-                    .setAnswerActiveSpanAttribute(answer)
-                    .finishTimeTracker()
-                    .setUsage(answer.tokens);
-                return answer;
+                }
             }
         );
     }
 
     async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
-        return invokeStructuredOutputWithRetries({
-            schema,
-            maxRecallTries,
-            messages: this.config.messages,
-            getTools: () => this.config.tools,
-            setMessages: (messages) => {
-                this.config.messages = messages;
-            },
-            setTools: (tools) => {
-                this.config.tools = tools;
-            },
-            invoke: () => this.invoke()
+        return await withTelemetry(`llm.run.google.structured_output`, {
+            model: this.config.model,
+            schema: (schema as any).name || "unnamed_schema"
+        }, async () => {
+            try {
+                const result = await invokeStructuredOutputWithRetries({
+                    schema,
+                    maxRecallTries,
+                    messages: this.config.messages,
+                    getTools: () => this.config.tools,
+                    setMessages: (messages) => {
+                        this.config.messages = messages;
+                    },
+                    setTools: (tools) => {
+                        this.config.tools = tools;
+                    },
+                    invoke: () => this.invoke()
+                });
+
+                recordLog({
+                    event: "llm_structured_output_success",
+                    model: this.config.model,
+                    tokens: result.tokens
+                });
+
+                return result;
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_structured_output_error",
+                    model: this.config.model,
+                    error: error.message || error,
+                    stack: error.stack
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
         });
     }
 
     async tts(text: string, options: { model: string; speech_config: { speaker: string, voice: string }[] }): Promise<Buffer | undefined> {
-        const interaction = await this.client.interactions.create({
-            model: options.model,
-            input: text,
-            response_format: { type: 'audio' },
-            generation_config: {
-                speech_config: options.speech_config
-            },
+        return await withTelemetry(`llm.run.google.tts`, {
+            model: options.model
+        }, async () => {
+            try {
+                this.Tracker.registerTimeTracker();
+                const interaction = await this.client.interactions.create({
+                    model: options.model,
+                    input: text,
+                    response_format: { type: 'audio' },
+                    generation_config: {
+                        speech_config: options.speech_config
+                    },
+                });
+
+                this.Tracker.finishTimeTracker();
+
+                if (interaction.output_audio?.data) {
+                    const audioBuffer = Buffer.from(interaction.output_audio.data, 'base64');
+                    
+                    recordLog({
+                        event: "llm_tts_success",
+                        model: options.model,
+                        input_length: text.length,
+                        output_size: audioBuffer.length
+                    });
+
+                    return audioBuffer;
+                }
+
+                return undefined;
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_tts_error",
+                    model: options.model,
+                    error: error.message || error
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
         });
-
-        if (interaction.output_audio?.data) {
-            const audioBuffer = Buffer.from(interaction.output_audio.data, 'base64');
-            return audioBuffer;
-        }
-
-        return undefined;
     }
 
     /** Google doesn't provide stt in their generative ai api */
     async stt(speechFile: File, options?: any): Promise<string> {
-        throw new Error("STT is not supported by Google provider in Raven ADK.");
+        return await withTelemetry(`llm.run.google.stt`, {
+            model: this.config.model
+        }, async () => {
+            try {
+                this.Tracker.registerTimeTracker();
+                throw new Error("STT is not supported by Google provider in Raven ADK.");
+            } catch (error: any) {
+                recordLog({
+                    event: "llm_stt_error",
+                    model: this.config.model,
+                    error: error.message || error
+                });
+                throw error;
+            } finally {
+                if (this.telemetry) {
+                    await this.telemetry.send();
+                }
+            }
+        });
     }
 }
 
@@ -532,10 +631,12 @@ export class GoogleEmbedding implements EmbeddingModel {
     apiName = "Google" as const;
     private client: GoogleGenAI;
     config: GoogleEmbeddingConfig;
+    telemetry?: TelemetryProviderSchema;
     private Tracker: RecordTracker<GoogleEmbeddingConfig>;
 
     constructor(config: GoogleEmbeddingConfig) {
         this.config = config as any;
+        this.telemetry = config.telemetry;
         this.client = new GoogleGenAI({
             apiKey: this.config.apiKey,
         });
@@ -552,37 +653,57 @@ export class GoogleEmbedding implements EmbeddingModel {
                 "llm.task_query": text instanceof Array ? JSON.stringify(text, null, 4) : text
             },
             async () => {
-                this.Tracker
-                    .registerConfig()
-                    .registerTimeTracker("embedding");
+                try {
+                    this.Tracker
+                        .registerConfig()
+                        .registerTimeTracker("embedding");
 
-                let result: number[][];
-                if (Array.isArray(text)) {
-                    const response = await Promise.all(
-                        text.map(t => this.client.models.embedContent({
+                    let result: number[][];
+                    if (Array.isArray(text)) {
+                        const response = await Promise.all(
+                            text.map(t => this.client.models.embedContent({
+                                model: this.config.model,
+                                contents: [{ role: "user", parts: [{ text: t }] }]
+                            }))
+                        );
+                        result = response.map(r => r.embeddings?.[0]?.values || []);
+                    } else {
+                        const response = await this.client.models.embedContent({
                             model: this.config.model,
-                            contents: [{ role: "user", parts: [{ text: t }] }]
-                        }))
-                    );
-                    result = response.map(r => r.embeddings?.[0]?.values || []);
-                } else {
-                    const response = await this.client.models.embedContent({
-                        model: this.config.model,
-                        contents: [{ role: "user", parts: [{ text: text }] }]
-                    });
-                    result = [response.embeddings?.[0]?.values || []];
-                }
+                            contents: [{ role: "user", parts: [{ text: text }] }]
+                        });
+                        result = [response.embeddings?.[0]?.values || []];
+                    }
 
-                this.Tracker
-                    .finishTimeTracker()
-                    .setUsage({
-                        input: 0,
-                        output: 0,
-                        reasoning: 0
-                    })
-                    .setEmbeddingAnswer(result);
-        
-                return result;
+                    this.Tracker
+                        .finishTimeTracker()
+                        .setUsage({
+                            input: 0,
+                            output: 0,
+                            reasoning: 0
+                        })
+                        .setEmbeddingAnswer(result);
+                    
+                    recordLog({
+                        event: "llm_embedding_success",
+                        model: this.config.model,
+                        input_type: typeof text === 'string' ? 'string' : 'array'
+                    });
+            
+                    return result;
+                } catch (error: any) {
+                    recordLog({
+                        event: "llm_embedding_error",
+                        model: this.config.model,
+                        error: error.message || error,
+                        stack: error.stack
+                    });
+                    throw error;
+                } finally {
+                    if (this.telemetry) {
+                        await this.telemetry.send();
+                    }
+                }
             }
         );
     }
