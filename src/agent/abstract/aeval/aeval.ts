@@ -1,4 +1,6 @@
-import { AgentModel, ReActAgent, ReActAgentConfig } from "../../ReAct.agent";
+import { LLMAnswer } from "../../../models/mutual";
+import { recordEventWithData, withTelemetry } from "../../../telemetry";
+import { AgentModel, ReActAgent, ReActAgentConfig, ReActAgentInvokeResult } from "../../ReAct.agent";
 import { MessagesVariations } from "../../state";
 import { z } from "zod";
 
@@ -72,50 +74,57 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
 
     /** Runs evaluation with ReActAgent with specified config and returns outcome */
     async evaluate(): Promise<EvaluationResult> {
-        this.emit("evaluate_start");
-
-        const evalAgent = new ReActAgent({
-            ...this.agentConfig,
-            systemPrompt: [
-                this.agentConfig.systemPrompt,
-                "\nEvaluation Task:",
-                "You are an expert AI evaluator. Your task is to analyze the provided AI response against the conversation history and user expectations.",
-                "You must return ONLY a JSON object matching this schema:",
-                JSON.stringify(z.toJSONSchema(EvaluationResultSchema), null, 2)
-            ].join("\n"),
-            withConclusion: false
-        });
-
-        const lastAIMessage = this.messages.at(-1);
-        if (lastAIMessage?.type !== 'ai' || (!lastAIMessage.content && !lastAIMessage.structuredOutput)) {
-            throw new Error("Last message must be an AI message with content to evaluate it.");
-        }
-
-        const evaluationPrompt = [
-            "### AI Response to Evaluate:",
-            lastAIMessage.structuredOutput ? JSON.stringify(lastAIMessage.structuredOutput, null, 4) : lastAIMessage.content,
-            "\n### Conversation History:",
-            JSON.stringify(this.messages, null, 2)
-        ].join("\n");
-
-        evalAgent.agentConfig.messages.push({
-            type: "user",
-            content: evaluationPrompt
-        });
-
-        const result = await evalAgent.invokeStructuredOutput(EvaluationResultSchema);
-        const lastMessage = result.messages.at(-1);
-
-        if (lastMessage?.type !== 'ai' || !lastMessage.structuredOutput) {
-            throw new Error("Evaluator failed to produce evaluation result.");
-        }
-
-        this.emit("evaluate_end", lastMessage);
-
-        return {
-            result: lastMessage.structuredOutput,
-            messages: result.messages
-        } as EvaluationResult;
+        return await withTelemetry("aeval.evaluate", { config: JSON.stringify(this.agentConfig, null, 4) }, async (span) => {
+            this.emit("evaluate_start");
+    
+            const evalAgent = new ReActAgent({
+                ...this.agentConfig,
+                systemPrompt: [
+                    this.agentConfig.systemPrompt,
+                    "\nEvaluation Task:",
+                    "You are an expert AI evaluator. Your task is to analyze the provided AI response against the conversation history and user expectations.",
+                    "You must return ONLY a JSON object matching this schema:",
+                    JSON.stringify(z.toJSONSchema(EvaluationResultSchema), null, 2)
+                ].join("\n"),
+                withConclusion: false
+            });
+    
+            const lastAIMessage = this.messages.at(-1);
+            if (lastAIMessage?.type !== 'ai' || (!lastAIMessage.content && !lastAIMessage.structuredOutput)) {
+                throw new Error("Last message must be an AI message with content to evaluate it.");
+            }
+    
+            const evaluationPrompt = [
+                "### AI Response to Evaluate:",
+                lastAIMessage.structuredOutput ? JSON.stringify(lastAIMessage.structuredOutput, null, 4) : lastAIMessage.content,
+                "\n### Conversation History:",
+                JSON.stringify(this.messages, null, 2)
+            ].join("\n");
+    
+            evalAgent.agentConfig.messages.push({
+                type: "user",
+                content: evaluationPrompt
+            });
+    
+            const result = await evalAgent.invokeStructuredOutput(EvaluationResultSchema);
+            const lastMessage = result.messages.at(-1);
+    
+            if (lastMessage?.type !== 'ai' || !lastMessage.structuredOutput) {
+                throw new Error("Evaluator failed to produce evaluation result.");
+            }
+    
+            this.emit("evaluate_end", lastMessage);
+            span?.setAttribute("result", JSON.stringify({
+                result: (lastMessage.structuredOutput as EvaluationResult["result"]),
+                resultScore: (lastMessage.structuredOutput as EvaluationResult["result"]).score,
+                messages: result.messages,
+            }, null, 4));
+            
+            return {
+                result: lastMessage.structuredOutput,
+                messages: result.messages
+            } as EvaluationResult;
+        })
     }
 
     /**
@@ -129,55 +138,72 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
         expected: Pick<EvaluationResult["result"], "score" | "verdict"> & { expectationDescription?: string; }, 
         maxRetries: number = 0
     ): Promise<{ success: boolean; reasoningMessages: MessagesVariations[]; }> {
-        let currentRetries = 0;
-        const verdicts = ['REJECTED', 'POOR', 'GOOD', 'BEST'];
-        
-        while (currentRetries <= maxRetries) {
-            this.emit("loop_iteration", currentRetries);
+        return await withTelemetry("aeval.loop", { config: JSON.stringify(this.agentConfig, null, 4) }, async (span) => {
+            let currentRetries = 0;
+            const verdicts = ['REJECTED', 'POOR', 'GOOD', 'BEST'];
             
-            // `messages` are the trace of evaluation of AI Agent
-            const { result, messages } = await this.evaluate();
-            
-            const scoreMatch = result.score >= expected.score;
-            const verdictMatch = verdicts.indexOf(result.verdict) >= verdicts.indexOf(expected.verdict);
+            while (currentRetries <= maxRetries) {
+                this.emit("loop_iteration", currentRetries);
+                span?.addEvent("loop_iteration_start", currentRetries);
+                
+                // `messages` are the trace of evaluation of AI Agent
+                const { result, messages } = await this.evaluate();
+                
+                const scoreMatch = result.score >= expected.score;
+                const verdictMatch = verdicts.indexOf(result.verdict) >= verdicts.indexOf(expected.verdict);
 
-            if (scoreMatch && verdictMatch) {
-                return {
-                    success: true,
-                    reasoningMessages: messages
-                };
-            }
+                if (scoreMatch && verdictMatch) {
+                    recordEventWithData("loop_success", {
+                        reasoningMessages: messages,
+                        resultScore: result.score,
+                        expectedScore: expected.score
+                    });
 
-            if (currentRetries < maxRetries) {
-                const improvementPointer = [
-                    "Your previous response did not meet the quality standards.",
-                    expected.expectationDescription ? `Expectation: ${expected.expectationDescription}` : "",
-                    "Reasoning: " + result.reasoning,
-                    "Please improve based on these points:",
-                    ...(result.improvements?.map(i => `- ${i}`) || ["- General improvement of accuracy and detail"])
-                ].filter(Boolean).join("\n");
-
-                this.messages.push({
-                    type: "user",
-                    content: improvementPointer
-                });
-
-                this.agentConfig.messages = [...this.messages];
-                if (runBy instanceof ReActAgent) {
-                    const runResult = await runBy.invoke();
-                    this.messages = runResult.messages;
-                } else {
-                    const modelResult = await runBy.invoke({ messages: this.messages });
-                    this.messages = modelResult.messages;
+                    return {
+                        success: true,
+                        reasoningMessages: messages
+                    };
                 }
+
+                if (currentRetries < maxRetries) {
+                    const improvementPointer = [
+                        "Your previous response did not meet the quality standards.",
+                        expected.expectationDescription ? `Expectation: ${expected.expectationDescription}` : "",
+                        "Reasoning: " + result.reasoning,
+                        "Please improve based on these points:",
+                        ...(result.improvements?.map(i => `- ${i}`) || ["- General improvement of accuracy and detail"])
+                    ].filter(Boolean).join("\n");
+
+                    this.messages.push({
+                        type: "user",
+                        content: improvementPointer
+                    });
+
+                    this.agentConfig.messages = [...this.messages];
+
+                    let resultRecall: ReActAgentInvokeResult | LLMAnswer;
+                    if (runBy instanceof ReActAgent) {
+                        resultRecall = await runBy.invoke();
+                        this.messages = resultRecall.messages;
+                    } else {
+                        resultRecall = await runBy.invoke({ messages: this.messages });
+                        this.messages = resultRecall.messages;
+                    }
+
+                    recordEventWithData("loop_reiteration", {
+                        recallImprovementPointer: improvementPointer,
+                        recallResult: resultRecall,
+                        currentRetries,
+                    });
+                }
+
+                currentRetries++;
             }
 
-            currentRetries++;
-        }
-
-        return {
-            success: false,
-            reasoningMessages: this.messages
-        };
+            return {
+                success: false,
+                reasoningMessages: this.messages
+            };
+        });
     }
 }

@@ -6,6 +6,7 @@ import path from "node:path";
 import z from "zod";
 import { tool, Tool } from "../tools/tools";
 import { SchemaSkillStore, SkillFileEntryWithContent } from "./stores/schema";
+import { recordEventWithData, withTelemetry } from "../../telemetry/telemetry";
 import { HITLToolAllowancePossibleAnswer, HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema, CommandExecutionOptions, CommandExecutionOutput } from "../tools/CodeExecutionSandboxes/mutual";
 
@@ -305,8 +306,17 @@ export class Skills
         toolsSet.push(
             tool(
                 async ({ fromLocation }) => {
+                    const startTime = Date.now();
                     const discoveredEntriesResult = await discoverSkillFolder(fromLocation);
                     this.emit("discoverSkillFolder", fromLocation);
+                    
+                    recordEventWithData("skills.tool_usage", {
+                        tool: "skill_folder_discover",
+                        location: fromLocation,
+                        duration: Date.now() - startTime,
+                        entriesCount: Array.isArray(discoveredEntriesResult) ? discoveredEntriesResult.length : 0
+                    });
+
                     return JSON.stringify(discoveredEntriesResult, null, 2);
                 },
                 {
@@ -325,8 +335,16 @@ export class Skills
         toolsSet.push(
             tool(
                 async ({ fromLocation }) => {
+                    const startTime = Date.now();
                     const skillMetaResult = await readSkillMeta(fromLocation);
                     this.emit("readSkillMeta", fromLocation);
+
+                    recordEventWithData("skills.tool_usage", {
+                        tool: "skill_meta_read",
+                        location: fromLocation,
+                        duration: Date.now() - startTime
+                    });
+
                     return String(skillMetaResult);
                 },
                 {
@@ -345,8 +363,16 @@ export class Skills
         toolsSet.push(
             tool(
                 async ({ fromLocation }) => {
+                    const startTime = Date.now();
                     const skillFullResult = await readSkillFull(fromLocation);
                     this.emit("readSkillFull", fromLocation);
+
+                    recordEventWithData("skills.tool_usage", {
+                        tool: "skill_full_read",
+                        location: fromLocation,
+                        duration: Date.now() - startTime
+                    });
+
                     return String(skillFullResult);
                 },
                 {
@@ -378,8 +404,23 @@ export class Skills
             toolsSet.push(
                 tool(
                     async ({ folderName, folderLocation }) => {
+                        const startTime = Date.now();
                         const createFolderSkillsResult = await createSkillFolder(folderName, folderLocation);
                         this.emit("createSkillFolder", folderName, folderLocation);
+
+                        recordEventWithData("skills.tool_usage", {
+                            tool: "skill_folder_create",
+                            folderName,
+                            location: folderLocation,
+                            duration: Date.now() - startTime
+                        });
+
+                        recordEventWithData("skills.self_improvement", {
+                            action: "create_skill_ward",
+                            folderName,
+                            location: folderLocation
+                        });
+
                         return String(createFolderSkillsResult);
                     },
                     {
@@ -400,8 +441,25 @@ export class Skills
             toolsSet.push(
                 tool(
                     async ({ skillFile, inLocation }) => {
+                        const startTime = Date.now();
                         const createFolderSkillsResult = await createSkillFile(skillFile, inLocation);
                         this.emit("createSkillFile", skillFile, inLocation);
+
+                        recordEventWithData("skills.tool_usage", {
+                            tool: "skill_file_create",
+                            file: skillFile.fileName,
+                            type: skillFile.type,
+                            location: inLocation,
+                            duration: Date.now() - startTime
+                        });
+
+                        recordEventWithData("skills.self_improvement", {
+                            action: "create_skill_file",
+                            fileName: skillFile.fileName,
+                            type: skillFile.type,
+                            location: inLocation
+                        });
+
                         return String(createFolderSkillsResult);
                     },
                     {
@@ -429,8 +487,16 @@ export class Skills
             toolsSet.push(
                 tool(
                     async ({ folderLocation }) => {
+                        const startTime = Date.now();
                         const removeFolderSkillsResult = await removeSkillFolder(folderLocation);
                         this.emit("removeSkillFolder", folderLocation);
+
+                        recordEventWithData("skills.tool_usage", {
+                            tool: "skill_folder_remove",
+                            location: folderLocation,
+                            duration: Date.now() - startTime
+                        });
+
                         return String(removeFolderSkillsResult);
                     },
                     {
@@ -450,8 +516,16 @@ export class Skills
             toolsSet.push(
                 tool(
                     async ({ skillLocation }) => {
+                        const startTime = Date.now();
                         const removeSkillResult = await removeSkill(skillLocation);
                         this.emit("removeSkill", skillLocation);
+
+                        recordEventWithData("skills.tool_usage", {
+                            tool: "skill_remove",
+                            location: skillLocation,
+                            duration: Date.now() - startTime
+                        });
+
                         return String(removeSkillResult);
                     },
                     {
@@ -472,8 +546,17 @@ export class Skills
             toolsSet.push(
                 tool(
                     async ({ fromLocation, toLocation }) => {
+                        const startTime = Date.now();
                         const relocateResult = await reloacateSkill(fromLocation, toLocation);
                         this.emit("reloacateSkill", fromLocation, toLocation);
+
+                        recordEventWithData("skills.tool_usage", {
+                            tool: "skill_relocate",
+                            from: fromLocation,
+                            to: toLocation,
+                            duration: Date.now() - startTime
+                        });
+
                         return String(relocateResult);
                     },
                     {
@@ -509,6 +592,7 @@ export class Skills
         executeTools.push(
             tool(
                 async ({ scriptLocation, runtime, scriptArgs, workingDirectory, timeoutMs }) => {
+                    const startTime = Date.now();
                     const resolvedScriptPath = this.resolveScriptPath(scriptLocation, workingDirectory);
 
                     if (!resolvedScriptPath) {
@@ -545,6 +629,14 @@ export class Skills
 
                     this.emit("runSkillScript", scriptLocation, runtime ?? "auto", scriptArgs ?? [], executionResult);
 
+                    recordEventWithData("skills.tool_usage", {
+                        tool: "skill_script_run",
+                        script: scriptLocation,
+                        runtime: runtime ?? "auto",
+                        exitCode: executionResult.exitCode,
+                        duration: Date.now() - startTime
+                    });
+
                     return JSON.stringify({
                         ...executionResult,
                         scriptLocation,
@@ -576,12 +668,20 @@ export class Skills
         executeTools.push(
             tool(
                 async ({ command, args, workingDirectory, timeoutMs }) => {
+                    const startTime = Date.now();
                     const executionResult = await this.executeCommandLine(command, args ?? [], {
                         timeoutMs,
                         workingDirectory
                     });
 
                     this.emit("executeSkillCLI", command, args ?? [], executionResult);
+
+                    recordEventWithData("skills.tool_usage", {
+                        tool: "skill_cli_execute",
+                        command,
+                        duration: Date.now() - startTime,
+                        exitCode: executionResult.exitCode
+                    });
 
                     return JSON.stringify(executionResult, null, 2);
                 },
@@ -805,154 +905,188 @@ export class Skills
     }
 
     /**
-     * TODO: Cover this with config changes
-     * 1. Provide to it sandbox to allow toe execute the skills in isolated environment out of the device
-     * 2. Allow to use hitl there to always make user bee decidive
-     */
+     * Execute command for the script in the sandbox or in the local environment where agent runs
+    */
     private async executeCommandLine(
         command: string,
         args: string[],
         options: CommandExecutionOptions
     ): Promise<CommandExecutionOutput> {
-        // Skill execution has to be accepted
-        if (this.config.hitl?.emitAcceptance) {
-            const directory = options.workingDirectory || "current";
+        return withTelemetry("skills.execute_command", {
+            command,
+            args: JSON.stringify(args),
+            workingDirectory: options.workingDirectory || process.cwd(),
+            timeoutMs: options.timeoutMs
+        }, async (span) => {
+            // Skill execution has to be accepted
+            if (this.config.hitl?.emitAcceptance) {
+                const directory = options.workingDirectory || "current";
+                span?.addEvent("skills.hitl_acceptance_required", { directory });
 
-            this.emit("hitlAcceptanceTrigger", command, args, directory);
-            
-            const acceptanceResult = await this.config.hitl.emitAcceptance(
-                `Do you allow to execute the following command: "${command} ${args.join(" ")}"?`,
-                `Command: ${command}\nArguments: ${args.join(" ")}\nWorking Directory: ${directory}`
-            );
+                this.emit("hitlAcceptanceTrigger", command, args, directory);
 
-            this.emit("hitlAcceptanceResult", acceptanceResult);
-            
-            if (acceptanceResult === "deny") {
-                return {
+                const acceptanceResult = await this.config.hitl.emitAcceptance(
+                    `Do you allow to execute the following command: "${command} ${args.join(" ")}"?`,
+                    `Command: ${command}\nArguments: ${args.join(" ")}\nWorking Directory: ${directory}`
+                );
+
+                span?.addEvent("skills.hitl_acceptance_result", { result: acceptanceResult });
+
+                this.emit("hitlAcceptanceResult", acceptanceResult);
+
+                if (acceptanceResult === "deny") {
+                    const result = {
+                        success: false,
+                        command,
+                        args,
+                        cwd: options.workingDirectory || process.cwd(),
+                        exitCode: null,
+                        timedOut: false,
+                        stdout: "",
+                        stderr: "",
+                        truncatedStdout: false,
+                        truncatedStderr: false,
+                        error: "Execution was denied by user."
+                    };
+                    span?.setAttribute("skills.execution_denied", true);
+                    return result;
+                }
+            }
+
+            // Execute command in sandbox
+            if (this.config.sandbox) {
+                span?.setAttribute("skills.execution_target", "sandbox");
+                span?.setAttribute("skills.sandbox_name", this.config.sandbox.name);
+
+                const execution = await this.config.sandbox.executeCommand(command, args, options);
+                
+                span?.setAttribute("skills.success", execution.success);
+                span?.setAttribute("skills.exit_code", execution.exitCode ?? "none");
+
+                return execution;
+            }
+
+            span?.setAttribute("skills.execution_target", "local");
+
+            const trimmedCommand = command.trim();
+            const cwd = options.workingDirectory?.trim().length
+                ? path.resolve(options.workingDirectory)
+                : process.cwd();
+
+            if (!trimmedCommand.length) {
+                const result = {
                     success: false,
-                    command,
+                    command: trimmedCommand,
                     args,
-                    cwd: options.workingDirectory || process.cwd(),
+                    cwd,
                     exitCode: null,
                     timedOut: false,
                     stdout: "",
                     stderr: "",
                     truncatedStdout: false,
                     truncatedStderr: false,
-                    error: "Execution was denied by user."
+                    error: "Command cannot be empty."
                 };
+                span?.setStatus({ code: 2, message: result.error }); // 2 = ERROR in status code sometimes, but SpanStatusCode.ERROR is safer
+                return result;
             }
-        }
 
-        // Execute command in sandbox
-        if (this.config.sandbox) {
-            return this.config.sandbox.executeCommand(command, args, options);
-        }
-
-        const trimmedCommand = command.trim();
-        const cwd = options.workingDirectory?.trim().length
-            ? path.resolve(options.workingDirectory)
-            : process.cwd();
-
-        if (!trimmedCommand.length) {
-            return {
-                success: false,
-                command: trimmedCommand,
-                args,
-                cwd,
-                exitCode: null,
-                timedOut: false,
-                stdout: "",
-                stderr: "",
-                truncatedStdout: false,
-                truncatedStderr: false,
-                error: "Command cannot be empty."
-            };
-        }
-
-        if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
-            return {
-                success: false,
-                command: trimmedCommand,
-                args,
-                cwd,
-                exitCode: null,
-                timedOut: false,
-                stdout: "",
-                stderr: "",
-                truncatedStdout: false,
-                truncatedStderr: false,
-                error: `Working directory does not exist or is not a directory: "${cwd}"`
-            };
-        }
-
-        const timeout = this.getExecutionTimeout(options.timeoutMs);
-
-        return new Promise<CommandExecutionOutput>((resolve) => {
-            let stdout = "";
-            let stderr = "";
-            let truncatedStdout = false;
-            let truncatedStderr = false;
-            let timedOut = false;
-
-            const child = spawn(trimmedCommand, args, {
-                cwd,
-                shell: false,
-                windowsHide: true
-            });
-
-            const timeoutHandle = setTimeout(() => {
-                timedOut = true;
-                child.kill();
-            }, timeout);
-
-            child.stdout?.on("data", (chunk) => {
-                const appendResult = this.appendProcessOutput(stdout, String(chunk));
-                stdout = appendResult.value;
-                truncatedStdout = truncatedStdout || appendResult.truncated;
-            });
-
-            child.stderr?.on("data", (chunk) => {
-                const appendResult = this.appendProcessOutput(stderr, String(chunk));
-                stderr = appendResult.value;
-                truncatedStderr = truncatedStderr || appendResult.truncated;
-            });
-
-            child.on("error", (error) => {
-                clearTimeout(timeoutHandle);
-
-                resolve({
+            if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+                const result = {
                     success: false,
                     command: trimmedCommand,
                     args,
                     cwd,
                     exitCode: null,
-                    timedOut,
-                    stdout,
-                    stderr,
-                    truncatedStdout,
-                    truncatedStderr,
-                    error: error.message
-                });
-            });
+                    timedOut: false,
+                    stdout: "",
+                    stderr: "",
+                    truncatedStdout: false,
+                    truncatedStderr: false,
+                    error: `Working directory does not exist or is not a directory: "${cwd}"`
+                };
+                span?.setStatus({ code: 2, message: result.error });
+                return result;
+            }
 
-            child.on("close", (exitCode) => {
-                clearTimeout(timeoutHandle);
+            const timeout = this.getExecutionTimeout(options.timeoutMs);
 
-                resolve({
-                    success: !timedOut && (exitCode === 0 || exitCode === null),
-                    command: trimmedCommand,
-                    args,
+            const executionResult = await new Promise<CommandExecutionOutput>((resolve) => {
+                let stdout = "";
+                let stderr = "";
+                let truncatedStdout = false;
+                let truncatedStderr = false;
+                let timedOut = false;
+
+                const child = spawn(trimmedCommand, args, {
                     cwd,
-                    exitCode,
-                    timedOut,
-                    stdout,
-                    stderr,
-                    truncatedStdout,
-                    truncatedStderr,
-                    error: timedOut ? `Command timed out after ${timeout}ms.` : undefined
+                    shell: false,
+                    windowsHide: true
+                });
+
+                const timeoutHandle = setTimeout(() => {
+                    timedOut = true;
+                    child.kill();
+                }, timeout);
+
+                child.stdout?.on("data", (chunk) => {
+                    const appendResult = this.appendProcessOutput(stdout, String(chunk));
+                    stdout = appendResult.value;
+                    truncatedStdout = truncatedStdout || appendResult.truncated;
+                });
+
+                child.stderr?.on("data", (chunk) => {
+                    const appendResult = this.appendProcessOutput(stderr, String(chunk));
+                    stderr = appendResult.value;
+                    truncatedStderr = truncatedStderr || appendResult.truncated;
+                });
+
+                child.on("error", (error) => {
+                    clearTimeout(timeoutHandle);
+
+                    resolve({
+                        success: false,
+                        command: trimmedCommand,
+                        args,
+                        cwd,
+                        exitCode: null,
+                        timedOut,
+                        stdout,
+                        stderr,
+                        truncatedStdout,
+                        truncatedStderr,
+                        error: error.message
+                    });
+                });
+
+                child.on("close", (exitCode) => {
+                    clearTimeout(timeoutHandle);
+
+                    resolve({
+                        success: !timedOut && (exitCode === 0 || exitCode === null),
+                        command: trimmedCommand,
+                        args,
+                        cwd,
+                        exitCode,
+                        timedOut,
+                        stdout,
+                        stderr,
+                        truncatedStdout,
+                        truncatedStderr,
+                        error: timedOut ? `Command timed out after ${timeout}ms.` : undefined
+                    });
                 });
             });
+
+            span?.setAttribute("skills.success", executionResult.success);
+            span?.setAttribute("skills.exit_code", executionResult.exitCode ?? "none");
+            span?.setAttribute("skills.timed_out", executionResult.timedOut);
+
+            if (executionResult.error) {
+                span?.addEvent("skills.execution_error", { error: executionResult.error });
+            }
+
+            return executionResult;
         });
     }
     

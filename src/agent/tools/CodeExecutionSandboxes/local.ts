@@ -5,6 +5,8 @@ import vm from 'node:vm';
 import { CodeExecuteOutput, CodeExecutionSandboxSchema, CommandExecutionOptions, CommandExecutionOutput } from "./mutual";
 
 export class LocalExecutionSandbox implements CodeExecutionSandboxSchema {
+    name: string = "LocalSandbox";
+    
     async execute(code: string, contextData: any, logs: string[], ...args: any[]): Promise<CodeExecuteOutput> {
         const vmContext = vm.createContext({
             ...contextData,

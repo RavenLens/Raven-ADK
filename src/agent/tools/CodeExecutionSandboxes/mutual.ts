@@ -25,6 +25,8 @@ export interface CommandExecutionOutput {
 }
 
 export interface CodeExecutionSandboxSchema {
+    /** Provide name for sandbox to be known e.g: at telemetry for execution of sandbox */
+    name: string;
     execute(code: string, contextData: any, logs: string[], ...args: any[]): Promise<CodeExecuteOutput>;
     executeCommand(command: string, args: string[], options: CommandExecutionOptions): Promise<CommandExecutionOutput>;
 }

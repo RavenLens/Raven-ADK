@@ -4,6 +4,7 @@ import { CodeExecuteOutput, CodeExecutionSandboxSchema, CommandExecutionOptions,
 type E2BSandboxConnectionOpts = Parameters<(typeof Sandbox.create)>[1];
 
 export class E2BExecutionSandbox implements CodeExecutionSandboxSchema {
+    name: string = "E2B-Sandbox";
     sandboxConnectionOptions?: E2BSandboxConnectionOpts;
     
     constructor(sandboxConnectionOptions?: E2BSandboxConnectionOpts) {

@@ -9,15 +9,13 @@ import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
 import { MCPTool } from "./tools/mcp/mcpTools";
-import { tool, Tool } from "./tools/tools";
-import { HITLSocketIo } from "./tools/hitl/trasnports/SocketIoHITLTrasnport";
+import { Tool } from "./tools/tools";
 import { RunPod } from "../models/runpod";
 import z from "zod";
 import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
 import { TelemetryProviderSchema } from "../telemetry/providers/schema";
-import { tokenCounter, agentRunCounter, withTelemetry, tracer, recordLog, RecordTracker, RecordTrackerType } from "../telemetry/telemetry";
-import { trace } from "@opentelemetry/api";
+import { tokenCounter, agentRunCounter, withTelemetry, tracer, recordLog, RecordTracker, RecordTrackerType, recordEventWithData } from "../telemetry/telemetry";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -803,6 +801,7 @@ export class ReActAgent
                         }
 
                         this.emitEvent("tool_invoked", toolName, toolParams);
+                        const startTime = Date.now();
 
                         recordLog({
                             event: "tool_call_registered",
@@ -816,7 +815,15 @@ export class ReActAgent
                             const toolOutput = definedTool instanceof MCPTool
                                 ? await definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
                                 : await definedTool.invoke(toolParams as never);
+                            const duration = Date.now() - startTime;
                             this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
+
+                            recordEventWithData("agent.tool_usage", {
+                                tool: toolName,
+                                params: toolParams,
+                                duration,
+                                status: "success"
+                            });
 
                             recordLog({
                                 event: "tool_call_registered",
@@ -834,8 +841,17 @@ export class ReActAgent
                                 content: toolOutput
                             };
                         } catch (error) {
+                            const duration = Date.now() - startTime;
                             const errorMessage = error instanceof Error ? error.message : "Unknown tool execution error";
                             const toolFailureOutput = `Tool "${toolName}" failed during execution: ${errorMessage}`;
+
+                            recordEventWithData("agent.tool_usage", {
+                                tool: toolName,
+                                params: toolParams,
+                                duration,
+                                status: "failed",
+                                error: errorMessage
+                            });
 
                             recordLog({
                                 event: "tool_call_registered",

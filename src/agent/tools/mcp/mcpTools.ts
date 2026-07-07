@@ -10,6 +10,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as z from "zod";
 import { Tool } from "../tools";
 import { MCPClientConfig, MCPDownloadedTool, MCPServerConfig, MCPServerTransport } from "./types";
+import { withTelemetry, tracer, recordEventWithData } from "../../../telemetry/telemetry";
 
 interface MCPServerSession {
     config: MCPServerConfig;
@@ -242,6 +243,8 @@ export class MCP {
         );
         const transport = this.createTransport(serverConfig.transport);
 
+        recordEventWithData("mcp.connection", JSON.stringify(serverConfig, null, 4));
+
         await client.connect(transport);
 
         this.servers.set(serverConfig.serverId, {
@@ -255,6 +258,8 @@ export class MCP {
     }
 
     async connectMany(serverConfigs: MCPServerConfig[]): Promise<void> {
+        recordEventWithData("mcp.connect_many", JSON.stringify(serverConfigs, null, 4));
+        
         for (const serverConfig of serverConfigs) {
             await this.connect(serverConfig);
         }
@@ -280,10 +285,13 @@ export class MCP {
             await session.client.close();
         } finally {
             this.servers.delete(serverId);
+            recordEventWithData("mcp.disconnection", JSON.stringify({}));
         }
     }
 
     async disconnectAll(): Promise<void> {
+        recordEventWithData("mcp.disconnect_many", JSON.stringify({}, null, 4));
+        
         const connectedServerIds: string[] = [];
         this.servers.forEach((_, serverId) => {
             connectedServerIds.push(serverId);
@@ -295,53 +303,64 @@ export class MCP {
     }
 
     async downloadTools(serverId: string): Promise<MCPDownloadedTool[]> {
-        const session = this.getServerSession(serverId);
-        const downloadedTools: MCPDownloadedTool[] = [];
+        return withTelemetry("mcp.download_tools", { serverId }, async (span) => {
+            const session = this.getServerSession(serverId);
+            const downloadedTools: MCPDownloadedTool[] = [];
 
-        let cursor: string | undefined;
+            let cursor: string | undefined;
 
-        do {
-            const response = await session.client.listTools(cursor ? { cursor } : undefined);
+            do {
+                const response = await session.client.listTools(cursor ? { cursor } : undefined);
 
-            for (const remoteTool of response.tools) {
-                const remoteName = String(remoteTool.name);
-                const agentToolName = this.makeAgentToolName(serverId, remoteName);
-                const downloadedTool: MCPDownloadedTool = {
-                    serverId,
-                    serverName: session.config.serverName,
-                    remoteToolName: remoteName,
-                    agentToolName,
-                    description: remoteTool.description ?? "MCP tool without description.",
-                    inputSchema: remoteTool.inputSchema ?? {},
-                    outputSchema: remoteTool.outputSchema
-                };
+                for (const remoteTool of response.tools) {
+                    const remoteName = String(remoteTool.name);
+                    const agentToolName = this.makeAgentToolName(serverId, remoteName);
+                    const downloadedTool: MCPDownloadedTool = {
+                        serverId,
+                        serverName: session.config.serverName,
+                        remoteToolName: remoteName,
+                        agentToolName,
+                        description: remoteTool.description ?? "MCP tool without description.",
+                        inputSchema: remoteTool.inputSchema ?? {},
+                        outputSchema: remoteTool.outputSchema
+                    };
 
-                session.toolsByAgentName.set(agentToolName, downloadedTool);
-                session.toolsByRemoteName.set(remoteName, downloadedTool);
-                this.toolsByAgentName.set(agentToolName, downloadedTool);
-                downloadedTools.push(downloadedTool);
-            }
+                    session.toolsByAgentName.set(agentToolName, downloadedTool);
+                    session.toolsByRemoteName.set(remoteName, downloadedTool);
+                    this.toolsByAgentName.set(agentToolName, downloadedTool);
+                    downloadedTools.push(downloadedTool);
+                }
 
-            cursor = response.nextCursor;
-        } while (cursor);
+                cursor = response.nextCursor;
+            } while (cursor);
 
-        return downloadedTools;
+            span?.setAttribute("mcp.downloaded_tools_count", downloadedTools.length);
+            span?.addEvent("mcp.tools_downloaded", {
+                toolsCount: downloadedTools.length,
+                tools: JSON.stringify(downloadedTools.map((t) => t.remoteToolName))
+            });
+
+            return downloadedTools;
+        });
     }
 
     async downloadToolsFromAllServers(): Promise<MCPDownloadedTool[]> {
-        const allTools: MCPDownloadedTool[] = [];
+        return withTelemetry("mcp.download_all_tools", {}, async (span) => {
+            const allTools: MCPDownloadedTool[] = [];
 
-        const serverIds: string[] = [];
-        this.servers.forEach((_, serverId) => {
-            serverIds.push(serverId);
+            const serverIds: string[] = [];
+            this.servers.forEach((_, serverId) => {
+                serverIds.push(serverId);
+            });
+
+            for (const serverId of serverIds) {
+                const downloaded = await this.downloadTools(serverId);
+                allTools.push(...downloaded);
+            }
+
+            span?.setAttribute("mcp.total_downloaded_tools", allTools.length);
+            return allTools;
         });
-
-        for (const serverId of serverIds) {
-            const downloaded = await this.downloadTools(serverId);
-            allTools.push(...downloaded);
-        }
-
-        return allTools;
     }
 
     getDownloadedTools(serverId?: string): MCPDownloadedTool[] {
@@ -366,21 +385,32 @@ export class MCP {
     }
 
     async callTool(serverId: string, remoteToolName: string, args?: Record<string, unknown>): Promise<string> {
-        const session = this.getServerSession(serverId);
+        return withTelemetry("mcp.call_tool", { serverId, remoteToolName }, async (span) => {
+            const session = this.getServerSession(serverId);
 
-        const tool = session.toolsByRemoteName.get(remoteToolName);
-        if (!tool) {
-            throw new Error(
-                `MCP tool '${remoteToolName}' is not downloaded for server '${serverId}'. Run downloadTools('${serverId}') first.`
-            );
-        }
+            const tool = session.toolsByRemoteName.get(remoteToolName);
+            if (!tool) {
+                throw new Error(
+                    `MCP tool '${remoteToolName}' is not downloaded for server '${serverId}'. Run downloadTools('${serverId}') first.`
+                );
+            }
 
-        const result = await session.client.callTool({
-            name: remoteToolName,
-            arguments: args ?? {}
+            span?.setAttribute("mcp.tool_args", JSON.stringify(args ?? {}));
+
+            const result = await session.client.callTool({
+                name: remoteToolName,
+                arguments: args ?? {}
+            });
+
+            const formattedResult = formatMCPToolResult(result as MCPToolCallResult);
+
+            span?.addEvent("mcp.tool_execution_result", {
+                isError: (result as MCPToolCallResult).isError ?? false,
+                result: formattedResult.length > 5000 ? formattedResult.substring(0, 5000) + "... [truncated]" : formattedResult
+            });
+
+            return formattedResult;
         });
-
-        return formatMCPToolResult(result as MCPToolCallResult);
     }
 
     async callToolByAgentName(agentToolName: string, args?: Record<string, unknown>): Promise<string> {
