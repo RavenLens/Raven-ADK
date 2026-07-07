@@ -8,8 +8,15 @@ import {
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as z from "zod";
-import { Tool } from "../tools";
-import { MCPClientConfig, MCPDownloadedTool, MCPServerConfig, MCPServerTransport } from "./types";
+import { Tool, tool } from "../tools";
+import {
+    MCPClientConfig,
+    MCPDownloadedPrompt,
+    MCPDownloadedResource,
+    MCPDownloadedTool,
+    MCPServerConfig,
+    MCPServerTransport
+} from "./types";
 
 interface MCPServerSession {
     config: MCPServerConfig;
@@ -18,6 +25,9 @@ interface MCPServerSession {
     connected: boolean;
     toolsByAgentName: Map<string, MCPDownloadedTool>;
     toolsByRemoteName: Map<string, MCPDownloadedTool>;
+    promptsByAgentName: Map<string, MCPDownloadedPrompt>;
+    promptsByRemoteName: Map<string, MCPDownloadedPrompt>;
+    resourcesByUri: Map<string, MCPDownloadedResource>;
 }
 
 interface MCPToolCallResult {
@@ -172,6 +182,8 @@ export class MCP {
     private readonly config: Required<MCPClientConfig>;
     private readonly servers = new Map<string, MCPServerSession>();
     private readonly toolsByAgentName = new Map<string, MCPDownloadedTool>();
+    private readonly promptsByAgentName = new Map<string, MCPDownloadedPrompt>();
+    private readonly resourcesByUri = new Map<string, MCPDownloadedResource>();
 
     constructor(config?: MCPClientConfig) {
         this.config = {
@@ -250,7 +262,10 @@ export class MCP {
             transport,
             connected: true,
             toolsByAgentName: new Map(),
-            toolsByRemoteName: new Map()
+            toolsByRemoteName: new Map(),
+            promptsByAgentName: new Map(),
+            promptsByRemoteName: new Map(),
+            resourcesByUri: new Map()
         });
     }
 
@@ -273,8 +288,19 @@ export class MCP {
             this.toolsByAgentName.delete(tool.agentToolName);
         });
 
+        session.promptsByAgentName.forEach((prompt) => {
+            this.promptsByAgentName.delete(prompt.agentPromptName);
+        });
+
+        session.resourcesByUri.forEach((resource) => {
+            this.resourcesByUri.delete(resource.uri);
+        });
+
         session.toolsByAgentName.clear();
         session.toolsByRemoteName.clear();
+        session.promptsByAgentName.clear();
+        session.promptsByRemoteName.clear();
+        session.resourcesByUri.clear();
 
         try {
             await session.client.close();
@@ -344,6 +370,122 @@ export class MCP {
         return allTools;
     }
 
+    async downloadPrompts(serverId: string): Promise<MCPDownloadedPrompt[]> {
+        const session = this.getServerSession(serverId);
+        const downloadedPrompts: MCPDownloadedPrompt[] = [];
+        let cursor: string | undefined;
+
+        do {
+            const response = await session.client.listPrompts(cursor ? { cursor } : undefined);
+
+            for (const remotePrompt of response.prompts) {
+                const remoteName = String(remotePrompt.name);
+                const agentPromptName = this.makeAgentToolName(serverId, remoteName);
+                const downloadedPrompt: MCPDownloadedPrompt = {
+                    serverId,
+                    serverName: session.config.serverName,
+                    remotePromptName: remoteName,
+                    agentPromptName,
+                    description: remotePrompt.description,
+                    arguments: remotePrompt.arguments?.map(arg => ({
+                        name: arg.name,
+                        description: arg.description,
+                        required: arg.required
+                    }))
+                };
+
+                session.promptsByAgentName.set(agentPromptName, downloadedPrompt);
+                session.promptsByRemoteName.set(remoteName, downloadedPrompt);
+                this.promptsByAgentName.set(agentPromptName, downloadedPrompt);
+                downloadedPrompts.push(downloadedPrompt);
+            }
+
+            cursor = response.nextCursor;
+        } while (cursor);
+
+        return downloadedPrompts;
+    }
+
+    async downloadPromptsFromAllServers(): Promise<MCPDownloadedPrompt[]> {
+        const allPrompts: MCPDownloadedPrompt[] = [];
+        const serverIds = Array.from(this.servers.keys());
+        for (const serverId of serverIds) {
+            allPrompts.push(...(await this.downloadPrompts(serverId)));
+        }
+        return allPrompts;
+    }
+
+    async downloadResources(serverId: string): Promise<MCPDownloadedResource[]> {
+        const session = this.getServerSession(serverId);
+        const downloadedResources: MCPDownloadedResource[] = [];
+        let cursor: string | undefined;
+
+        do {
+            const response = await session.client.listResources(cursor ? { cursor } : undefined);
+
+            for (const remoteResource of response.resources) {
+                const downloadedResource: MCPDownloadedResource = {
+                    serverId,
+                    serverName: session.config.serverName,
+                    remoteResourceName: remoteResource.name,
+                    uri: remoteResource.uri,
+                    description: remoteResource.description,
+                    mimeType: remoteResource.mimeType
+                };
+
+                session.resourcesByUri.set(remoteResource.uri, downloadedResource);
+                this.resourcesByUri.set(remoteResource.uri, downloadedResource);
+                downloadedResources.push(downloadedResource);
+            }
+
+            cursor = response.nextCursor;
+        } while (cursor);
+
+        return downloadedResources;
+    }
+
+    async downloadResourcesFromAllServers(): Promise<MCPDownloadedResource[]> {
+        const allResources: MCPDownloadedResource[] = [];
+        const serverIds = Array.from(this.servers.keys());
+        for (const serverId of serverIds) {
+            allResources.push(...(await this.downloadResources(serverId)));
+        }
+        return allResources;
+    }
+
+    getDownloadedPrompts(): MCPDownloadedPrompt[] {
+        return Array.from(this.promptsByAgentName.values());
+    }
+
+    getDownloadedResources(): MCPDownloadedResource[] {
+        return Array.from(this.resourcesByUri.values());
+    }
+
+    async getPrompt(serverId: string, promptName: string, args?: Record<string, string>): Promise<string> {
+        const session = this.getServerSession(serverId);
+        const response = await session.client.getPrompt({
+            name: promptName,
+            arguments: args
+        });
+
+        return response.messages.map(m => {
+            const content = m.content;
+            if (content.type === "text") return `${m.role.toUpperCase()}: ${content.text}`;
+            return `${m.role.toUpperCase()}: [${content.type} content]`;
+        }).join("\n\n");
+    }
+
+    async readResource(serverId: string, resourceUri: string): Promise<string> {
+        const session = this.getServerSession(serverId);
+        const response = await session.client.readResource({ uri: resourceUri });
+
+        return response.contents.map(c => {
+            if ("text" in c) return c.text;
+            if ("blob" in c) return `[binary data (${c.mimeType ?? "unknown"})]`;
+            return "[unknown resource content]";
+        }).join("\n\n");
+    }
+
     getDownloadedTools(serverId?: string): MCPDownloadedTool[] {
         if (serverId) {
             const session = this.getServerSession(serverId);
@@ -391,5 +533,56 @@ export class MCP {
         }
 
         return this.callTool(tool.serverId, tool.remoteToolName, args);
+    }
+
+    /**
+     * Returns a set of tools that allow the agent to discover and use MCP prompts and resources.
+     */
+    getDiscoveryTools(): Tool<any, any>[] {
+        return [
+            tool(
+                async () => {
+                    const tools = this.getDownloadedTools().map(t => `- Tool: ${t.agentToolName} (${t.description})`).join("\n");
+                    const prompts = this.getDownloadedPrompts().map(p => `- Prompt: ${p.agentPromptName} (${p.description ?? "No description"})\n  Arguments: ${p.arguments?.map(a => `${a.name}${a.required ? "*" : ""}`).join(", ") ?? "None"}`).join("\n");
+                    const resources = this.getDownloadedResources().map(r => `- Resource: ${r.uri} (${r.remoteResourceName}) - ${r.description ?? "No description"}`).join("\n");
+
+                    return `### MCP Discovery Report\n\n#### Tools\n${tools || "None"}\n\n#### Prompts\n${prompts || "None"}\n\n#### Resources\n${resources || "None"}`;
+                },
+                {
+                    toolName: "mcp_list_capabilities",
+                    toolDescription: "Lists all available MCP tools, prompts, and resources from connected servers.",
+                    toolArguments: z.object({})
+                }
+            ),
+            tool(
+                async ({ agentPromptName, arguments: args }) => {
+                    const prompt = this.promptsByAgentName.get(agentPromptName);
+                    if (!prompt) return `Error: Prompt ${agentPromptName} not found.`;
+                    return this.getPrompt(prompt.serverId, prompt.remotePromptName, args as Record<string, string>);
+                },
+                {
+                    toolName: "mcp_get_prompt",
+                    toolDescription: "Gets the content of a specific MCP prompt template.",
+                    toolArguments: z.object({
+                        agentPromptName: z.string().describe("The name of the prompt returned by mcp_list_capabilities"),
+                        arguments: z.record(z.string(), z.string()).optional().describe("Prompt arguments as key-value pairs")
+                    })
+                }
+            ),
+            tool(
+                async ({ uri }) => {
+                    const resource = this.resourcesByUri.get(uri);
+                    if (!resource) return `Error: Resource with URI ${uri} not found.`;
+                    return this.readResource(resource.serverId, resource.uri);
+                },
+                {
+                    toolName: "mcp_read_resource",
+                    toolDescription: "Reads the content of an MCP resource by its URI.",
+                    toolArguments: z.object({
+                        uri: z.string().describe("The URI of the resource to read")
+                    })
+                }
+            )
+        ];
     }
 }

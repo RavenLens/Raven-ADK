@@ -261,7 +261,7 @@ Where:
 - **`explorationConstant (C)`**: 
     - **Higher values (> 1.41)** favor **exploration** (trying new, unvisited branches).
     - **Lower values (< 1.41)** favor **exploitation** (focusing on branches that already have high scores).
-- **`depthPenalty`**: A penalty subtracted from the backpropagated value based on depth. This encourages the agent to find the most efficient (shortest) reasoning path. The grater number more will be removed from evaluated score with depth. This should floating point value like: 0.01 to 1.00 or with greater percision up to f64
+- **`depthPenalty`**: A penalty subtracted from the backpropagated value based on depth. This encourages the agent to find the most efficient (shortest) reasoning path. The grater number more will be removed from evaluated score with depth. This should floating point value like: 0.01 to 1.00 or with greater percision up to f64. Setup for highter score to propagate more penality or setup `0` to add no penality (since 0 * x = 0). Default: **0.01**
 
 > **Note**: MCTS is the only strategy that **does not use** the `earlyExitThreshold` parameter. It relies entirely on the statistical convergence over its defined `iterations`.
 

@@ -7,7 +7,9 @@ With this integration you can:
 - Connect to local MCP servers (stdio/ipc)
 - Connect to remote MCP servers (sse, streamable-http/http, websocket)
 - Download server tools dynamically
+- Download and use MCP Prompts and Resources
 - Convert downloaded MCP tools into RavenADK Tool instances
+- Use discovery tools to allow the agent to explore all MCP capabilities (Tools, Prompts, Resources) at runtime
 - Pass those tools directly into ReActAgent
 - Execute MCP tools from the ReAct tool loop automatically
 
@@ -15,60 +17,38 @@ With this integration you can:
 
 1. Create an MCP manager instance.
 2. Connect one or many MCP servers.
-3. Download tools exposed by connected servers.
-4. Convert downloaded tools to agent-compatible tools.
-5. Pass those tools to ReActAgent in agentConfig.tools.
-6. Invoke the agent. If the model picks an MCP tool, ReActAgent calls MCP under the hood.
+3. Download tools, prompts, and resources exposed by connected servers.
+4. (Optional) Get discovery tools so the agent can browse and read prompts/resources.
+5. Convert downloaded tools to agent-compatible tools.
+6. Pass those tools to ReActAgent in agentConfig.tools.
+7. Invoke the agent. If the model picks an MCP tool, ReActAgent calls MCP under the hood.
 
 ## Step-by-Step Setup
 
 ### Step 1: Initialize MCP
-
-```typescript
-import { MCP } from "@ravenlens/raven-adk/tools/mcp";
-
-const mcp = new MCP({
-	clientName: "my-raven-client",
-	clientVersion: "1.0.0"
-});
-```
-
+... existing code ...
 ### Step 2: Connect MCP Servers
+... existing code ...
+### Step 3: Download Capabilities
 
-You can connect local and remote servers in one place.
-
-```typescript
-await mcp.connectMany([
-	{
-		serverId: "filesystem",
-		serverName: "Local File Server",
-		transport: {
-			protocol: "stdio",
-			command: "npx",
-			args: ["-y", "@modelcontextprotocol/server-filesystem", "./"]
-		}
-	},
-	{
-		serverId: "remote-tools",
-		serverName: "Remote SSE Server",
-		transport: {
-			protocol: "sse",
-			url: "https://example.com/mcp/sse"
-		}
-	}
-]);
-```
-
-### Step 3: Download Tools
+To use MCP effectively, you should download tools, prompts, and resources.
 
 ```typescript
+// Download everything
 await mcp.downloadToolsFromAllServers();
+await mcp.downloadPromptsFromAllServers();
+await mcp.downloadResourcesFromAllServers();
 
-// Convert to RavenADK Tool[]
+// Standard tools (Executable)
 const mcpTools = mcp.getToolsAsAgentTools();
+
+// Discovery tools (For Browsing Prompts/Resources)
+const discoveryTools = mcp.getDiscoveryTools();
 ```
 
 ### Step 4: Pass MCP Tools to ReActAgent
+
+By passing both standard tools and discovery tools, the agent can both execute functions and read external context (Resources) or follow prompt templates.
 
 ```typescript
 import { ReActAgent } from "./src/agent/ReAct.agent";
@@ -83,15 +63,10 @@ const model = new OpenAI({
 
 const agent = new ReActAgent({
 	model,
-	systemPrompt: "You are a helpful assistant. Use tools when needed.",
-	messages: [
-		{
-			type: "user",
-			content: "Find files in this project and summarize structure."
-		}
-	],
+	systemPrompt: "You are an assistant with access to MCP servers. Use mcp_list_capabilities to see what is available.",
 	tools: [
-		...mcpTools
+		...mcpTools,       // serverId::toolName
+		...discoveryTools // mcp_list_capabilities, mcp_get_prompt, mcp_read_resource
 	]
 });
 
@@ -99,7 +74,17 @@ const result = await agent.invoke();
 console.log(result.messages.at(-1));
 ```
 
-## Full Example (Single Flow)
+## Using Prompts and Resources
+
+When `mcp.getDiscoveryTools()` is used, the agent receives three specialized tools:
+
+1.  **`mcp_list_capabilities`**: Returns a tree of all available tools, prompts (with their arguments), and resource URIs.
+2.  **`mcp_get_prompt`**: Allows the agent to fetch a specific prompt template by name.
+3.  **`mcp_read_resource`**: Allows the agent to fetch the content of a resource (e.g., a file, log, or database entry) by its URI.
+
+This allows the `ReActAgent` to behave as a **Reasoning Agent** that fetches context only when necessary, rather than cramming all data into the initial context window.
+
+## Full Example (Advanced Discovery Flow)
 
 ```typescript
 import { MCP } from "@ravenlens/raven-adk/tools/mcp";
@@ -107,19 +92,22 @@ import { ReActAgent } from "./src/agent/ReAct.agent";
 import { OpenAI } from "./src/models/openai";
 
 async function run() {
-	const mcp = new MCP({ clientName: "demo-client", clientVersion: "1.0.0" });
+	const mcp = new MCP({ clientName: "thinking-agent", clientVersion: "1.0.0" });
 
+	// Connect to a server that provides tools, prompts AND resources
 	await mcp.connect({
-		serverId: "filesystem",
+		serverId: "my-data-server",
 		transport: {
 			protocol: "stdio",
 			command: "npx",
-			args: ["-y", "@modelcontextprotocol/server-filesystem", "./"]
+			args: ["-y", "@modelcontextprotocol/server-everything"]
 		}
 	});
 
-	await mcp.downloadTools("filesystem");
-	const mcpTools = mcp.getToolsAsAgentTools("filesystem");
+	// populate internal maps
+	await mcp.downloadToolsFromAllServers();
+	await mcp.downloadPromptsFromAllServers();
+	await mcp.downloadResourcesFromAllServers();
 
 	const model = new OpenAI({
 		model: "gpt-5.1",
@@ -130,9 +118,12 @@ async function run() {
 
 	const agent = new ReActAgent({
 		model,
-		systemPrompt: "Use tools for real data, never invent outputs.",
-		messages: [{ type: "user", content: "List files and explain what this repo contains." }],
-		tools: [...mcpTools]
+		systemPrompt: "You are a thinking agent. Use mcp_list_capabilities to explore available data/prompts.",
+		messages: [{ type: "user", content: "What is available in the MCP server? If there is a documentation resource, read it." }],
+		tools: [
+			...mcp.getToolsAsAgentTools(),
+			...mcp.getDiscoveryTools()
+		]
 	});
 
 	const result = await agent.invoke();
@@ -145,33 +136,24 @@ run().catch(console.error);
 ```
 
 ## Runtime Behavior in ReActAgent
-
-When the model selects a tool:
-
-1. ReActAgent matches the selected name in agentConfig.tools.
-2. If the tool is MCP-backed, ReActAgent calls MCPTool.invokeFromMCP(...).
-3. MCP manager calls the remote MCP server via callTool.
-4. Output is normalized into readable text and returned to the ReAct loop.
-5. The model receives tool output and continues reasoning.
-
+... existing code ...
 ## Naming Convention
-
-Downloaded MCP tools are exposed to the agent with namespaced names:
-
-- serverId::remoteToolName
-
-This prevents name collisions across multiple MCP servers.
-
+... existing code ...
 ## Useful MCP Methods
 
 - connect(serverConfig): connect one server
 - connectMany(serverConfigs): connect many servers
 - downloadTools(serverId): pull tools from one server
+- downloadPrompts(serverId): pull prompts from one server
+- downloadResources(serverId): pull resource URIs from one server
 - downloadToolsFromAllServers(): pull tools from all connected servers
+- downloadPromptsFromAllServers(): pull prompts from all connected servers
+- downloadResourcesFromAllServers(): pull resources from all connected servers
 - getToolsAsAgentTools(serverId?): get Tool[] compatible with ReActAgent
+- getDiscoveryTools(): get tools for runtime exploration (list/read prompts/resources)
 - callTool(serverId, remoteToolName, args?): call a specific remote tool
-- callToolByAgentName(agentToolName, args?): call by namespaced tool name
-- disconnect(serverId): close one connection
+- getPrompt(serverId, promptName, args?): get template content
+- readResource(serverId, resourceUri): get resource content
 - disconnectAll(): close all connections
 
 ## Tips
