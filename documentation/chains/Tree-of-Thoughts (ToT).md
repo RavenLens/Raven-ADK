@@ -230,23 +230,91 @@ const result = await tot.invoke();
 
 ---
 
+### 5. Monte Carlo Tree Search (`MCTSToT`)
+Monte Carlo Tree Search (MCTS) is a probabilistic search algorithm that balances exploration and exploitation using the **Upper Confidence Bound for Trees (UCT)**. It is particularly effective for large, non-deterministic reasoning spaces.
+
+#### In details:
+1.  **Selection**: Starting from the root, the algorithm selects the most "promising" child node using the UCT formula until it reaches a leaf node.
+2.  **Expansion**: If the leaf node is not a terminal state (and hasn't reached `maxThoughtsDepth`), it generates `thoughtsCount` new thoughts.
+3.  **Simulation**: The algorithm uses the `evaluator` to assign an initial quality score to the newly expanded node.
+4.  **Backpropagation**: The score (potentially with a `depthPenalty`) is propagated back up the tree, updating the visit counts and total values of all ancestor nodes.
+5.  **Iteration**: This process repeats for a fixed number of `iterations`.
+6.  **Finalization**: The path with the highest average value or visit count is selected as the winning reasoning chain.
+
+#### The UCT Formula
+MCTS uses the **Upper Confidence Bound** to decide which node to explore next:
+
+$$UCT = \frac{V_i}{n_i} + C \times \sqrt{\frac{\ln(N)}{n_i}}$$
+
+Where:
+- $\frac{V_i}{n_i}$: **Exploitation** (Average value of the node).
+- $C \times \sqrt{\frac{\ln(N)}{n_i}}$: **Exploration** (Bias towards nodes with fewer visits).
+- $C$: `explorationConstant`.
+- $n_i$: Number of visits to the current node.
+- $N$: Total visits to the parent node.
+
+#### Configuration Parameters
+- **`iterations`**: The total number of simulation cycles. More iterations lead to better convergence but increase token costs. Default is **30**.
+- **`explorationConstant (C)`**: 
+    - **Higher values (> 1.41)** favor **exploration** (trying new, unvisited branches).
+    - **Lower values (< 1.41)** favor **exploitation** (focusing on branches that already have high scores).
+- **`depthPenalty`**: A penalty subtracted from the backpropagated value based on depth. This encourages the agent to find the most efficient (shortest) reasoning path.
+
+> **Note**: MCTS is the only strategy that **does not use** the `earlyExitThreshold` parameter. It relies entirely on the statistical convergence over its defined `iterations`.
+
+#### Pros
+- **Balanced Search**: Automatically balances trying new ideas vs. refining existing ones.
+- **Asymmetric Tree Growth**: Focuses heavily on promising branches while still maintaining a statistical map of alternatives.
+- **Efficiency**: Use `depthPenalty` to prevent "rambling" and find concise solutions.
+
+#### Cons
+- **High Latency**: Requires a significant number of iterations to become statistically significant.
+- **Costly**: Each expansion and simulation step involves LLM calls.
+
+#### Real-World Applications
+- **Policy Making**: Simulating complex social or economic impacts where multiple variables interact.
+- **Coding Architecture**: Exploring different design patterns and their downstream implications.
+
+##### Example Usage
+```typescript
+import { TreeOfThoughts, MCTSToT } from "@raven/adk";
+
+const tot = new TreeOfThoughts({
+    query: "Develop a consensus protocol for a decentralized autonomous organization",
+    initialOptionsCount: 3,
+    thoughtsCount: 2,
+    maxThoughtsDepth: 6,
+    graphSearchAlgorithm: new MCTSToT({
+        iterations: 25,         // Run 25 simulation cycles
+        explorationConstant: 1.414, // Standard UCT exploration bias
+        depthPenalty: 0.05      // Penalize longer paths by 0.05 per step
+    }),
+    optionGenerator: myAgent,
+    thoughtGenerator: myAgent,
+    evaluator: myEvaluatorAgent
+});
+```
+
+---
+
 ## Mathematical Comparison
 
 Regarding the search complexity and search space:
 
-| Feature | Multi-Beam Search | BFS | DFS | Best-First Search |
-| :--- | :--- | :--- | :--- | :--- |
-| **Expansion Formula** | $K \times \text{Depth}$ (Independent tracks) | $\text{Frontier} \times \text{Width}$ (Global Pool) | Single branch recursion | Global Priority (Score Based) |
-| **Space Complexity** | $O(K \cdot D)$ | $O(K \cdot D)$ | $O(D)$ | $O(K \cdot D)$ |
-| **Convergence Rate** | Slow (High exploration) | Fast (High exploitation) | Variable (Path-dependent) | Very Fast (Targeted) |
-| **Pruning Logic** | Competitive across fixed tracks | Pure global top-K selection | Threshold-based backtracking | Score-based acceptance threshold |
-| **Early Exit Support** | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) |
+| Feature | Multi-Beam Search | BFS | DFS | Best-First Search | MCTS |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Expansion Formula** | $K \times \text{Depth}$ (Independent tracks) | $\text{Frontier} \times \text{Width}$ (Global Pool) | Single branch recursion | Global Priority (Score Based) | Iterative UCT Simulations |
+| **Space Complexity** | $O(K \cdot D)$ | $O(K \cdot D)$ | $O(D)$ | $O(K \cdot D)$ | $O(N)$ (Visited Nodes) |
+| **Convergence Rate** | Slow (High exploration) | Fast (High exploitation) | Variable (Path-dependent) | Very Fast (Targeted) | Balanced (Probabilistic) |
+| **Pruning Logic** | Competitive across fixed tracks | Pure global top-K selection | Threshold-based backtracking | Score-based acceptance threshold | UCT-based Priority |
+| **Early Exit Support** | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | No |
 
 **Exploration vs. Exploitation**: 
 - **Multi-Beam** acts as a multi-modal explorer, avoiding premature convergence.
 - **BFS** is a greedy frontier expansion, optimal for simple search landscapes.
 - **DFS** is a "deep-diver". It sacrifices breadth for depth, making it the most memory-efficient but also the most prone to missing global optima if not tuned with the correct threshold.
 - **Best-First** is the "smartest" explorer. It navigates based on heuristic confidence, effectively balancing speed and quality by targeting the most likely paths first.
+- **MCTS** provides a mathematically grounded balance, utilizing statistical simulation to explore trees that are too large for exhaustive search. Doesn't rely on pre-deterministic herustic that in sense of llm is blackboxed and non-deterministic (it base on model and particular task, query, method model use, training phase quality data and post-training choices and so on...)
 
 ---
 
@@ -277,11 +345,11 @@ When generating educational curricula or professional roadmaps, **Multi-Beam Sea
 3.  **Prerequisite Mapping**: The threshold-based evaluation in independent beams ensures that each step is a logical successor to the previous one within its specific context.
 
 ##### Comparison for Educational Use
-| Feature | Multi-Beam (Winner) | BFS | DFS | Best-First |
-| :--- | :--- | :--- | :--- | :--- |
-| **Consistency** | **High** (Stays on topic) | Low (Context mixing) | Med (Prone to local minima) | Med (Topic jumping possibility) |
-| **Student Choice** | **$K$ distinct versions** | 1 "Average" version | 1 "Deep" version | 1 "Best Path" version |
-| **Prerequisites** | Balanced | Best at raw coverage | Poor (Might skip basics) | High (Follows best dependency) |
+| Feature | Multi-Beam (Winner) | BFS | DFS | Best-First | MCTS |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Consistency** | **High** (Stays on topic) | Low (Context mixing) | Med (Prone to local minima) | Med (Topic jumping possibility) | High (Path-simulation focus) |
+| **Student Choice** | **$K$ distinct versions** | 1 "Average" version | 1 "Deep" version | 1 "Best Path" version | 1 "Balanced" version |
+| **Prerequisites** | Balanced | Best at raw coverage | Poor (Might skip basics) | High (Follows best dependency) | Exceptional (Iterative verification) |
 
 ---
 

@@ -7,6 +7,7 @@ import { MultiBeamToT } from "./strategies/MultiBeam";
 import { BFSToT } from "./strategies/BFS";
 import { DFSToT } from "./strategies/DFS";
 import { BestFirstToT } from "./strategies/BestFirst";
+import { MCTSToT } from "./strategies/MCTS";
 
 export interface TreeOfThoughtsEvents {
     /** Triggered when the search returns to a previous state. */
@@ -60,7 +61,7 @@ export interface TreeOfThoughtsConfig {
     /** How many options generates initially. Cannot be 0. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
     initialOptionsCount: number;
     /** Use to search graph accordingly */
-    graphSearchAlgorithm: BFSToT | MultiBeamToT | DFSToT | BestFirstToT;
+    graphSearchAlgorithm: BFSToT | MultiBeamToT | DFSToT | BestFirstToT | MCTSToT;
     /**
      * Generates different options for the 1st step of run
      * 1st param: is user prompt - you can embedd this in whatever wrapper or process directly
