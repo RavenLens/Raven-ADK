@@ -431,8 +431,13 @@ export class RunPod implements StandardLLMShema {
 		};
 		const request = await this.endpoint.run(payload, this.config.requestTimeout);
 		let finalChunk: any = null;
+		let firstTokenTracked = false;
 
 		for await (const chunk of this.endpoint.stream(request.id, this.config.streamTimeout)) {
+			if (!firstTokenTracked) {
+				this.Tracker.registerTTFT();
+				firstTokenTracked = true;
+			}
 			finalChunk = chunk;
 			yield chunk;
 		}
@@ -493,6 +498,7 @@ export class RunPod implements StandardLLMShema {
 					const answer = this.parseResponseToAnswer(response);
 
 					this.Tracker
+						.registerTTFT()
 						.setAnswerActiveSpanAttribute(answer)
 						.finishTimeTracker()
 						.setUsage(answer.tokens);

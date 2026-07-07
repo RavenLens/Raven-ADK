@@ -228,6 +228,7 @@ export class ReActAgent
     private AnyEventListeners: ((eventName: string, ...args: any[]) => void | Promise<void>)[] = [];
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     private TelemetryTracker: RecordTracker<ReActAgentConfig<Skills, Memory, HITL>> | undefined = undefined;
+    private firstTokenTracked = false;
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
     agentMemoryInterface: MemoryInterface<Memory> | undefined = undefined;
@@ -291,6 +292,9 @@ export class ReActAgent
                 }
             })
             span.setAttribute("agent.subagents", JSON.stringify(subagents, null, 4));
+
+            // Availability of HITL
+            span.setAttribute("agent.hitlAvailable", this.agentConfig.hitl ? true : false);
 
             // Availability of skills
             span.setAttribute("agent.skillsAvailable", this.agentConfig.skills ? true : false);
@@ -1513,6 +1517,11 @@ ${memoryConclusionSystemPrompt}
         eventName: EventName,
         ...eventArgs: Parameters<ReActAgentEvents[EventName]>
     ) {
+        if (!this.firstTokenTracked && ["reasoning", "tool_invoked", "result_producing_start", "concluding_start"].includes(eventName as string)) {
+            this.TelemetryTracker?.registerTTFT();
+            this.firstTokenTracked = true;
+        }
+
         const streamEvent = this.mapEventToStreamChunk(eventName, ...eventArgs);
 
         // Emit stream event
@@ -1632,6 +1641,7 @@ ${memoryConclusionSystemPrompt}
 
             /// ... Resets Path of reasoning
             this.AgentReasoningPath = [];
+            this.firstTokenTracked = false;
 
             // Setups
             this.TelemetryTracker?.registerConfig()

@@ -84,6 +84,20 @@ export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any,
         return this;
     }
 
+    registerTTFT() {
+        if (this.TimestampOfUsage === undefined) {
+            console.warn("Cannot register TTFT because time tracker wasn't initialized");
+            return this;
+        }
+
+        const ttft = Date.now() - this.TimestampOfUsage;
+        const activeSpan = trace.getActiveSpan();
+
+        activeSpan?.setAttribute(`${this.getPrefix()}.ttft`, ttft);
+
+        return this;
+    }
+
     finishTimeTracker() {
         if (this.TimestampOfUsage === undefined) {
             console.warn("Cannot finish timetracker because it wasn't initialized");

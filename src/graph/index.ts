@@ -1,3 +1,5 @@
+import { withTelemetry, recordEventWithData } from "../telemetry";
+
 export enum GraphMarkers {
     START = "__START__",
     END = "__END__"
@@ -104,6 +106,13 @@ export class Graph<GraphState extends Record<string, any>> {
         for (let edgeIndex = 0; edgeIndex < this.NodesEdgeConnections.length; edgeIndex += 1) {
             const edge = this.NodesEdgeConnections[edgeIndex];
 
+            // Log edge processing
+            recordEventWithData("graph.edge_processing", {
+                from: edge.from,
+                to: edge.to,
+                timestamp: Date.now()
+            });
+
             if (!edge.from.includes(completedNodeId)) {
                 continue;
             }
@@ -193,10 +202,20 @@ export class Graph<GraphState extends Record<string, any>> {
         }
 
         this.emitEvent("node_start", nodeId, this.graphState);
+        recordEventWithData("graph.node_start", {
+            nodeId,
+            graphState: JSON.stringify(this.graphState),
+            timestamp: Date.now()
+        });
 
         const logicExecutionResult = await nodeLogic(this.graphState, nodeId);
         await this.processNodeResult(nodeId, logicExecutionResult, queue);
 
+        recordEventWithData("graph.node_end", {
+            nodeId,
+            graphState: JSON.stringify(this.graphState),
+            timestamp: Date.now()
+        });
         this.emitEvent("node_end", nodeId, this.graphState);
 
         if (!shouldDistributeByEdges || this.HasReachedEnd) {
@@ -246,6 +265,7 @@ export class Graph<GraphState extends Record<string, any>> {
         return this;
     }
 
+    // TODO: Make ability to register multiple same node listeners
     protected emitEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, ...eventArgs: Parameters<GraphEvents<GraphState>[EventName]>) {
         for (const anyListener of this.AnyEventListeners) {
             void Promise.resolve(anyListener(eventName as string, ...eventArgs)).catch((error) => {
@@ -267,33 +287,42 @@ export class Graph<GraphState extends Record<string, any>> {
     }
 
     async start(): Promise<void> {
-        this.validateAssembly();
-        this.HasReachedEnd = false;
-        this.NodeCompletionCounts = {
-            [GraphMarkers.START]: 1
-        };
-        this.EdgeSyncWatermarks = this.NodesEdgeConnections.map((edge) => {
-            const watermark: Record<string, number> = {};
+        return await withTelemetry(
+            "graph.execution",
+            { startTimestamp: Date.now() },
+            async (span) => {
+                span?.setAttribute("nodes", JSON.stringify(Object.keys(this.NodesLogic)));
+                span?.setAttribute("edges", JSON.stringify(this.NodesEdgeConnections));
 
-            for (const fromNodeId of edge.from) {
-                watermark[fromNodeId] = 0;
+                this.validateAssembly();
+                this.HasReachedEnd = false;
+                this.NodeCompletionCounts = {
+                    [GraphMarkers.START]: 1
+                };
+                this.EdgeSyncWatermarks = this.NodesEdgeConnections.map((edge) => {
+                    const watermark: Record<string, number> = {};
+        
+                    for (const fromNodeId of edge.from) {
+                        watermark[fromNodeId] = 0;
+                    }
+        
+                    return watermark;
+                });
+        
+                const executionQueue: string[] = [];
+                this.processOutgoingEdges(GraphMarkers.START, executionQueue);
+        
+                while (executionQueue.length > 0 && !this.HasReachedEnd) {
+                    const nextNodeId = executionQueue.shift();
+        
+                    if (!nextNodeId) {
+                        continue;
+                    }
+        
+                    await this.executeNode(nextNodeId, executionQueue, true);
+                }
             }
-
-            return watermark;
-        });
-
-        const executionQueue: string[] = [];
-        this.processOutgoingEdges(GraphMarkers.START, executionQueue);
-
-        while (executionQueue.length > 0 && !this.HasReachedEnd) {
-            const nextNodeId = executionQueue.shift();
-
-            if (!nextNodeId) {
-                continue;
-            }
-
-            await this.executeNode(nextNodeId, executionQueue, true);
-        }
+        )
     }
     
     getState(): GraphState {

@@ -470,8 +470,13 @@ export class OpenAI implements StandardLLMShema {
     private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>): AsyncGenerator<ResponsesAPI.ResponseStreamEvent, LLMAnswer | undefined> {
         // Collect for telemetry
         let finalResponse: ResponsesAPI.Response | null = null;
+        let firstTokenTracked = false;
         
         for await (const event of stream) {
+            if (!firstTokenTracked) {
+                this.Tracker.registerTTFT();
+                firstTokenTracked = true;
+            }
             this.emitEvent("stream", event);
 
             const eventAny = event as any;
@@ -533,6 +538,7 @@ export class OpenAI implements StandardLLMShema {
                         const result = this.parseCompletionResponseToAnswer(response);
                         
                         this.Tracker
+                            .registerTTFT()
                             .setAnswerActiveSpanAttribute(result)
                             .setUsage(result.tokens);
                         
@@ -550,6 +556,7 @@ export class OpenAI implements StandardLLMShema {
                     const result = this.parseChatResponseToAnswer(response);
                     
                     this.Tracker
+                        .registerTTFT()
                         .setAnswerActiveSpanAttribute(result)
                         .setUsage(result.tokens);
 
@@ -578,6 +585,7 @@ export class OpenAI implements StandardLLMShema {
                 const result = this.parseResponseToAnswer(response);
                 
                 this.Tracker
+                    .registerTTFT()
                     .setAnswerActiveSpanAttribute(result)
                     .finishTimeTracker()
                     .setUsage(result.tokens);

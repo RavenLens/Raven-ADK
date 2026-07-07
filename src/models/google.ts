@@ -385,7 +385,13 @@ export class Google implements StandardLLMShema {
 
     private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>): AsyncGenerator<GenerateContentResponse, LLMAnswer | undefined> {
         let lastEvent: GenerateContentResponse | null = null;
+        let firstTokenTracked = false;
+
         for await (const event of stream) {
+            if (!firstTokenTracked) {
+                this.Tracker.registerTTFT();
+                firstTokenTracked = true;
+            }
             this.emitEvent("stream", event);
 
             if (event.candidates?.[0]?.content?.parts) {
@@ -482,6 +488,7 @@ export class Google implements StandardLLMShema {
 
                     const answer = this.parseResponseToAnswer(response);
                     this.Tracker
+                        .registerTTFT()
                         .setAnswerActiveSpanAttribute(answer)
                         .finishTimeTracker()
                         .setUsage(answer.tokens);

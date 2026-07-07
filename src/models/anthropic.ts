@@ -247,7 +247,13 @@ export class Anthropic implements StandardLLMShema {
     
     private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>): AsyncGenerator<AnthropicStandalone.Messages.RawMessageStreamEvent, LLMAnswer | undefined> {
         let finalMessage: AnthropicStandalone.Messages.Message | null = null;
+        let firstTokenTracked = false;
+
         for await (const event of stream) {
+            if (!firstTokenTracked) {
+                this.Tracker.registerTTFT();
+                firstTokenTracked = true;
+            }
             this.emitEvent("stream", event);
 
             if (event.type === "content_block_delta" && event.delta.type === "thinking_delta") {
@@ -397,6 +403,7 @@ export class Anthropic implements StandardLLMShema {
                         const completion = await this.anthropic.messages.create(config);
                         const answer = this.prepareSyncAnswer(completion);
                         this.Tracker
+                            .registerTTFT()
                             .setAnswerActiveSpanAttribute(answer)
                             .finishTimeTracker()
                             .setUsage(answer.tokens);
