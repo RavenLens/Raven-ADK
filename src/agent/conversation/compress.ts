@@ -6,6 +6,7 @@
     *   - tokenizer has to be aware of model tokenizer
     *   - instruction what to compress and what to maintain - user can override the default one
 */
+import { recordEventWithData } from "../../telemetry";
 import { ReActAgentPluginSpec } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
 
@@ -42,6 +43,7 @@ async function safeTokenize(content: string | undefined | null, tokenizer?: Toke
     return Math.ceil(content.length / 4);
 }
 
+// TODO: Instead of using the Compression hardcoded logic use some specified model in plugin config to compress the information + update the documentation for this
 export function generateCompressReActAgentPlugin(
     model: {
         name: string;
@@ -261,6 +263,11 @@ export function generateCompressReActAgentPlugin(
             const maxAllowed = Math.floor(model.contextWindowTokens * (compressOnceContextPr / 100));
 
             if (totalTokens > maxAllowed) {
+                recordEventWithData("agent_plugin.start_compress", {
+                    totalTokens,
+                    maxAllowedTokens: maxAllowed,
+                });
+                
                 // Perform compaction to preserve conversational space
                 const systemMessages = agentConfig.messages.filter((m: any) => m.type === "system");
                 const otherMessages = agentConfig.messages.filter((m: any) => m.type !== "system");

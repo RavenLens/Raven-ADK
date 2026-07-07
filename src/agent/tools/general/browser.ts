@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as z from 'zod';
 import { Tool, tool } from '../tools';
 import { ReActAgentPluginSpec } from '../../ReAct.agent';
+import { recordEventWithData } from '../../../telemetry';
 
 /**
  * Configuration for browser operations
@@ -54,6 +55,11 @@ export class BrowserTool {
       viewportHeight: config.viewportHeight ?? 1080,
       snapshotDir: config.snapshotDir ?? './snapshots',
     };
+
+    recordEventWithData("browser_tool.initialized", {
+      reason: "Browser setup is initialized",
+      setup: this.config
+    });
 
     // Ensure snapshot directory exists
     if (!fs.existsSync(this.config.snapshotDir)) {
@@ -293,9 +299,12 @@ async function getGlobalBrowserTool(): Promise<BrowserTool> {
  */
 export const openWebpageTool = tool(
   async (args) => {
+    recordEventWithData("browser_tool.open_webpage.start", { url: args.url });
     const browserTool = await getGlobalBrowserTool();
     await browserTool.openWebpage(args.url);
-    return JSON.stringify({ success: true, message: `Successfully opened ${args.url}` });
+    const result = JSON.stringify({ success: true, message: `Successfully opened ${args.url}` });
+    recordEventWithData("browser_tool.open_webpage.end", { url: args.url, success: true });
+    return result;
   },
   {
     toolName: 'open_webpage',
@@ -313,8 +322,10 @@ export const openWebpageTool = tool(
  */
 export const readPageTextTool = tool(
   async () => {
+    recordEventWithData("browser_tool.read_page_text.start", {});
     const browserTool = await getGlobalBrowserTool();
     const text = await browserTool.readText();
+    recordEventWithData("browser_tool.read_page_text.end", { contentLength: text.length });
     return text;
   },
   {
@@ -329,8 +340,10 @@ export const readPageTextTool = tool(
  */
 export const readPageHtmlTool = tool(
   async () => {
+    recordEventWithData("browser_tool.read_page_html.start", {});
     const browserTool = await getGlobalBrowserTool();
     const html = await browserTool.readHtml();
+    recordEventWithData("browser_tool.read_page_html.end", {});
     return html;
   },
   {
@@ -345,8 +358,10 @@ export const readPageHtmlTool = tool(
  */
 export const readPageContentTool = tool(
   async () => {
+    recordEventWithData("browser_tool.read_page_content.start", {});
     const browserTool = await getGlobalBrowserTool();
     const content = await browserTool.readPageContent();
+    recordEventWithData("browser_tool.read_page_content.end", {});
     return JSON.stringify(content);
   },
   {
@@ -362,8 +377,10 @@ export const readPageContentTool = tool(
  */
 export const takeSnapshotTool = tool(
   async (args) => {
+    recordEventWithData("browser_tool.snapshot.start", {});
     const browserTool = await getGlobalBrowserTool();
     const buffer = await browserTool.takeSnapshotBuffer();
+    recordEventWithData("browser_tool.snapshot.ebd", {});
     return `data:image/png;base64,${buffer.toString("base64")}`;
   },
   {
@@ -378,8 +395,10 @@ export const takeSnapshotTool = tool(
  */
 export const getSnapshotBase64Tool = tool(
   async (args) => {
+    recordEventWithData("browser_tool.snapshot_base64.start", {});
     const browserTool = await getGlobalBrowserTool();
     const base64 = await browserTool.getSnapshotBase64(args.snapshotPath);
+    recordEventWithData("browser_tool.snapshot_base64.end", {});
     return base64;
   },
   {
@@ -394,6 +413,7 @@ export const getSnapshotBase64Tool = tool(
  */
 export const closePageTool = tool(
   async () => {
+    recordEventWithData("browser_tool.closepage_tool", {});
     const browserTool = await getGlobalBrowserTool();
     await browserTool.closePage();
     return JSON.stringify({ success: true, message: 'Page closed successfully' });
@@ -414,6 +434,7 @@ export const closePageTool = tool(
  */
 export const closeBrowserTool = tool(
   async () => {
+    recordEventWithData("browser_tool.closepage_browser_tool", {});
     const browserTool = await getGlobalBrowserTool();
     await browserTool.close();
     globalBrowserTool = null;
@@ -435,6 +456,7 @@ export const closeBrowserTool = tool(
  */
 export const isBrowserOpenTool = tool(
   async () => {
+    recordEventWithData("browser_tool.is_browser_open_tool", {});
     const browserTool = await getGlobalBrowserTool();
     const isOpen = browserTool.isOpen();
     return JSON.stringify({ isOpen });
@@ -517,12 +539,15 @@ export const ReActPluginBrowserAutoClose: ReActAgentPluginSpec = {
     async execute(agentConfig, graphState) {
         // Only close if it was actually opened
         if (globalBrowserTool) {
-            await globalBrowserTool.close();
-            globalBrowserTool = null;
+          recordEventWithData("agent_plugin.browser_auto_close", {
+            reason: "browser was open"
+          });
+          await globalBrowserTool.close();
+          globalBrowserTool = null;
         }
         
         return {
-            status: false
+          status: false
         }
     },
 }

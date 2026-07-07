@@ -2,7 +2,7 @@ import z from "zod";
 import { ReActAgent, ReActAgentConfig, ReActAgentPluginSpec } from "../../ReAct.agent";
 import { tool, Tool } from "../../tools/tools";
 import EventEmitter from "node:events";
-import { recordLog } from "../../../telemetry/telemetry";
+import { recordEventWithData } from "../../../telemetry/telemetry";
 
 export interface TodoPoint {
     name: string;
@@ -234,8 +234,7 @@ IMPORTANT: Previous history is provided below for context. Focus on finishing th
                         todoPoints: todoStorage[0]?.todoPoints || []
                     };
 
-                    recordLog({
-                        event: "todo_struggle_finished",
+                    recordEventWithData("agent_plugin.todo_struggle_finished", {
                         ...eventData,
                         timestamp: Math.floor(Date.now() / 1000)
                     });
