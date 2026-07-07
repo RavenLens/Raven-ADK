@@ -126,7 +126,7 @@ interface ReActAgentEvents extends SkillEvents {
     error: (error: any) => void | Promise<void>;
 }
 
-interface ReActAgentInvokeResult {
+export interface ReActAgentInvokeResult {
     messages: MessagesVariations[];
     state: AgentMessagesGraphState;
 }
