@@ -1,7 +1,7 @@
 import z4 from "zod/v4";
 import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
+import { LogicReturnType, OpenTelemetryTreeOfThoughts, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
 interface DFS_GenerateOptions {
@@ -40,7 +40,8 @@ const zodRateNodesSchema = z4.object({
 });
 
 export class DFSToT implements StrategySchema {
-    static name = "DFS-ToT";
+    name = "DFS-ToT";
+    telemetry?: OpenTelemetryTreeOfThoughts;
     /** Is the floating point number. Determines backpropagation moment */
     treshold: number;
     private ToT: TreeOfThoughts | undefined = undefined;
@@ -77,6 +78,8 @@ ${zodRateNodesSchema.toJSONSchema()}
         const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodRateNodesSchema, systemPrompt);
         const structured = result.structuredOutput as DFS_RateNodesResponse;
 
+        this.telemetry?.recordStep("rate_nodes", { count: nodes.length });
+
         for (const rating of structured.ratings) {
             const node = nodes.find(n => n.id === rating.id);
             if (node) {
@@ -106,6 +109,8 @@ Generate ${this.ToT!.config.thoughtsCount} thoughts that continue this specific 
 
         const result = await this.ToT!.callableUnitInvokeStructured("thoughtGenerator", zodNewThoughtsSchema, prompt);
         const thoughts = (result.structuredOutput as DFS_NewThoughtsSchema).thoughts;
+
+        this.telemetry?.recordStep("expand", { parentNodeId: node.id, count: thoughts.length });
 
         thoughts.forEach(t => {
             t.id = randomUUID();
@@ -149,6 +154,8 @@ Generate ${this.ToT!.config.thoughtsCount} thoughts that continue this specific 
             if (earlyExitFound) return;
             const lastNode = path[path.length - 1];
             
+            this.telemetry?.recordIteration(depth, { nodeId: lastNode.id });
+
             // Check threshold for current node (Option or Thought)
             const currentScore = (lastNode.type === "option-node") 
                 ? (lastNode as OptionNode).initialRate?.score 
@@ -213,6 +220,7 @@ Generate ${this.ToT!.config.thoughtsCount} thoughts that continue this specific 
         const selectBest = async (chains: any[]): Promise<OptionNode> => {
             const prompt = `Select the best final option from these deep reasoning chains: ${JSON.stringify(chains, null, 4)}`;
             const res = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTheBestOptionSchema, prompt);
+            this.telemetry?.recordStep("select_final_option");
             const best = (res.structuredOutput as DFS_TheBestOption).theBestOption[0];
             await this.ToT!.emitEvent("finalOptionSelected", best);
             return best;

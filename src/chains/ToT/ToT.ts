@@ -6,6 +6,8 @@ import { OptionNode, ThoughtNode } from "./nodes";
 import { MultiBeamToT } from "./strategies/MultiBeam";
 import { BFSToT } from "./strategies/BFS";
 import { DFSToT } from "./strategies/DFS";
+import { OpenTelemetryTreeOfThoughts } from "./strategies/strategy";
+import { withTelemetry } from "../../telemetry";
 
 export interface TreeOfThoughtsEvents {
     /** Triggered when the search returns to a previous state. */
@@ -110,6 +112,13 @@ export class TreeOfThoughts {
         return this;
     }
 
+    /**
+     * Call to get structured output
+     * @param unitName it's the name of the name of model / logic will evaluate the Tree-of-Thoughts and return the output -> it executes `CallUnit`
+     * @param schema - is the schama will be outputed out of the telementry object
+     * @param instruction - it's the instruction what has the `unitName`
+     * @returns 
+     */
     async callableUnitInvokeStructured(unitName: keyof Pick<TreeOfThoughtsConfig, "evaluator" | "thoughtGenerator" | "optionGenerator">, schema: z4.ZodType, instruction: string): Promise<AIMessage> {
         const u = this.config[unitName];
         const systemMessage: MessagesVariations = {
@@ -158,6 +167,15 @@ export class TreeOfThoughts {
     }
 
     async invoke() {
-        return await this.config.graphSearchAlgorithm.logic(this);
+        return await withTelemetry("tot.run", { LATSAlgorithmName: this.config.graphSearchAlgorithm.name }, async (span) => {
+            // Register unified telementry tracker
+            if (this.config.graphSearchAlgorithm) {
+                this.config.graphSearchAlgorithm.telemetry = new OpenTelemetryTreeOfThoughts();
+            }
+
+            span?.setAttribute("config", JSON.stringify(this.config, null, 4));
+            
+            return await this.config.graphSearchAlgorithm.logic(this);
+        }) 
     }
 }

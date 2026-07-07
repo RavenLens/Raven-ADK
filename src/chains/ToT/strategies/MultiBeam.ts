@@ -1,7 +1,7 @@
 import z4 from "zod/v4";
 import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
+import { LogicReturnType, OpenTelemetryTreeOfThoughts, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
 interface MultiBeam_GenerateOptions {
@@ -76,7 +76,8 @@ const DEFAULTS_THOUGHTS_COUNT = 3;
 const DEFAULT_THOUGHTS_DEPTH = 10;
 
 export class MultiBeamToT implements StrategySchema {
-    static name = "MultiBeam-ToT";
+    name = "MultiBeam-ToT";
+    telemetry?: OpenTelemetryTreeOfThoughts;
     private ToT: TreeOfThoughts | undefined = undefined;
     private config: MultiBeamConfig;
 
@@ -116,6 +117,8 @@ ${zodRateNodesSchema.toJSONSchema()}
 
         const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodRateNodesSchema, systemPrompt);
         const structured = result.structuredOutput as MultiBeam_RateNodesResponse;
+
+        this.telemetry?.recordStep("rate_nodes", { count: nodes.length, rateType });
 
         if (!structured || !Array.isArray(structured.ratings)) {
             const received = JSON.stringify(result.structuredOutput, null, 2);
@@ -169,10 +172,11 @@ ${zodTopKOptions.toJSONSchema()}
             const structured = topKOptionsObj.structuredOutput as MultiBeam_EvaluateTopKOptionsSchema;
     
             if (!structured || !Array.isArray(structured.topOptions)) {
-                const received = JSON.stringify(topKOptionsObj.structuredOutput, null, 2);
+                const received = JSON.stringify(topKOptionsObj.structuredOutput as any);
                 throw new Error(`Structure message has to be an object with topOptions array. Received: ${received}`);
             } 
 
+            this.telemetry?.recordPruning("options", options.length, structured.topOptions.length);
             await this.ToT!.emitEvent("optionsPruned", options, structured.topOptions);
             
             return structured.topOptions;
@@ -213,6 +217,8 @@ Note: Do NOT provide ratings (\`initialRate\` field nor \`finalRate\`) at this s
         );
         const results = await Promise.all(promises);
         const optionsFlat = results.flatMap(res => (res.structuredOutput as MultiBeam_GenerateOptions).options);
+
+        this.telemetry?.recordStep("generate_options", { count: optionsFlat.length });
 
         // Generate Truelly unique id
         const uniqueIdOptions = this.genUniqueId(optionsFlat).map(opt => {
@@ -261,6 +267,8 @@ Note: Do NOT provide ratings (\`rate\` field) at this stage; focus on the IDs an
         );
         const results = await Promise.all(promises);
         const thougthsFlat = results.flatMap(res => (res.structuredOutput as MultiBeam_NewThoughsSchema).thoughts);
+
+        this.telemetry?.recordStep("generate_thoughts", { rootOptionId: rootOption.id, parentNodeId: node.id, count: thougthsFlat.length });
 
         // Generate Truelly unique id
         const uniqueIdThoughts = this.genUniqueId(thougthsFlat).map(thought => {
@@ -313,6 +321,8 @@ ${zodTheBestOptionSchema.toJSONSchema()}
         const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTheBestOptionSchema, systemPrompt);
         const structured = result.structuredOutput as MultiBeam_TheBestOption;
         
+        this.telemetry?.recordStep("select_final_option");
+
         if (!structured || !Array.isArray(structured.theBestOption) || structured.theBestOption.length === 0) {
             const received = JSON.stringify(result.structuredOutput, null, 2);
             throw new Error(`Failed to select the best final option. Expected non-empty array 'theBestOption', but received: ${received}`);
@@ -357,6 +367,7 @@ ${zodTheBestOptionSchema.toJSONSchema()}
 
         // 3. Iterative Global Beam expansion
         for (let depth = 0; depth < maxDepth; depth++) {
+            this.telemetry?.recordIteration(depth, { activeBeams: currentBeams.length });
             const allCandidates: { beam: { rootOption: OptionNode; path: (OptionNode | ThoughtNode)[] }; thoughts: ThoughtNode[] }[] = [];
             
             // Expand each beam in parallel
@@ -489,6 +500,8 @@ ${zodEvaluateTopThoughtsSchema.toJSONSchema()}
             const received = JSON.stringify(result.structuredOutput, null, 2);
             throw new Error(`Structure message has to be an object with topThoughts array. Received: ${received}`);
         }
+
+        this.telemetry?.recordPruning("thoughts", flatCandidates.length, structured.topThoughts.length);
 
         // Emit events for pruning. Since thoughtsPruned event is per-path, we group them.
         // For debugging/logic clarity, we try to match the event signature as best as possible.

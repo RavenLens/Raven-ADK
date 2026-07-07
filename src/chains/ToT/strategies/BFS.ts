@@ -1,7 +1,7 @@
 import z4 from "zod/v4";
 import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
+import { LogicReturnType, OpenTelemetryTreeOfThoughts, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
 interface BFS_GenerateOptions {
@@ -61,7 +61,8 @@ export interface BFSConfig {
 }
 
 export class BFSToT implements StrategySchema {
-    static name = "BFS-ToT";
+    name = "BFS-ToT";
+    telemetry?: OpenTelemetryTreeOfThoughts;
     private ToT: TreeOfThoughts | undefined = undefined;
     private config: BFSConfig;
 
@@ -93,6 +94,8 @@ ${zodRateNodesSchema.toJSONSchema()}
 
         const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodRateNodesSchema, systemPrompt);
         const structured = result.structuredOutput as BFS_RateNodesResponse;
+
+        this.telemetry?.recordStep("rate_nodes", { count: nodes.length });
 
         for (const rating of structured.ratings) {
             const node = nodes.find(n => n.id === rating.id);
@@ -128,6 +131,8 @@ Return the selected top-${limit} candidates.
         const structured = result.structuredOutput as any;
         const selected = (structured.topOptions || structured.topThoughts) as T[];
 
+        this.telemetry?.recordPruning(candidates[0].type === "option-node" ? "options" : "thoughts", candidates.length, selected.length);
+
         return selected;
     }
 
@@ -147,6 +152,8 @@ Generate thoughts that continue this reasoning path.
         const result = await this.ToT!.callableUnitInvokeStructured("thoughtGenerator", zodNewThoughtsSchema, prompt);
         const thoughts = (result.structuredOutput as BFS_NewThoughtsSchema).thoughts;
         
+        this.telemetry?.recordStep("expand", { parentNodeId: node.id, count: thoughts.length });
+
         thoughts.forEach(t => {
             t.id = randomUUID();
             delete t.rate;
@@ -194,6 +201,7 @@ Generate thoughts that continue this reasoning path.
         let currentPaths: { root: OptionNode; path: (OptionNode | ThoughtNode)[] }[] = survivingOptions.map(o => ({ root: o, path: [o] }));
 
         for (let d = 0; d < maxDepth; d++) {
+            this.telemetry?.recordIteration(d, { activePaths: currentPaths.length });
             const levelCandidates: { parentPath: { root: OptionNode; path: (OptionNode | ThoughtNode)[] }; thoughts: ThoughtNode[] }[] = [];
             
             await Promise.all(currentPaths.map(async (pathObj) => {
@@ -293,6 +301,7 @@ Generate thoughts that continue this reasoning path.
     private async selectFinalBest(chains: any[]): Promise<OptionNode> {
         const systemPrompt = `Select the best final option from these reasoning chains: ${JSON.stringify(chains, null, 4)}`;
         const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTheBestOptionSchema, systemPrompt);
+        this.telemetry?.recordStep("select_final_option");
         const best = (result.structuredOutput as BFS_TheBestOption).theBestOption[0];
         await this.ToT!.emitEvent("finalOptionSelected", best);
         return best;
