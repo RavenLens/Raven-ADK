@@ -1,6 +1,7 @@
 import z4 from "zod/v4";
 import { ReActAgent } from "../../agent";
 import { AgentModel } from "../../agent/ReAct.agent";
+import { ResourceAugmentedGeneration } from "../../augmented_generation/rag/RAG";
 import { AIMessage, MessagesVariations, OpenAI } from "../../models";
 import { OptionNode, ThoughtNode } from "./nodes";
 import { MultiBeamToT } from "./strategies/MultiBeam";
@@ -8,6 +9,8 @@ import { BFSToT } from "./strategies/BFS";
 import { DFSToT } from "./strategies/DFS";
 import { OpenTelemetryTreeOfThoughts } from "./strategies/strategy";
 import { withTelemetry } from "../../telemetry";
+import { BestFirstToT } from "./strategies/BestFirst";
+import { MCTSToT } from "./strategies/MCTS";
 
 export interface TreeOfThoughtsEvents {
     /** Triggered when the search returns to a previous state. */
@@ -33,7 +36,7 @@ interface CustomCallUnit {
     invokeStructuredOutput(messages: MessagesVariations[]): Promise<MessagesVariations[]>;
 }
 
-type CallUnit = ReActAgent<any, any, any, any> | AgentModel | CustomCallUnit;
+type CallUnit = ReActAgent<any, any, any, any> | AgentModel | CustomCallUnit | ResourceAugmentedGeneration<any, any, any, any, any, any, any>;
 
 export interface TreeOfThoughtsConfig {
     /** User given task */
@@ -43,6 +46,7 @@ export interface TreeOfThoughtsConfig {
      * - **MultiBeam**: Determines the number of iterative parallel expansion steps performed for each active beam. Winner is chosen after reviewing the full path.
      * - **BFS**: Determines the number of global frontier expansion levels (breadth steps) before final selection. Winner is chosen after reviewing the full path.
      * - **DFS**: Determines the maximum recursion depth (length of a single reasoning path) before stopping or backtracking. Winner is chosen after reviewing the full path.
+     * - **BestFirst**: Determines the maximum path length for any branch in the priority queue.
      * @default 10
      */
     maxThoughtsDepth?: number;
@@ -52,12 +56,15 @@ export interface TreeOfThoughtsConfig {
      * Use this to save tokens and time when a definitive answer is found early.
      */
     earlyExitThreshold?: number;
-    /** Number of thoughts is generated for each option and next thought. Default: 3. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
+    /** 
+     * Number of thoughts is generated for each option and next thought. Default: 3. Cannot be smaller neither equal than Multi-Beam SEARCH TopK
+     * @default 3
+     */
     thoughtsCount?: number;
     /** How many options generates initially. Cannot be 0. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
     initialOptionsCount: number;
     /** Use to search graph accordingly */
-    graphSearchAlgorithm: BFSToT | MultiBeamToT | DFSToT;
+    graphSearchAlgorithm: BFSToT | MultiBeamToT | DFSToT | BestFirstToT | MCTSToT;
     /**
      * Generates different options for the 1st step of run
      * 1st param: is user prompt - you can embedd this in whatever wrapper or process directly
@@ -69,6 +76,12 @@ export interface TreeOfThoughtsConfig {
     evaluator: CallUnit;
 }
 
+/** Default number of thoughts used to generate prompts */
+export const DEFAULTS_THOUGHTS_COUNT = 3;
+
+/** DefaulIs the depth of thoughts */
+export const DEFAULT_THOUGHTS_DEPTH = 10;
+
 export class TreeOfThoughts {
     /** Events list */
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
@@ -78,6 +91,9 @@ export class TreeOfThoughts {
     
     constructor(config: TreeOfThoughtsConfig) {
         this.config = config;
+
+        config.maxThoughtsDepth = DEFAULT_THOUGHTS_DEPTH;
+        config.thoughtsCount = DEFAULTS_THOUGHTS_COUNT;
     }
 
     public async emitEvent<EventName extends keyof TreeOfThoughtsEvents>(
@@ -159,6 +175,21 @@ export class TreeOfThoughts {
             
             if (!lastMsg || lastMsg.type !== "ai" || !lastMsg.structuredOutput) {
                 throw new Error(`Failed to generate structured output for ${unitName} after 3 tries`);
+            }
+
+            return lastMsg;
+        }
+        else if (u instanceof ResourceAugmentedGeneration || (u as any)?.type === "rag-chain") {
+            const result = await (u as ResourceAugmentedGeneration<any, any, any, any, any, any, any>).invoke({
+                method: "invokeStructuredOutput",
+                params: [schema, 3]
+            });
+
+            const list = 'answer' in result ? result.answer : result.messages;
+            const lastMsg = (list && list.length > 0 ? list[list.length - 1] : null) as AIMessage;
+            
+            if (!lastMsg || lastMsg.type !== "ai" || !lastMsg.structuredOutput) {
+                throw new Error(`Failed to generate structured output for ${unitName} after 3 tries via RAG`);
             }
 
             return lastMsg;
