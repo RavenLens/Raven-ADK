@@ -78,22 +78,86 @@ Depth-First Search (DFS) focuses on exploring a single reasoning path as deeply 
 
 ---
 
+### 4. Best-First Search (`BestFirstToT`)
+Best-First Search maintains a global frontier of all unexpanded thoughts and always chooses to expand the node with the highest heuristic score from the evaluator, regardless of its depth.
+
+#### In details: 
+1.  **Initial Generation**: Generate `initialOptionsCount` using `optionGenerator`.
+2.  **Initial Rating**: Evaluate all options using `evaluator`.
+3.  **Frontier Initialization**: Put all rated options into a **Priority Queue** (highest score first).
+4.  **Best-First Loop**: 
+    *   **Pop** the highest-rated node from the queue.
+    *   **Early Exit**: If its score $\ge$ `earlyExitThreshold`, return it as the winner.
+    *   **Depth Check**: If node depth $<$ `maxThoughtsDepth`:
+        *   Generate `thoughtsCount` new thoughts via `thoughtGenerator`.
+        *   Evaluate each new thought.
+        *   **Filter**: Only add thoughts to the Priority Queue if their score $\ge$ `acceptanceTreshold`.
+    *   **Repeat**: Pop the next best node (it might be a sibling, a child, or a node from a completely different branch).
+5.  **Finalization**: Once the queue is empty or a limit is hit, use the `evaluator` to pick the best completed path (Reasoning Chain) as `theBestOption`.
+
+**Summary**: Your proposed deterministic path is a "Greedy Line Search with Backtracking." It works, but it isn't "Best-First Search" because it doesn't allow the algorithm to switch branches mid-exploration if a better opportunity appears elsewhere in the tree.
+
+#### Pros
+- **Dynamic Prioritization**: Focuses computational effort on the most "promising" paths globally across the entire tree.
+- **Efficiency**: Avoids expanding siblings of a high-scoring thought if that thought itself is progressing well.
+- **Branch Switching**: If a deep path starts to decline in quality, the algorithm naturally "jumps" back to a more promising shallow branch.
+
+#### Cons
+- **Evaluator Dependency**: Extremely sensitive to the evaluator's quality; a single "hallucinated" high score can derail the search.
+- **Exploration Bias**: May ignore valid but "average-starting" branches in favor of a single branch that starts strong but leads to a dead end.
+
+#### Real-World Applications
+- **Game AI**: Finding the best move in complex state-space trees where some moves are clearly superior.
+- **Medical Diagnosis**: Following the most likely symptom-to-disease paths while leaving other hypotheses open.
+- **Financial Modeling**: Exploring the most profitable investment sequences in parallel.
+
+#### Configuration & Supported Parameters
+The `BestFirstToT` strategy utilizes all parameters defined in `TreeOfThoughtsConfig`. Unlike Multi-Beam which requires tracking independent tracks, Best-First treats the entire tree as a single global pool, making it fully compatible with:
+- `maxThoughtsDepth`: Caps the length of any single branch.
+- `earlyExitThreshold`: Allows for high-confidence short-circuiting.
+- `thoughtsCount`: Determines the branching factor at each expansion step.
+- `initialOptionsCount`: Sets the starting breadth at Level 0.
+
+##### Example Usage
+```typescript
+import { TreeOfThoughts, BestFirstToT } from "@raven/adk";
+
+const tot = new TreeOfThoughts({
+    query: "Optimize the supply chain logistics for a global retail chain",
+    initialOptionsCount: 5,
+    thoughtsCount: 3,
+    maxThoughtsDepth: 8,
+    earlyExitThreshold: 0.95,
+    graphSearchAlgorithm: new BestFirstToT({
+        acceptanceTreshold: 0.6 // Minimum score to keep a thought in the frontier
+    }),
+    optionGenerator: myAgent,
+    thoughtGenerator: myAgent,
+    evaluator: myEvaluatorAgent
+});
+
+const result = await tot.invoke();
+```
+
+---
+
 ## Mathematical Comparison
 
 Regarding the search complexity and search space:
 
-| Feature | Multi-Beam Search | BFS | DFS |
-| :--- | :--- | :--- | :--- |
-| **Expansion Formula** | $K \times \text{Depth}$ (Independent tracks) | $\text{Frontier} \times \text{Width}$ (Global Pool) | Single branch recursion |
-| **Space Complexity** | $O(K \cdot D)$ | $O(K \cdot D)$ | $O(D)$ |
-| **Convergence Rate** | Slow (High exploration) | Fast (High exploitation) | Variable (Path-dependent) |
-| **Pruning Logic** | Competitive across fixed tracks | Pure global top-K selection | Threshold-based backtracking |
-| **Early Exit Support** | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) |
+| Feature | Multi-Beam Search | BFS | DFS | Best-First Search |
+| :--- | :--- | :--- | :--- | :--- |
+| **Expansion Formula** | $K \times \text{Depth}$ (Independent tracks) | $\text{Frontier} \times \text{Width}$ (Global Pool) | Single branch recursion | Global Priority (Score Based) |
+| **Space Complexity** | $O(K \cdot D)$ | $O(K \cdot D)$ | $O(D)$ | $O(K \cdot D)$ |
+| **Convergence Rate** | Slow (High exploration) | Fast (High exploitation) | Variable (Path-dependent) | Very Fast (Targeted) |
+| **Pruning Logic** | Competitive across fixed tracks | Pure global top-K selection | Threshold-based backtracking | Score-based acceptance threshold |
+| **Early Exit Support** | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) |
 
 **Exploration vs. Exploitation**: 
 - **Multi-Beam** acts as a multi-modal explorer, avoiding premature convergence.
 - **BFS** is a greedy frontier expansion, optimal for simple search landscapes.
 - **DFS** is a "deep-diver". It sacrifices breadth for depth, making it the most memory-efficient but also the most prone to missing global optima if not tuned with the correct threshold.
+- **Best-First** is the "smartest" explorer. It navigates based on heuristic confidence, effectively balancing speed and quality by targeting the most likely paths first.
 
 ---
 
@@ -124,11 +188,11 @@ When generating educational curricula or professional roadmaps, **Multi-Beam Sea
 3.  **Prerequisite Mapping**: The threshold-based evaluation in independent beams ensures that each step is a logical successor to the previous one within its specific context.
 
 ##### Comparison for Educational Use
-| Feature | Multi-Beam (Winner) | BFS | DFS |
-| :--- | :--- | :--- | :--- |
-| **Consistency** | **High** (Stays on topic) | Low (Context mixing) | Med (Prone to local minima) |
-| **Student Choice** | **$K$ distinct versions** | 1 "Average" version | 1 "Deep" version |
-| **Prerequisites** | Balanced | Best at raw coverage | Poor (Might skip basics) |
+| Feature | Multi-Beam (Winner) | BFS | DFS | Best-First |
+| :--- | :--- | :--- | :--- | :--- |
+| **Consistency** | **High** (Stays on topic) | Low (Context mixing) | Med (Prone to local minima) | Med (Topic jumping possibility) |
+| **Student Choice** | **$K$ distinct versions** | 1 "Average" version | 1 "Deep" version | 1 "Best Path" version |
+| **Prerequisites** | Balanced | Best at raw coverage | Poor (Might skip basics) | High (Follows best dependency) |
 
 ---
 

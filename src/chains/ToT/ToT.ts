@@ -6,6 +6,7 @@ import { OptionNode, ThoughtNode } from "./nodes";
 import { MultiBeamToT } from "./strategies/MultiBeam";
 import { BFSToT } from "./strategies/BFS";
 import { DFSToT } from "./strategies/DFS";
+import { BestFirstToT } from "./strategies/BestFirst";
 
 export interface TreeOfThoughtsEvents {
     /** Triggered when the search returns to a previous state. */
@@ -41,6 +42,7 @@ export interface TreeOfThoughtsConfig {
      * - **MultiBeam**: Determines the number of iterative parallel expansion steps performed for each active beam. Winner is chosen after reviewing the full path.
      * - **BFS**: Determines the number of global frontier expansion levels (breadth steps) before final selection. Winner is chosen after reviewing the full path.
      * - **DFS**: Determines the maximum recursion depth (length of a single reasoning path) before stopping or backtracking. Winner is chosen after reviewing the full path.
+     * - **BestFirst**: Determines the maximum path length for any branch in the priority queue.
      * @default 10
      */
     maxThoughtsDepth?: number;
@@ -55,7 +57,7 @@ export interface TreeOfThoughtsConfig {
     /** How many options generates initially. Cannot be 0. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
     initialOptionsCount: number;
     /** Use to search graph accordingly */
-    graphSearchAlgorithm: BFSToT | MultiBeamToT | DFSToT;
+    graphSearchAlgorithm: BFSToT | MultiBeamToT | DFSToT | BestFirstToT;
     /**
      * Generates different options for the 1st step of run
      * 1st param: is user prompt - you can embedd this in whatever wrapper or process directly
