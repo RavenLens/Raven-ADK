@@ -248,17 +248,20 @@ $$UCT = \frac{V_i}{n_i} + C \times \sqrt{\frac{\ln(N)}{n_i}}$$
 
 Where:
 - $\frac{V_i}{n_i}$: **Exploitation** (Average value of the node).
+    - It's otherwise `value / visits` (**value of node** divided by **visits of node**)
 - $C \times \sqrt{\frac{\ln(N)}{n_i}}$: **Exploration** (Bias towards nodes with fewer visits).
 - $C$: `explorationConstant`.
 - $n_i$: Number of visits to the current node.
-- $N$: Total visits to the parent node.
+- $N$: Total visits to the parent node. Represents total number of parent node visits
+
+
 
 #### Configuration Parameters
 - **`iterations`**: The total number of simulation cycles. More iterations lead to better convergence but increase token costs. Default is **30**.
 - **`explorationConstant (C)`**: 
     - **Higher values (> 1.41)** favor **exploration** (trying new, unvisited branches).
     - **Lower values (< 1.41)** favor **exploitation** (focusing on branches that already have high scores).
-- **`depthPenalty`**: A penalty subtracted from the backpropagated value based on depth. This encourages the agent to find the most efficient (shortest) reasoning path.
+- **`depthPenalty`**: A penalty subtracted from the backpropagated value based on depth. This encourages the agent to find the most efficient (shortest) reasoning path. The grater number more will be removed from evaluated score with depth. This should floating point value like: 0.01 to 1.00 or with greater percision up to f64
 
 > **Note**: MCTS is the only strategy that **does not use** the `earlyExitThreshold` parameter. It relies entirely on the statistical convergence over its defined `iterations`.
 
@@ -414,8 +417,50 @@ graph TD
 
 
 ## Possible combinations
-### LLM + RAG
 
-### ReAct Agent
-Get best of linear processing `Reasoning -> Acting -> Observation` by identifying and backtracking propagatting faulty reasoning and thoughts
+### ToT + RAG (Resource Augmented Generation)
+Combine the reasoning power of the Tree-of-Thoughts with the factual grounding of RAG. This is especially useful for the `evaluator` and `thoughtGenerator` units.
 
+1.  **Grounded Evaluation**: Use a RAG-enabled `evaluator` to score thoughts against a verified knowledge base. This prevents the search from following "hallucinated" but logically sounding branches.
+2.  **Contextual Expansion**: Use RAG in the `thoughtGenerator` to provide the agent with relevant technical documentation or business rules before it generates the next reasoning step.
+3.  **ToT as Pre-processor**: Run a ToT search to find the most likely search queries (Initial Options), then use RAG to fetch content for those specific paths.
+
+```typescript
+const ragEvaluator = new ResourceAugmentedGeneration({
+    query: "Evaluate the technical feasibility of this thought",
+    database: myKnowledgeBase,
+    model: embeddingModel
+}).register(evaluatorAgent);
+
+const tot = new TreeOfThoughts({
+    // ...
+    evaluator: ragEvaluator, // The evaluator now has access to your private data
+});
+```
+
+### ToT + ReAct Agent
+Using a full `ReActAgent` as the engine for your `thoughtGenerator` or `optionGenerator` creates a "nested reasoning" effect.
+
+-   **Deep Reasoning**: Instead of a simple LLM response, each "Thought" is the result of a ReAct loop (Reasoning -> Acting -> Observation). This allows the tree to branch based on actual tool outputs.
+-   **Backtracking Faulty Actions**: If a ReAct agent's tool call leads to a failure, the ToT system can catch the low score from the evaluator and backtrack, effectively "undoing" or rerouting the agent's strategy at a high level.
+-   **Parallel Problem Solving**: Using `MultiBeamToT` with ReAct agents allows you to simulate multiple agents trying different tool-based strategies in parallel.
+
+```typescript
+import { TreeOfThoughts, MultiBeamToT, ReActAgent, OpenAI } from "@raven/adk";
+
+const toolUsingAgent = new ReActAgent({
+    model: new OpenAI({ model: "gpt-5", apiKey: "..." }),
+    tools: [googleSearch, mathematicalCalculator],
+    withConclusion: false // Usually better for intermediate thought generations
+});
+
+const tot = new TreeOfThoughts({
+    query: "Investigate and solve the performance bottleneck in the legacy codebase",
+    thoughtGenerator: toolUsingAgent, // Each node expansion uses tools to verify info
+    optionGenerator: toolUsingAgent,
+    evaluator: myEvaluator,
+    graphSearchAlgorithm: new MultiBeamToT({ topK: 3 })
+});
+
+const result = await tot.invoke();
+```

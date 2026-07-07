@@ -1,6 +1,7 @@
 import z4 from "zod/v4";
 import { ReActAgent } from "../../agent";
 import { AgentModel } from "../../agent/ReAct.agent";
+import { ResourceAugmentedGeneration } from "../../augmented_generation/rag/RAG";
 import { AIMessage, MessagesVariations, OpenAI } from "../../models";
 import { OptionNode, ThoughtNode } from "./nodes";
 import { MultiBeamToT } from "./strategies/MultiBeam";
@@ -33,7 +34,7 @@ interface CustomCallUnit {
     invokeStructuredOutput(messages: MessagesVariations[]): Promise<MessagesVariations[]>;
 }
 
-type CallUnit = ReActAgent<any, any, any, any> | AgentModel | CustomCallUnit;
+type CallUnit = ReActAgent<any, any, any, any> | AgentModel | CustomCallUnit | ResourceAugmentedGeneration<any, any, any, any, any, any, any>;
 
 export interface TreeOfThoughtsConfig {
     /** User given task */
@@ -165,6 +166,21 @@ export class TreeOfThoughts {
             
             if (!lastMsg || lastMsg.type !== "ai" || !lastMsg.structuredOutput) {
                 throw new Error(`Failed to generate structured output for ${unitName} after 3 tries`);
+            }
+
+            return lastMsg;
+        }
+        else if (u instanceof ResourceAugmentedGeneration || (u as any)?.type === "rag-chain") {
+            const result = await (u as ResourceAugmentedGeneration<any, any, any, any, any, any, any>).invoke({
+                method: "invokeStructuredOutput",
+                params: [schema, 3]
+            });
+
+            const list = 'answer' in result ? result.answer : result.messages;
+            const lastMsg = (list && list.length > 0 ? list[list.length - 1] : null) as AIMessage;
+            
+            if (!lastMsg || lastMsg.type !== "ai" || !lastMsg.structuredOutput) {
+                throw new Error(`Failed to generate structured output for ${unitName} after 3 tries via RAG`);
             }
 
             return lastMsg;
