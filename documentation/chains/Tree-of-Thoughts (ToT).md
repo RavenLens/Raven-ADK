@@ -22,8 +22,22 @@ Incremental increase of accuracy comes with cost of tokens
 ## Supported Search Strategies
 **RavenADK** supports two primary graph-search strategies for exploring the reasoning tree. Each strategy balances diversity and efficiency differently.
 
+### Default config
+- `maxThoughtsDepth` - the default number of thoughts layers can be generated. Default is **10**
+- `thoughtsCount` - for each layer is generated this number of thoughts. Default is **3**
+
 ### 1. Multi-Beam Search (`MultiBeamToT`)
 Multi-Beam Search maintains several independent reasoning "beams" that compete globally at each level. Each beam is rooted in an initial option and maintains its own specialized context.
+
+#### In details:
+1.  **Initial Generation**: Generate `initialOptionsCount` using `optionGenerator`.
+2.  **Initial Pruning (Optional)**: If `pruneAtBegining` is enabled, evaluate all options and select only the top `topK` to start beams.
+3.  **Beam Parallel Exploration**: For each active beam:
+    *   **Expansion**: Generate `thoughtsCount` thoughts using `thoughtGenerator`.
+    *   **Contextual Evaluation**: If the current level is $\ge$ `evaluateAfterThoughtTreeLevel`, evaluate thoughts using the **Full Established Path** as context. Describes when the model can start to evaluate the thoughts. If the measured thought score from same branch is grater or equal to `earlyExitThreshold` then excits and gives option with belonging score as the output. If not specified always analyses from end of first thoughts layer. Cannot exceed the `maxThoughtsDepth` - it causes the error
+    *   **Local Pruning**: Within that specific beam, select the top `topK` thoughts to continue.
+    *   **Depth**: Repeat until `maxThoughtsDepth` is reached.
+4.  **Final Selection**: Once all beams reach the maximum depth, evaluate the final paths and pick the absolute best `theBestOption`.
 
 #### Pros
 - **High Diversity**: By preserving $K$ independent seeds, it prevents the search from prematurely converging on a single path.
@@ -39,10 +53,42 @@ Multi-Beam Search maintains several independent reasoning "beams" that compete g
 - **Creative Writing**: Developing multiple different plot twists where each must follow its own logic.
 - **Learning Path Design**: Generating coherent, longitudinal educational roadmaps.
 
+##### Example Usage
+```typescript
+import { TreeOfThoughts, MultiBeamToT } from "@raven/adk";
+
+const tot = new TreeOfThoughts({
+    query: "Design a multi-planetary migration strategy for humanity",
+    initialOptionsCount: 5,
+    thoughtsCount: 3,
+    maxThoughtsDepth: 5,
+    earlyExitThreshold: 0.7, // Optional: Determines treshold when achived on some branch to make the option has thought branches to be the choosen one. Evaluation starts from `evaluateAfterThoughtTreeLevel` or from first layer when not specified. AI evaluator hasn't knowledge about exist treshold to don't bias him
+    graphSearchAlgorithm: new MultiBeamToT({
+        topK: 3,                           // Maintain 3 independent beams
+        pruneAtBegining: true,            // Evaluate initial options before starting beams - Disable to evaluate all options
+        evaluateAfterThoughtTreeLevel: 2  // Start evaluating thoughts from Level 2 of thoughts.
+    }),
+    optionGenerator: myAgent,
+    thoughtGenerator: myAgent,
+    evaluator: myEvaluatorAgent
+});
+```
+
 ---
 
 ### 2. Breadth-First Search (`BFSToT`)
 True BFS expands the reasoning frontier level-by-level. At every step, all potential thoughts from all active branches are pooled and the top $K$ are selected globally.
+
+#### In details:
+1.  **Initial Generation**: Generate `initialOptionsCount` using `optionGenerator`.
+2.  **Breadth Selection**: Evaluate all initial options and prune the frontier to the globally best `topK`.
+3.  **Level-by-Level Expansion**:
+    *   **Expansion**: For *every* node currently in the frontier, generate `thoughtsCount` new thoughts.
+    *   **Global Pooling**: All new thoughts from all parents are gathered into a single pool.
+    *   **Global Pruning**: The `evaluator` selects the top `topK` thoughts from the entire pool, regardless of which parent they came from.
+    *   **Iteration**: The selected thoughts become the new frontier for the next level.
+    *   **Depth**: Repeat until `maxThoughtsDepth` is reached.
+4.  **Finalization**: Pick the best thought from the final frontier as the winner.
 
 #### Pros
 - **Global Efficiency**: Ensures that for any depth $D$, we are following the $K$ absolute best thoughts found so far, regardless of which root they came from.
@@ -57,10 +103,39 @@ True BFS expands the reasoning frontier level-by-level. At every step, all poten
 - **Optimization Problems**: Finding the shortest or most efficient path to a technical solution (e.g., code optimization).
 - **Fact-Checking**: Exhaustively checking all immediate claims in a text before proceeding to deeper implications.
 
+##### Example Usage
+```typescript
+import { TreeOfThoughts, BFSToT } from "@raven/adk";
+
+const tot = new TreeOfThoughts({
+    query: "Find the most efficient route for a delivery drone in a dense city",
+    initialOptionsCount: 10,
+    thoughtsCount: 5,
+    maxThoughtsDepth: 4,
+    graphSearchAlgorithm: new BFSToT({
+        topK: 3 // Keep only the top 3 thoughts across the entire frontier at each level
+    }),
+    optionGenerator: myAgent,
+    thoughtGenerator: myAgent,
+    evaluator: myEvaluatorAgent
+});
+```
+
 ---
 
 ### 3. Depth-First Search (`DFSToT`)
 Depth-First Search (DFS) focuses on exploring a single reasoning path as deeply as possible before backtracking. It uses a `threshold` to decide when a path is "good enough" to continue or if it should backtrack immediately.
+
+#### In details:
+1.  **Initial Generation**: Generate and evaluate `initialOptionsCount`.
+2.  **Recursive Depth Search**: Iterate through options starting with the first one:
+    *   **Expansion**: Generate `thoughtsCount` for the current node.
+    *   **Evaluation**: Rate all new thoughts.
+    *   **Threshold Filtering**: Only consider thoughts with a score $\ge$ `treshold`.
+    *   **Dive**: If multiple thoughts pass, take the **first** one and repeat the expansion recursively (going deeper).
+    *   **Backtrack**: If no thoughts pass the threshold or `maxThoughtsDepth` is hit, return to the parent and try the next valid sibling.
+3.  **Success Tracking**: Record all paths that reach the `maxThoughtsDepth` with scores above the threshold.
+4.  **Finalization**: Select the highest-scoring completed path from the successful candidates.
 
 #### Pros
 - **Memory Efficiency**: Only stores the current path in active memory, making it highly efficient for deep search trees ($O(\text{Depth})$).
@@ -76,26 +151,40 @@ Depth-First Search (DFS) focuses on exploring a single reasoning path as deeply 
 - **Scientific Discovery**: Deeply investigating a single hypothesis to its logical conclusion.
 - **Legal Reasoning**: Following a specific legal precedent through all its implications and sub-clauses.
 
+##### Example Usage
+```typescript
+import { TreeOfThoughts, DFSToT } from "@raven/adk";
+
+const tot = new TreeOfThoughts({
+    query: "Determine the root cause of a specific complex software bug",
+    initialOptionsCount: 3,
+    thoughtsCount: 2,
+    maxThoughtsDepth: 10,
+    graphSearchAlgorithm: new DFSToT(
+        0.8 // Threshold: only continue if the thought scores 0.8 or higher
+    ),
+    optionGenerator: myAgent,
+    thoughtGenerator: myAgent,
+    evaluator: myEvaluatorAgent
+});
+```
+
 ---
 
 ### 4. Best-First Search (`BestFirstToT`)
 Best-First Search maintains a global frontier of all unexpanded thoughts and always chooses to expand the node with the highest heuristic score from the evaluator, regardless of its depth.
 
-#### In details: 
+#### In details:
 1.  **Initial Generation**: Generate `initialOptionsCount` using `optionGenerator`.
 2.  **Initial Rating**: Evaluate all options using `evaluator`.
 3.  **Frontier Initialization**: Put all rated options into a **Priority Queue** (highest score first).
-4.  **Best-First Loop**: 
-    *   **Pop** the highest-rated node from the queue.
-    *   **Early Exit**: If its score $\ge$ `earlyExitThreshold`, return it as the winner.
-    *   **Depth Check**: If node depth $<$ `maxThoughtsDepth`:
-        *   Generate `thoughtsCount` new thoughts via `thoughtGenerator`.
-        *   Evaluate each new thought.
-        *   **Filter**: Only add thoughts to the Priority Queue if their score $\ge$ `acceptanceTreshold`.
-    *   **Repeat**: Pop the next best node (it might be a sibling, a child, or a node from a completely different branch).
-5.  **Finalization**: Once the queue is empty or a limit is hit, use the `evaluator` to pick the best completed path (Reasoning Chain) as `theBestOption`.
-
-**Summary**: Your proposed deterministic path is a "Greedy Line Search with Backtracking." It works, but it isn't "Best-First Search" because it doesn't allow the algorithm to switch branches mid-exploration if a better opportunity appears elsewhere in the tree.
+4.  **Best-First Loop**:
+    *   **Pop Best**: Remove the node with the highest global score from the queue.
+    *   **Early Exit**: If its score $\ge$ `earlyExitThreshold`, terminate and return this path immediately.
+    *   **Expansion**: If node depth $<$ `maxThoughtsDepth`, generate `thoughtsCount` new thoughts.
+    *   **Evaluation & Filter**: Rate all new thoughts and add those with score $\ge$ `acceptanceTreshold` back into the global Priority Queue.
+    *   **Branch Jump**: The next "Pop" might come from a completely different branch or depth if its score is now the highest.
+5.  **Finalization**: If the queue empties or limits are reached, the `evaluator` selects the best path among all finished reasoning chains.
 
 #### Pros
 - **Dynamic Prioritization**: Focuses computational effort on the most "promising" paths globally across the entire tree.

@@ -1,6 +1,6 @@
 import z4 from "zod/v4";
 import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
-import { TreeOfThoughts } from "../ToT";
+import { DEFAULT_THOUGHTS_DEPTH, DEFAULTS_THOUGHTS_COUNT, TreeOfThoughts } from "../ToT";
 import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
@@ -60,7 +60,7 @@ export interface MultiBeamConfig {
     topK: number;
     /**
      * Describes when the model can start to evaluate the thoughts
-     * If not specified always analyses from edn of first layer
+     * If not specified always analyses from end of first thoughts layer
      * Specify to number larger than 1 e.g: 10 to delibaratelly extend the duration
      * IT cannot excess a `maxThoughtsDepth` but can be equal
      */
@@ -68,12 +68,6 @@ export interface MultiBeamConfig {
     /** Whether to continue only for the best options without producing thoughts */
     pruneAtBegining?: boolean;
 }
-
-/** Default number of thoughts used to generate prompts */
-const DEFAULTS_THOUGHTS_COUNT = 3;
-
-/** DefaulIs the depth of thoughts */
-const DEFAULT_THOUGHTS_DEPTH = 10;
 
 export class MultiBeamToT implements StrategySchema {
     static name = "MultiBeam-ToT";
@@ -84,6 +78,10 @@ export class MultiBeamToT implements StrategySchema {
         this.config = {
             ...config,
             topK: config.topK ?? 3
+        }
+
+        if (this.config.evaluateAfterThoughtTreeLevel && this.config.evaluateAfterThoughtTreeLevel > (this.ToT?.config.maxThoughtsDepth ?? DEFAULT_THOUGHTS_DEPTH)) {
+            throw new Error("`evaluateAfterThoughtTreeLevel` cannot excess a `maxThoughtsDepth` but can be equal");
         }
     }
 

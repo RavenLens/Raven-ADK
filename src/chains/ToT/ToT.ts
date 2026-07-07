@@ -52,7 +52,10 @@ export interface TreeOfThoughtsConfig {
      * Use this to save tokens and time when a definitive answer is found early.
      */
     earlyExitThreshold?: number;
-    /** Number of thoughts is generated for each option and next thought. Default: 3. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
+    /** 
+     * Number of thoughts is generated for each option and next thought. Default: 3. Cannot be smaller neither equal than Multi-Beam SEARCH TopK
+     * @default 3
+     */
     thoughtsCount?: number;
     /** How many options generates initially. Cannot be 0. Cannot be smaller neither equal than Multi-Beam SEARCH TopK */
     initialOptionsCount: number;
@@ -69,6 +72,12 @@ export interface TreeOfThoughtsConfig {
     evaluator: CallUnit;
 }
 
+/** Default number of thoughts used to generate prompts */
+export const DEFAULTS_THOUGHTS_COUNT = 3;
+
+/** DefaulIs the depth of thoughts */
+export const DEFAULT_THOUGHTS_DEPTH = 10;
+
 export class TreeOfThoughts {
     /** Events list */
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
@@ -78,6 +87,9 @@ export class TreeOfThoughts {
     
     constructor(config: TreeOfThoughtsConfig) {
         this.config = config;
+
+        config.maxThoughtsDepth = DEFAULT_THOUGHTS_DEPTH;
+        config.thoughtsCount = DEFAULTS_THOUGHTS_COUNT;
     }
 
     public async emitEvent<EventName extends keyof TreeOfThoughtsEvents>(
