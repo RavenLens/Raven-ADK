@@ -57,6 +57,7 @@ export class ResourceAugmentedGeneration
     SkillsSandbox extends CodeExecutionSandboxSchema,
     Target extends ReActAgent<Skills, Memory, HITL, SkillsSandbox> | StandardLLMShema = StandardLLMShema
 > {
+    readonly type = "rag-chain";
     config: RAGConfig<RAGDb, RAGModel>;
     executeAfter?: Target;
 
