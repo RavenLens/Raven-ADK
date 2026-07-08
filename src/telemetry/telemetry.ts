@@ -5,6 +5,53 @@ import { ReActAgentConfig } from "../agent";
 export const tracer: Tracer = trace.getTracer("raven-adk");
 export const meter: Meter = metrics.getMeter("raven-adk");
 
+
+export class TelemetryRecordSizeLimit {
+    private static instance: TelemetryRecordSizeLimit;
+    private limit: number | undefined;
+
+    /**
+     * @param limitKb - specify the undefined to make it unlimited or kb to make the record size limited
+    */
+    private constructor(limitKb?: number | undefined) {
+        this.limit = limitKb;
+    }
+
+    public static getInstance() {
+        if (!TelemetryRecordSizeLimit.instance) {
+            TelemetryRecordSizeLimit.instance = new TelemetryRecordSizeLimit(undefined);
+        }
+        return TelemetryRecordSizeLimit.instance;
+    }
+
+    /** Set the limit in KB. Set to undefined for no limit. */
+    public setLimit(kb?: number) {
+        this.limit = kb;
+    }
+
+    /** Returns current limit in characters (approx 1 character = 1 byte for ASCII) */
+    public getLimit(): number | undefined {
+        return this.limit ? this.limit * 1024 : undefined;
+    }
+
+    /** 
+     * Truncates content based on current limit 
+     * @returns Object with truncated content and boolean flag
+     */
+    public truncate(content: string): { value: string, isTruncated: boolean } {
+        const limit = this.getLimit();
+        if (limit && content.length > limit) {
+            return {
+                value: content.substring(0, limit),
+                isTruncated: true
+            };
+        }
+        return { value: content, isTruncated: false };
+    }
+}
+
+export const telemetryRecordSizeLimit = TelemetryRecordSizeLimit.getInstance();
+
 /**
  * Recording a log event on the active trace span if available.
  * In professional OTel, this is handled via Span Events.
@@ -63,14 +110,15 @@ export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any,
     registerConfig() {
         const activeSpan = trace.getActiveSpan();
         const configStr = JSON.stringify(this.config, null, 4);
+        const { value, isTruncated } = telemetryRecordSizeLimit.truncate(configStr);
         
-        if (configStr.length > 2000) {
+        if (isTruncated) {
             activeSpan?.addEvent(`${this.getPrefix()}.config_event`, {
-                config: configStr.substring(0, 5000),
-                is_truncated: configStr.length > 5000
+                config: value,
+                is_truncated: true
             });
         } else {
-            activeSpan?.setAttribute(`${this.getPrefix()}.config`, configStr);
+            activeSpan?.setAttribute(`${this.getPrefix()}.config`, value);
         }
         
         return this;
@@ -131,14 +179,15 @@ export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any,
     setUserQueryActiveSpanAttribute() {
         const activeSpan = trace.getActiveSpan();
         const queryStr = JSON.stringify(this.config.messages ?? [], null, 4);
+        const { value, isTruncated } = telemetryRecordSizeLimit.truncate(queryStr);
 
-        if (queryStr.length > 2000) {
+        if (isTruncated) {
             activeSpan?.addEvent(`${this.getPrefix()}.query_event`, {
-                query: queryStr.substring(0, 5000),
-                is_truncated: queryStr.length > 5000
+                query: value,
+                is_truncated: true
             });
         } else {
-            activeSpan?.setAttribute(`${this.getPrefix()}.task_query`, queryStr);
+            activeSpan?.setAttribute(`${this.getPrefix()}.task_query`, value);
         }
         
         return this;
@@ -147,14 +196,15 @@ export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any,
     setAnswerActiveSpanAttribute(answer: LLMAnswer) {
         const activeSpan = trace.getActiveSpan();
         const answerStr = JSON.stringify(answer, null, 4);
+        const { value, isTruncated } = telemetryRecordSizeLimit.truncate(answerStr);
 
-        if (answerStr.length > 2000) {
+        if (isTruncated) {
             activeSpan?.addEvent(`${this.getPrefix()}.answer_event`, {
-                answer: answerStr.substring(0, 5000),
-                is_truncated: answerStr.length > 5000
+                answer: value,
+                is_truncated: true
             });
         } else {
-            activeSpan?.setAttribute(`${this.getPrefix()}.answer`, answerStr);
+            activeSpan?.setAttribute(`${this.getPrefix()}.answer`, value);
         }
         
         return this;
@@ -205,7 +255,16 @@ export async function withTelemetry<T>(
     attributes: Record<string, any>, 
     fn: (span: Span) => Promise<T>
 ): Promise<T> {
-    return tracer.startActiveSpan(name, { attributes }, async (span) => {
+    const limitedAttributes: Record<string, any> = {};
+    for (const [key, val] of Object.entries(attributes)) {
+        if (typeof val === 'string') {
+            limitedAttributes[key] = telemetryRecordSizeLimit.truncate(val).value;
+        } else {
+            limitedAttributes[key] = val;
+        }
+    }
+
+    return tracer.startActiveSpan(name, { attributes: limitedAttributes }, async (span) => {
         try {
             const result = await fn(span);
             span.setStatus({ code: SpanStatusCode.OK });
