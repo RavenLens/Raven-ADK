@@ -48,7 +48,8 @@ console.log("Best Answer:", best.result.answer[0].content);
 | `evaluate_end` | Emitted when evaluation for a specific run finishes. | `id: string, evaluation: EvaluationResult` |
 
 ## Usecases
-- Benchmark (like: https://arena.ai)
+- Benchmarks of models (like: https://arena.ai)
+- `RLHF` (Reinforcement Learning with Human Feedback) - Use to compare the outcomes where user chooses the best - use the collected informations then in `RLHF` to fine-tune models for user preferences
 - Get the best outcome for user with validation
 - Get first outcome for user - for ASAP scenarios
 - Combine multiple answers with use of llm as concluder

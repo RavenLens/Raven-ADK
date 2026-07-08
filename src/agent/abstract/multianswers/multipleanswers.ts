@@ -2,6 +2,7 @@ import { AgentModel, ReActAgent } from "../../ReAct.agent";
 import { randomUUID } from "node:crypto";
 import { AgenticEvaluator, EvaluationResult } from "../aeval";
 import { MessagesVariations } from "../../state";
+import { withTelemetry } from "../../../telemetry/telemetry";
 
 type RunID = `run-id:${string}`;
 
@@ -46,24 +47,33 @@ export class MultipleAnswers {
 
     /** Runs all parallel runners and returns all outcomes */
     async invoke() {
-        const runPrepare = this.parallelRun.map(async ([id, run]) => {
-            this.emit("start_run", id);
+        return withTelemetry("multianswers.invoke", { runsCount: this.parallelRun.length }, async (span) => {
+            const runPrepare = this.parallelRun.map(async ([id, run]) => {
+                return withTelemetry("multianswers.individual_run", { runId: id }, async (childSpan) => {
+                    this.emit("start_run", id);
 
-            // Result
-            let result: any;
-            if (typeof run === "function") {
-                result = await run();
-            }
-            else result = await run.invoke();
+                    // Result
+                    let result: any;
+                    if (typeof run === "function") {
+                        result = await run();
+                    }
+                    else result = await run.invoke();
 
-            this.emit("end_run", id, result);
+                    this.emit("end_run", id, result);
+                    
+                    childSpan.addEvent("run_completed", { id });
 
-            //
-            return [id, result] as [RunID, any];
+                    //
+                    return [id, result] as [RunID, any];
+                });
+            });
+
+            this.results = await Promise.all(runPrepare);
+            
+            span.setAttribute("multianswers.results_count", this.results.length);
+            
+            return this.results;
         });
-
-        this.results = await Promise.all(runPrepare);
-        return this.results;
     }
 
     /** 
@@ -72,42 +82,61 @@ export class MultipleAnswers {
      * @param evaluatorConfig - Config for the evaluation agent
      */
     async evaluate(sharedContext: MessagesVariations[], evaluatorConfig: any) {
-        const evaluations = [];
-        for (const [id, result] of this.results) {
-            this.emit("evaluate_start", id);
+        return withTelemetry("multianswers.evaluate", { resultsCount: this.results.length }, async (span) => {
+            const evaluations = [];
+            for (const [id, result] of this.results) {
+                const evaluationResult = await withTelemetry("multianswers.individual_evaluation", { runId: id }, async (childSpan) => {
+                    this.emit("evaluate_start", id);
 
-            const aiMessage = result?.messages?.at(-1) || result?.answer?.at(-1);
+                    const aiMessage = result?.messages?.at(-1) || result?.answer?.at(-1);
 
-            if (!aiMessage) {
-                throw new Error(`Could not find AI message in result for ${id}`);
+                    if (!aiMessage) {
+                        throw new Error(`Could not find AI message in result for ${id}`);
+                    }
+
+                    const evaluator = new AgenticEvaluator(
+                        [...sharedContext, aiMessage],
+                        evaluatorConfig
+                    );
+
+                    const evaluation = await evaluator.evaluate();
+                    this.emit("evaluate_end", id, evaluation);
+                    
+                    childSpan.setAttribute("evaluation.score", evaluation.result.score);
+                    childSpan.addEvent("evaluation_completed", { id, score: evaluation.result.score });
+
+                    return {
+                        id,
+                        evaluation,
+                        result
+                    };
+                });
+                
+                evaluations.push(evaluationResult);
             }
 
-            const evaluator = new AgenticEvaluator(
-                [...sharedContext, aiMessage],
-                evaluatorConfig
-            );
+            span.setAttribute("multianswers.evaluations_count", evaluations.length);
 
-            const evaluation = await evaluator.evaluate();
-            this.emit("evaluate_end", id, evaluation);
-
-            evaluations.push({
-                id,
-                evaluation,
-                result
-            });
-        }
-
-        return evaluations;
+            return evaluations;
+        });
     }
 
     /** Runs invoke and then evaluate, picking the best one */
     async getBest(sharedContext: MessagesVariations[], evaluatorConfig: any) {
-        await this.invoke();
-        const evaluations = await this.evaluate(sharedContext, evaluatorConfig);
+        return withTelemetry("multianswers.get_best", {}, async (span) => {
+            await this.invoke();
+            const evaluations = await this.evaluate(sharedContext, evaluatorConfig);
 
-        // Sort by score descending
-        evaluations.sort((a, b) => b.evaluation.result.score - a.evaluation.result.score);
+            // Sort by score descending
+            evaluations.sort((a, b) => b.evaluation.result.score - a.evaluation.result.score);
 
-        return evaluations[0];
+            const best = evaluations[0];
+            if (best) {
+                span.setAttribute("best_run.id", best.id);
+                span.setAttribute("best_run.score", best.evaluation.result.score);
+            }
+
+            return best;
+        });
     }
 }

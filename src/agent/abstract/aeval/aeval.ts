@@ -74,7 +74,12 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
 
     /** Runs evaluation with ReActAgent with specified config and returns outcome */
     async evaluate(): Promise<EvaluationResult> {
-        return await withTelemetry("aeval.evaluate", { config: JSON.stringify(this.agentConfig, null, 4) }, async (span) => {
+        return await withTelemetry("aeval.evaluate", { 
+            model: this.agentConfig.model.config.model 
+        }, async (span) => {
+            span.addEvent("evaluator_config", {
+                config: JSON.stringify(this.agentConfig).substring(0, 5000)
+            });
             this.emit("evaluate_start");
     
             const evalAgent = new ReActAgent({
@@ -114,11 +119,21 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
             }
     
             this.emit("evaluate_end", lastMessage);
-            span?.setAttribute("result", JSON.stringify({
+            
+            const evaluationData = {
                 result: (lastMessage.structuredOutput as EvaluationResult["result"]),
                 resultScore: (lastMessage.structuredOutput as EvaluationResult["result"]).score,
                 messages: result.messages,
-            }, null, 4));
+            };
+
+            // Use an event for the large result blob to avoid attribute limits
+            span?.addEvent("evaluation_result", {
+                score: evaluationData.resultScore,
+                verdict: evaluationData.result.verdict,
+                // Truncate reasoning/messages to avoid Dropping the span
+                data: JSON.stringify(evaluationData).substring(0, 5000),
+                is_truncated: JSON.stringify(evaluationData).length > 5000
+            });
             
             return {
                 result: lastMessage.structuredOutput,
@@ -138,7 +153,9 @@ export class AgenticEvaluator implements AgenticEvaluatorSchema {
         expected: Pick<EvaluationResult["result"], "score" | "verdict"> & { expectationDescription?: string; }, 
         maxRetries: number = 0
     ): Promise<{ success: boolean; reasoningMessages: MessagesVariations[]; }> {
-        return await withTelemetry("aeval.loop", { config: JSON.stringify(this.agentConfig, null, 4) }, async (span) => {
+        return await withTelemetry("aeval.loop", { 
+            model: (runBy instanceof ReActAgent) ? runBy.agentConfig.model.config.model : runBy.config.model 
+        }, async (span) => {
             let currentRetries = 0;
             const verdicts = ['REJECTED', 'POOR', 'GOOD', 'BEST'];
             

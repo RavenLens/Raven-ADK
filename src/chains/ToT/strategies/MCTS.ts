@@ -227,6 +227,7 @@ Generate ${this.ToT.config.thoughtsCount || 3} thoughts that continue this path.
 
         // 3. Finalization
         this.telemetry?.recordStep("finalization");
+        
         // Select child of root with highest visits (robustness indicator in MCTS)
         const rootChildren = this.childrenMap.get(rootId)!;
         const bestOptionId = rootChildren.reduce((best, child) => 

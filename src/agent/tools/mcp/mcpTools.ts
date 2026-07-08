@@ -3,12 +3,11 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
     StreamableHTTPClientTransport,
-    type StreamableHTTPClientTransportOptions
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { WebSocketClientTransport } from "@modelcontextprotocol/sdk/client/websocket.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import * as z from "zod";
-import { Tool, tool } from "../tools";
+import { Tool, tool, ToolConfig, ToolLogic } from "../tools";
 import {
     MCPClientConfig,
     MCPDownloadedPrompt,
@@ -17,7 +16,7 @@ import {
     MCPServerConfig,
     MCPServerTransport
 } from "./types";
-import { withTelemetry, tracer, recordEventWithData } from "../../../telemetry/telemetry";
+import { withTelemetry, recordEventWithData } from "../../../telemetry/telemetry";
 
 interface MCPServerSession {
     config: MCPServerConfig;
@@ -335,6 +334,8 @@ export class MCP {
 
             let cursor: string | undefined;
 
+            span?.setAttribute("server_id", serverId);
+
             do {
                 const response = await session.client.listTools(cursor ? { cursor } : undefined);
 
@@ -365,7 +366,6 @@ export class MCP {
                 toolsCount: downloadedTools.length,
                 tools: JSON.stringify(downloadedTools.map((t) => t.remoteToolName))
             });
-
             return downloadedTools;
         });
     }
@@ -378,6 +378,7 @@ export class MCP {
             this.servers.forEach((_, serverId) => {
                 serverIds.push(serverId);
             });
+            span?.setAttribute("servers_id", serverIds);
 
             for (const serverId of serverIds) {
                 const downloaded = await this.downloadTools(serverId);
@@ -390,202 +391,125 @@ export class MCP {
     }
 
     async downloadPrompts(serverId: string): Promise<MCPDownloadedPrompt[]> {
-        const session = this.getServerSession(serverId);
-        const downloadedPrompts: MCPDownloadedPrompt[] = [];
-        let cursor: string | undefined;
+        return withTelemetry("mcp.download_prompts", { serverId }, async (span) => {
+            const session = this.getServerSession(serverId);
+            const downloadedPrompts: MCPDownloadedPrompt[] = [];
+            let cursor: string | undefined;
+    
+            span?.setAttribute("server_id", serverId);
+            
+            do {
+                const response = await session.client.listPrompts(cursor ? { cursor } : undefined);
+                span.addEvent("mcp.list_prompts_response", {
+                    response: JSON.stringify(response, null, 4).substring(0, 5000)
+                });
+    
+                for (const remotePrompt of response.prompts) {
+                    const remoteName = String(remotePrompt.name);
+                    const agentPromptName = this.makeAgentToolName(serverId, remoteName);
+                    const downloadedPrompt: MCPDownloadedPrompt = {
+                        serverId,
+                        serverName: session.config.serverName,
+                        remotePromptName: remoteName,
+                        agentPromptName,
+                        description: remotePrompt.description,
+                        arguments: remotePrompt.arguments?.map(arg => ({
+                            name: arg.name,
+                            description: arg.description,
+                            required: arg.required
+                        }))
+                    };
+    
+                    session.promptsByAgentName.set(agentPromptName, downloadedPrompt);
+                    session.promptsByRemoteName.set(remoteName, downloadedPrompt);
+                    this.promptsByAgentName.set(agentPromptName, downloadedPrompt);
+                    downloadedPrompts.push(downloadedPrompt);
+                }
+    
+                cursor = response.nextCursor;
+            } while (cursor);
 
-        do {
-            const response = await session.client.listPrompts(cursor ? { cursor } : undefined);
-
-            for (const remotePrompt of response.prompts) {
-                const remoteName = String(remotePrompt.name);
-                const agentPromptName = this.makeAgentToolName(serverId, remoteName);
-                const downloadedPrompt: MCPDownloadedPrompt = {
-                    serverId,
-                    serverName: session.config.serverName,
-                    remotePromptName: remoteName,
-                    agentPromptName,
-                    description: remotePrompt.description,
-                    arguments: remotePrompt.arguments?.map(arg => ({
-                        name: arg.name,
-                        description: arg.description,
-                        required: arg.required
-                    }))
-                };
-
-                session.promptsByAgentName.set(agentPromptName, downloadedPrompt);
-                session.promptsByRemoteName.set(remoteName, downloadedPrompt);
-                this.promptsByAgentName.set(agentPromptName, downloadedPrompt);
-                downloadedPrompts.push(downloadedPrompt);
-            }
-
-            cursor = response.nextCursor;
-        } while (cursor);
-
-        return downloadedPrompts;
+            span.addEvent("mcp.prompts_downloaded", {
+                count: downloadedPrompts.length,
+                prompts: JSON.stringify(downloadedPrompts, null, 4).substring(0, 5000)
+            });
+    
+            return downloadedPrompts;
+        })
     }
 
     async downloadPromptsFromAllServers(): Promise<MCPDownloadedPrompt[]> {
-        const allPrompts: MCPDownloadedPrompt[] = [];
-        const serverIds = Array.from(this.servers.keys());
-        for (const serverId of serverIds) {
-            allPrompts.push(...(await this.downloadPrompts(serverId)));
-        }
-        return allPrompts;
+        return withTelemetry("mcp.download_prompts_from_all_servers", {}, async (span) => {
+            const allPrompts: MCPDownloadedPrompt[] = [];
+            const serverIds = Array.from(this.servers.keys());
+            span?.setAttribute("servers_id", serverIds);
+            
+            for (const serverId of serverIds) {
+                allPrompts.push(...(await this.downloadPrompts(serverId)));
+            }
+
+            return allPrompts;
+        })
     }
 
     async downloadResources(serverId: string): Promise<MCPDownloadedResource[]> {
-        const session = this.getServerSession(serverId);
-        const downloadedResources: MCPDownloadedResource[] = [];
-        let cursor: string | undefined;
+        return withTelemetry("mcp.download_resources", {}, async (span) => {
+            const session = this.getServerSession(serverId);
+            const downloadedResources: MCPDownloadedResource[] = [];
+            let cursor: string | undefined;
 
-        do {
-            const response = await session.client.listResources(cursor ? { cursor } : undefined);
+            span?.setAttribute("server_id", serverId);
+    
+            do {
+                const response = await session.client.listResources(cursor ? { cursor } : undefined);
+                span.addEvent("mcp.list_resources_response", {
+                    response: JSON.stringify(response, null, 4).substring(0, 5000)
+                });
+    
+                for (const remoteResource of response.resources) {
+                    const downloadedResource: MCPDownloadedResource = {
+                        serverId,
+                        serverName: session.config.serverName,
+                        remoteResourceName: remoteResource.name,
+                        uri: remoteResource.uri,
+                        description: remoteResource.description,
+                        mimeType: remoteResource.mimeType
+                    };
+    
+                    session.resourcesByUri.set(remoteResource.uri, downloadedResource);
+                    this.resourcesByUri.set(remoteResource.uri, downloadedResource);
+                    downloadedResources.push(downloadedResource);
+                }
+    
+                cursor = response.nextCursor;
+            } while (cursor);
 
-            for (const remoteResource of response.resources) {
-                const downloadedResource: MCPDownloadedResource = {
-                    serverId,
-                    serverName: session.config.serverName,
-                    remoteResourceName: remoteResource.name,
-                    uri: remoteResource.uri,
-                    description: remoteResource.description,
-                    mimeType: remoteResource.mimeType
-                };
-
-                session.resourcesByUri.set(remoteResource.uri, downloadedResource);
-                this.resourcesByUri.set(remoteResource.uri, downloadedResource);
-                downloadedResources.push(downloadedResource);
-            }
-
-            cursor = response.nextCursor;
-        } while (cursor);
-
-        return downloadedResources;
-    }
-
-    async downloadResourcesFromAllServers(): Promise<MCPDownloadedResource[]> {
-        const allResources: MCPDownloadedResource[] = [];
-        const serverIds = Array.from(this.servers.keys());
-        for (const serverId of serverIds) {
-            allResources.push(...(await this.downloadResources(serverId)));
-        }
-        return allResources;
-    }
-
-    getDownloadedPrompts(): MCPDownloadedPrompt[] {
-        return Array.from(this.promptsByAgentName.values());
-    }
-
-    getDownloadedResources(): MCPDownloadedResource[] {
-        return Array.from(this.resourcesByUri.values());
-    }
-
-    async getPrompt(serverId: string, promptName: string, args?: Record<string, string>): Promise<string> {
-        const session = this.getServerSession(serverId);
-        const response = await session.client.getPrompt({
-            name: promptName,
-            arguments: args
+            span.addEvent("mcp.resources_downloaded", {
+                count: downloadedResources.length,
+                resources: JSON.stringify(downloadedResources, null, 4).substring(0, 5000)
+            });
+    
+            return downloadedResources;
         });
-
-        return response.messages.map(m => {
-            const content = m.content;
-            if (content.type === "text") return `${m.role.toUpperCase()}: ${content.text}`;
-            return `${m.role.toUpperCase()}: [${content.type} content]`;
-        }).join("\n\n");
-    }
-
-    async readResource(serverId: string, resourceUri: string): Promise<string> {
-        const session = this.getServerSession(serverId);
-        const response = await session.client.readResource({ uri: resourceUri });
-
-        return response.contents.map(c => {
-            if ("text" in c) return c.text;
-            if ("blob" in c) return `[binary data (${c.mimeType ?? "unknown"})]`;
-            return "[unknown resource content]";
-        }).join("\n\n");
-    }
-
-    async downloadPrompts(serverId: string): Promise<MCPDownloadedPrompt[]> {
-        const session = this.getServerSession(serverId);
-        const downloadedPrompts: MCPDownloadedPrompt[] = [];
-        let cursor: string | undefined;
-
-        do {
-            const response = await session.client.listPrompts(cursor ? { cursor } : undefined);
-
-            for (const remotePrompt of response.prompts) {
-                const remoteName = String(remotePrompt.name);
-                const agentPromptName = this.makeAgentToolName(serverId, remoteName);
-                const downloadedPrompt: MCPDownloadedPrompt = {
-                    serverId,
-                    serverName: session.config.serverName,
-                    remotePromptName: remoteName,
-                    agentPromptName,
-                    description: remotePrompt.description,
-                    arguments: remotePrompt.arguments?.map(arg => ({
-                        name: arg.name,
-                        description: arg.description,
-                        required: arg.required
-                    }))
-                };
-
-                session.promptsByAgentName.set(agentPromptName, downloadedPrompt);
-                session.promptsByRemoteName.set(remoteName, downloadedPrompt);
-                this.promptsByAgentName.set(agentPromptName, downloadedPrompt);
-                downloadedPrompts.push(downloadedPrompt);
-            }
-
-            cursor = response.nextCursor;
-        } while (cursor);
-
-        return downloadedPrompts;
-    }
-
-    async downloadPromptsFromAllServers(): Promise<MCPDownloadedPrompt[]> {
-        const allPrompts: MCPDownloadedPrompt[] = [];
-        const serverIds = Array.from(this.servers.keys());
-        for (const serverId of serverIds) {
-            allPrompts.push(...(await this.downloadPrompts(serverId)));
-        }
-        return allPrompts;
-    }
-
-    async downloadResources(serverId: string): Promise<MCPDownloadedResource[]> {
-        const session = this.getServerSession(serverId);
-        const downloadedResources: MCPDownloadedResource[] = [];
-        let cursor: string | undefined;
-
-        do {
-            const response = await session.client.listResources(cursor ? { cursor } : undefined);
-
-            for (const remoteResource of response.resources) {
-                const downloadedResource: MCPDownloadedResource = {
-                    serverId,
-                    serverName: session.config.serverName,
-                    remoteResourceName: remoteResource.name,
-                    uri: remoteResource.uri,
-                    description: remoteResource.description,
-                    mimeType: remoteResource.mimeType
-                };
-
-                session.resourcesByUri.set(remoteResource.uri, downloadedResource);
-                this.resourcesByUri.set(remoteResource.uri, downloadedResource);
-                downloadedResources.push(downloadedResource);
-            }
-
-            cursor = response.nextCursor;
-        } while (cursor);
-
-        return downloadedResources;
     }
 
     async downloadResourcesFromAllServers(): Promise<MCPDownloadedResource[]> {
-        const allResources: MCPDownloadedResource[] = [];
-        const serverIds = Array.from(this.servers.keys());
-        for (const serverId of serverIds) {
-            allResources.push(...(await this.downloadResources(serverId)));
-        }
-        return allResources;
+        return withTelemetry("mcp.download_resources_from_all_servers", {}, async (span) => {
+            const allResources: MCPDownloadedResource[] = [];
+            const serverIds = Array.from(this.servers.keys());
+
+            span?.setAttribute("servers_id", serverIds);
+
+            for (const serverId of serverIds) {
+                allResources.push(...(await this.downloadResources(serverId)));
+            }
+
+            span.addEvent("mcp.all_resources_downloaded", {
+                totalCount: allResources.length
+            });
+
+            return allResources;
+        })
     }
 
     getDownloadedPrompts(): MCPDownloadedPrompt[] {
@@ -645,6 +569,10 @@ export class MCP {
     async callTool(serverId: string, remoteToolName: string, args?: Record<string, unknown>): Promise<string> {
         return withTelemetry("mcp.call_tool", { serverId, remoteToolName }, async (span) => {
             const session = this.getServerSession(serverId);
+            
+            span.setAttribute("mcp.server_id", serverId);
+            span.setAttribute("mcp.tool_name", remoteToolName);
+            span.setAttribute("mcp.tool_args", JSON.stringify(args ?? {}, null, 4));
 
             const tool = session.toolsByRemoteName.get(remoteToolName);
             if (!tool) {
@@ -652,8 +580,6 @@ export class MCP {
                     `MCP tool '${remoteToolName}' is not downloaded for server '${serverId}'. Run downloadTools('${serverId}') first.`
                 );
             }
-
-            span?.setAttribute("mcp.tool_args", JSON.stringify(args ?? {}));
 
             const result = await session.client.callTool({
                 name: remoteToolName,
@@ -681,18 +607,45 @@ export class MCP {
         return this.callTool(tool.serverId, tool.remoteToolName, args);
     }
 
+    private registerTelemetryToolDiscoveryCall(
+        { toolName, args, config }: {
+            toolName: string;
+            args: Record<string, any>;
+            config?: ToolConfig<any, any>;
+        },
+        logic: ToolLogic<any, any>
+    ) {
+        return withTelemetry("mcp.discovery_tool_call", { toolName, args, config }, async (span) => {
+            span.setAttribute("mcp.tool_name", toolName);
+            span.setAttribute("mcp.tool_args", JSON.stringify(args ?? {}, null, 4));
+
+            const output = await logic(args, config);
+
+            span.addEvent("mcp.discovery_tool_call_result", {
+                result: output.length > 5000 ? output.substring(0, 5000) + "... [truncated]" : output
+            });
+            
+            return output;
+        });
+    }
+    
     /**
      * Returns a set of tools that allow the agent to discover and use MCP prompts and resources.
      */
     getDiscoveryTools(): Tool<any, any>[] {
         return [
             tool(
-                async () => {
-                    const tools = this.getDownloadedTools().map(t => `- Tool: ${t.agentToolName} (${t.description})`).join("\n");
-                    const prompts = this.getDownloadedPrompts().map(p => `- Prompt: ${p.agentPromptName} (${p.description ?? "No description"})\n  Arguments: ${p.arguments?.map(a => `${a.name}${a.required ? "*" : ""}`).join(", ") ?? "None"}`).join("\n");
-                    const resources = this.getDownloadedResources().map(r => `- Resource: ${r.uri} (${r.remoteResourceName}) - ${r.description ?? "No description"}`).join("\n");
-
-                    return `### MCP Discovery Report\n\n#### Tools\n${tools || "None"}\n\n#### Prompts\n${prompts || "None"}\n\n#### Resources\n${resources || "None"}`;
+                async (args, config) => {
+                    return this.registerTelemetryToolDiscoveryCall(
+                        { toolName: config?.toolName ?? "unknown_(tool_name)", config, args },
+                        async (args, config) => {
+                            const tools = this.getDownloadedTools().map(t => `- Tool: ${t.agentToolName} (${t.description})`).join("\n");
+                            const prompts = this.getDownloadedPrompts().map(p => `- Prompt: ${p.agentPromptName} (${p.description ?? "No description"})\n  Arguments: ${p.arguments?.map(a => `${a.name}${a.required ? "*" : ""}`).join(", ") ?? "None"}`).join("\n");
+                            const resources = this.getDownloadedResources().map(r => `- Resource: ${r.uri} (${r.remoteResourceName}) - ${r.description ?? "No description"}`).join("\n");
+        
+                            return `### MCP Discovery Report\n\n#### Tools\n${tools || "None"}\n\n#### Prompts\n${prompts || "None"}\n\n#### Resources\n${resources || "None"}`;
+                        }
+                    );
                 },
                 {
                     toolName: "mcp_list_capabilities",
@@ -701,10 +654,17 @@ export class MCP {
                 }
             ),
             tool(
-                async ({ agentPromptName, arguments: args }) => {
-                    const prompt = this.promptsByAgentName.get(agentPromptName);
-                    if (!prompt) return `Error: Prompt ${agentPromptName} not found.`;
-                    return this.getPrompt(prompt.serverId, prompt.remotePromptName, args as Record<string, string>);
+                async (params, config) => {
+                    return this.registerTelemetryToolDiscoveryCall(
+                        { toolName: config?.toolName ?? "unknown_(tool_name)", config, args: params },
+                        async ({ agentPromptName, arguments: args }) => {
+                            const prompt = this.promptsByAgentName.get(agentPromptName);
+                            
+                            if (!prompt) return `Error: Prompt ${agentPromptName} not found.`;
+                            
+                            return this.getPrompt(prompt.serverId, prompt.remotePromptName, args as Record<string, string>);
+                        }
+                    );
                 },
                 {
                     toolName: "mcp_get_prompt",
@@ -716,10 +676,17 @@ export class MCP {
                 }
             ),
             tool(
-                async ({ uri }) => {
-                    const resource = this.resourcesByUri.get(uri);
-                    if (!resource) return `Error: Resource with URI ${uri} not found.`;
-                    return this.readResource(resource.serverId, resource.uri);
+                async (params, config) => {
+                    return this.registerTelemetryToolDiscoveryCall(
+                        { toolName: config?.toolName ?? "unknown_(tool_name)", config, args: params },
+                        async ({ uri }) => {
+                            const resource = this.resourcesByUri.get(uri);
+                            
+                            if (!resource) return `Error: Resource with URI ${uri} not found.`;
+
+                            return this.readResource(resource.serverId, resource.uri);
+                        }
+                    );
                 },
                 {
                     toolName: "mcp_read_resource",

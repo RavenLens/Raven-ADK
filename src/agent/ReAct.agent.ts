@@ -1700,16 +1700,32 @@ ${memoryConclusionSystemPrompt}
                     .finishTimeTracker()
                     .setUsage(this.usedTokens);
 
-                span?.setAttribute("agent_reasoning_path", JSON.stringify(this.AgentReasoningPath, null, 4))
+                const reasoningPathStr = JSON.stringify(this.AgentReasoningPath, null, 4);
+                if (reasoningPathStr.length > 2000) {
+                    span?.addEvent("agent.reasoning_path_event", {
+                        path: reasoningPathStr.substring(0, 5000),
+                        is_truncated: reasoningPathStr.length > 5000
+                    });
+                } else {
+                    span?.setAttribute("agent.reasoning_path", reasoningPathStr);
+                }
 
-                const activeSpan = tracer.startActiveSpan("agent.finalize", (span) => {
-                    span.setAttribute("agent.graph_path", JSON.stringify(this.AgentReasoningPath));
-                    span.setAttribute("agent.total_tokens_input", this.usedTokens.input);
-                    span.setAttribute("agent.total_tokens_output", this.usedTokens.output);
-                    span.setAttribute("agent.total_tokens_reasoning", this.usedTokens.reasoning);
-                    span.setAttribute("agent.recalls", this.AgentGraph.graphState.reasoningRecallsCount ?? 0);
-                    span.setAttribute("agent.task_result", JSON.stringify(result, null, 4));
-                    span.end();
+                tracer.startActiveSpan("agent.finalize", (finalizeSpan) => {
+                    finalizeSpan.setAttribute("agent.total_tokens_input", this.usedTokens.input);
+                    finalizeSpan.setAttribute("agent.total_tokens_output", this.usedTokens.output);
+                    finalizeSpan.setAttribute("agent.total_tokens_reasoning", this.usedTokens.reasoning);
+                    finalizeSpan.setAttribute("agent.recalls", this.AgentGraph.graphState.reasoningRecallsCount ?? 0);
+                    
+                    const resultStr = JSON.stringify(result, null, 4);
+                    if (resultStr.length > 2000) {
+                        finalizeSpan.addEvent("agent.task_result_event", {
+                            result: resultStr.substring(0, 5000),
+                            is_truncated: resultStr.length > 5000
+                        });
+                    } else {
+                        finalizeSpan.setAttribute("agent.task_result", resultStr);
+                    }
+                    finalizeSpan.end();
                 });
 
                 recordLog({

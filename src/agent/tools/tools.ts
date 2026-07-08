@@ -1,6 +1,6 @@
 import * as z from "zod";
 
-type ToolLogic<ToolLogicArgs extends z.ZodObject> = (argsObj: z.infer<ToolLogicArgs>) => Promise<string> | string;
+export type ToolLogic<ToolLogicArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> = (argsObj: z.infer<ToolLogicArgs>, config?: ToolConfig<ToolLogicArgs, ToolOutputSchema>) => Promise<string> | string;
 
 export interface ToolConfig<
     ToolLogicArgs extends z.ZodObject,
@@ -18,16 +18,16 @@ export interface ToolConfig<
 }
 
 export class Tool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> {
-    toolLogic: ToolLogic<ToolArgs>;
+    toolLogic: ToolLogic<ToolArgs, ToolOutputSchema>;
     toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>;
     
-    constructor(toolLogic: ToolLogic<ToolArgs>, toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>) {
+    constructor(toolLogic: ToolLogic<ToolArgs, ToolOutputSchema>, toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>) {
         this.toolLogic = toolLogic;
         this.toolConfig = toolConfig;
     }
 
     async invoke(args: z.infer<ToolArgs>) {
-        const result = await this.toolLogic(args);
+        const result = await this.toolLogic(args, this.toolConfig);
 
         if (typeof result !== "string") {
             const errMsg = "Tool result isn't string. What is required";
@@ -61,6 +61,6 @@ ${toolConfig.toolOutputSchema ? `Tool from logic wraps your response is going to
 export function tool<
     ToolLogicArgs extends z.ZodObject,
     ToolOutputSchema extends z.ZodObject
->(toolLogic: ToolLogic<ToolLogicArgs>, toolConfig: ToolConfig<ToolLogicArgs, ToolOutputSchema>) {
+>(toolLogic: ToolLogic<ToolLogicArgs, ToolOutputSchema>, toolConfig: ToolConfig<ToolLogicArgs, ToolOutputSchema>) {
     return new Tool(toolLogic, toolConfig);
 };

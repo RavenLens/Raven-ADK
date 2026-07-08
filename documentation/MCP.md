@@ -23,6 +23,13 @@ With this integration you can:
 6. Pass those tools to ReActAgent in agentConfig.tools.
 7. Invoke the agent. If the model picks an MCP tool, ReActAgent calls MCP under the hood.
 
+## Does it ship Telemetry?
+- Yes
+- Usage of each MCP Tool and discovering the context, prompts and resources is registered as OpenTelemetry Span and huge data like tool attrs and output are saved as OLTP events
+- Size of tool output is limited to 5000 characters to avoid stiff backend limits in terms of Jaeger, HoneyComb are between `64-128Kb` for *entire span*
+- Thanks to this implementation you have fine-grained control over what your AI Agent/AI Autonomous system is doing
+
+
 ## Step-by-Step Setup
 
 ### Step 1: Initialize MCP

@@ -62,7 +62,17 @@ export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any,
     
     registerConfig() {
         const activeSpan = trace.getActiveSpan();
-        activeSpan?.setAttribute(`${this.getPrefix()}.config`, JSON.stringify(this.config, null, 4))
+        const configStr = JSON.stringify(this.config, null, 4);
+        
+        if (configStr.length > 2000) {
+            activeSpan?.addEvent(`${this.getPrefix()}.config_event`, {
+                config: configStr.substring(0, 5000),
+                is_truncated: configStr.length > 5000
+            });
+        } else {
+            activeSpan?.setAttribute(`${this.getPrefix()}.config`, configStr);
+        }
+        
         return this;
     }
 
@@ -120,13 +130,33 @@ export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any,
     /** Setup user attribute as query */
     setUserQueryActiveSpanAttribute() {
         const activeSpan = trace.getActiveSpan();
-        activeSpan?.setAttribute(`${this.getPrefix()}.task_query`, JSON.stringify(this.config.messages ?? [], null, 4))
+        const queryStr = JSON.stringify(this.config.messages ?? [], null, 4);
+
+        if (queryStr.length > 2000) {
+            activeSpan?.addEvent(`${this.getPrefix()}.query_event`, {
+                query: queryStr.substring(0, 5000),
+                is_truncated: queryStr.length > 5000
+            });
+        } else {
+            activeSpan?.setAttribute(`${this.getPrefix()}.task_query`, queryStr);
+        }
+        
         return this;
     }
     
     setAnswerActiveSpanAttribute(answer: LLMAnswer) {
         const activeSpan = trace.getActiveSpan();
-        activeSpan?.setAttribute(`${this.getPrefix()}.answer`, JSON.stringify(answer, null, 4));
+        const answerStr = JSON.stringify(answer, null, 4);
+
+        if (answerStr.length > 2000) {
+            activeSpan?.addEvent(`${this.getPrefix()}.answer_event`, {
+                answer: answerStr.substring(0, 5000),
+                is_truncated: answerStr.length > 5000
+            });
+        } else {
+            activeSpan?.setAttribute(`${this.getPrefix()}.answer`, answerStr);
+        }
+        
         return this;
     }
 
@@ -173,11 +203,11 @@ export const agentRunCounter = meter.createCounter("raven_adk.agent_runs", {
 export async function withTelemetry<T>(
     name: string, 
     attributes: Record<string, any>, 
-    fn: (span?: Span) => Promise<T>
+    fn: (span: Span) => Promise<T>
 ): Promise<T> {
     return tracer.startActiveSpan(name, { attributes }, async (span) => {
         try {
-            const result = await fn();
+            const result = await fn(span);
             span.setStatus({ code: SpanStatusCode.OK });
             return result;
         } catch (error: any) {

@@ -8,6 +8,13 @@ RavenADK provides native **OpenTelemetry (OTel)** support, establishing it as th
 - **Zero Overhead**: Uses non-blocking batch processing for minimum impact on agent performance.
 - **Automatic Lifecycle**: Telemetry data is automatically flushed when the agent completes its task.
 
+## What is recorded?
+- AI Agents steps and procedures are registered for each RavenADK agentic concept like `ReAct` Agent
+- Tool calls and `MCP` tool calls
+- `MCP` interaction like: connections, tool downloads
+- abstract connecepts interactions like: `AEval` (loops and evaluations), `MutlipleAnswers`
+- and `[more]`
+
 ## Architecture
 
 Raven ADK uses the **OTLP (OpenTelemetry Line Protocol)** over HTTP to export two types of data:

@@ -1,3 +1,5 @@
+import { withTelemetry } from "../../../telemetry/telemetry.js";
+
 /**
  * It has to:
  * - Take the list with actions todo
@@ -54,48 +56,57 @@ export class SequentialRunner {
     }
     
     async invoke() {
-        this.emit("start");
-        
-        let priorState: SequentialRunnerOperationalObject | undefined;
-        for (const [runnerID, runnerFn] of this.runnes) {
-            this.emit("runStart", runnerID, priorState);
-
-            //
-            let loopContinue = true;
-            let totalRunFailuresCounter = 0;
-            let totalErrorsCounter = 0;
+        return withTelemetry("sequential.invoke", { runnersCount: this.runnes.length }, async (span) => {
+            this.emit("start");
             
-            while (loopContinue) {
-                try {
-                    const runRunnerResult = await runnerFn(priorState);
-                    priorState = runRunnerResult;
+            let priorState: SequentialRunnerOperationalObject | undefined;
+            for (const [runnerID, runnerFn] of this.runnes) {
+                await withTelemetry("sequential.step", { runnerID }, async (stepSpan) => {
+                    this.emit("runStart", runnerID, priorState);
 
-                    if (!priorState.success && (this.rollback?.failure && this.rollback.failure > totalRunFailuresCounter)) {
-                        totalRunFailuresCounter += 1;
-                        this.emit("rollback", runnerID, "failure", totalRunFailuresCounter);
-                        loopContinue = true;
-                        continue;
-                    }
-                    else loopContinue = false;
-                }
-                catch(err) {
-                    this.emit("error", err);
+                    //
+                    let loopContinue = true;
+                    let totalRunFailuresCounter = 0;
+                    let totalErrorsCounter = 0;
                     
-                    if (this.rollback?.error && this.rollback.error > totalErrorsCounter) {
-                        totalErrorsCounter += 1;
-                        this.emit("rollback", runnerID, "error", totalErrorsCounter);
-                        loopContinue = true;
-                        continue;
+                    while (loopContinue) {
+                        try {
+                            const runRunnerResult = await runnerFn(priorState);
+                            priorState = runRunnerResult;
+
+                            if (!priorState.success && (this.rollback?.failure && this.rollback.failure > totalRunFailuresCounter)) {
+                                totalRunFailuresCounter += 1;
+                                this.emit("rollback", runnerID, "failure", totalRunFailuresCounter);
+                                stepSpan.addEvent("rollback", { runnerID, type: "failure", count: totalRunFailuresCounter });
+                                loopContinue = true;
+                                continue;
+                            }
+                            else loopContinue = false;
+                        }
+                        catch(err: any) {
+                            this.emit("error", err);
+                            stepSpan.recordException(err);
+                            
+                            if (this.rollback?.error && this.rollback.error > totalErrorsCounter) {
+                                totalErrorsCounter += 1;
+                                this.emit("rollback", runnerID, "error", totalErrorsCounter);
+                                stepSpan.addEvent("rollback", { runnerID, type: "error", count: totalErrorsCounter });
+                                loopContinue = true;
+                                continue;
+                            }
+                            else loopContinue = false;
+                        }
                     }
-                    else loopContinue = false;
-                }
+
+                    this.emit("runEnd", runnerID, priorState);
+                    stepSpan.setAttribute("step.success", priorState?.success ?? false);
+                });
             }
 
-            this.emit("runEnd", runnerID, priorState);
-        }
-
-        // Outcome producing
-        this.emit("end", priorState);
-        return priorState;
+            // Outcome producing
+            this.emit("end", priorState);
+            span.setAttribute("sequential.final_success", priorState?.success ?? false);
+            return priorState;
+        });
     }
 }
