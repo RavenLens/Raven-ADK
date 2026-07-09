@@ -1,7 +1,7 @@
 import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
-import { MessageParam, Tool, ToolUseBlock, TextBlock } from "@anthropic-ai/sdk/resources/messages";
-import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
+import { MessageParam, ToolUseBlock, TextBlock } from "@anthropic-ai/sdk/resources/messages";
+import { parseToolCallContentToParams, parseToolDescription, Tool } from "../agent/tools/tools";
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
@@ -197,8 +197,9 @@ export class Anthropic implements StandardLLMShema {
         return systemMessages.join("\n\n");
     }
 
-    private prepareTools(): Tool[] {
-        return (this.config.tools ?? []).map((tool) => {
+    private prepareTools(toolsOverride?: Tool<any, any>[]): AnthropicStandalone.Messages.Tool[] {
+        const toolsToPrepare = toolsOverride ?? this.config.tools ?? [];
+        return toolsToPrepare.map((tool) => {
             const inputSchemaRaw = z.toJSONSchema(tool.toolConfig.toolArguments);
 
             return {
@@ -208,7 +209,7 @@ export class Anthropic implements StandardLLMShema {
                     type: "object",
                     ...(inputSchemaRaw as Record<string, unknown>)
                 }
-            } satisfies Tool;
+            } satisfies AnthropicStandalone.Messages.Tool;
         });
     }
 
@@ -349,7 +350,7 @@ export class Anthropic implements StandardLLMShema {
             max_tokens: (this.config.max_tokens ?? 1024) + (options?.reasoning?.budgetTokens ?? 0),
             system: this.prepareSystemPrompt(),
             messages: this.prepareMessages(),
-            tools: this.prepareTools(),
+            tools: this.prepareTools(options?.tools),
             thinking: thinking as any
         }
         
