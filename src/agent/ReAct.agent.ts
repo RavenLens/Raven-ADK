@@ -284,7 +284,13 @@ export class ReActAgent
 
         // Registers config
         tracer.startActiveSpan("agent.config_constructor_details", (span) => {
-            span.setAttribute("config.body", JSON.stringify(this.agentConfig, null, 4));
+            const safeConfig = { ...this.agentConfig, model: this.agentConfig.model.config.model };
+            span.setAttribute("config.body", JSON.stringify(safeConfig, (key, value) => {
+                if (key === 'memory') return '[Memory]';
+                if (key === 'tools') return '[Tools]';
+                if (key === 'subagents') return '[Subagents]';
+                return value;
+            }, 4));
             span.setAttribute("agent.task_query", config.messages.at(-1)?.content ?? "");
             span.setAttribute("agent.main_model", config.model.config.model);
             

@@ -4,6 +4,7 @@ import { MemoryFetch, MemoryRecord } from "./stores/schema";
 import { SchemaMemoryStore } from "./stores/schema";
 import { randomUUID } from "node:crypto";
 import { ReActAgentConfig, ReActAgentPluginSpec } from "../ReAct.agent";
+import { withTelemetry, recordEventWithData } from "../../telemetry/telemetry";
 
 /** Interface used to make the multimemory Agents - where one object can be responsible for particular thing */
 export interface MutliMemoryObject {
@@ -97,14 +98,19 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
         const memoryTools: Tool<any, any>[] = [
             tool(
                 async (args) => {
-                    const result = args.mode === "explore"
-                        ? await this.store.fetchMemory(MemoryFetch.Explore)
-                        : await this.store.fetchMemory({
-                            by: MemoryFetch.Sematic,
-                            words: this.normalizeFetchWords(args.words)
-                        });
+                    return await withTelemetry(`${tools_prefix}fetch_memory`, { 
+                        mode: args.mode,
+                        memory_name: this.multimemory?.name ?? "General"
+                    }, async () => {
+                        const result = args.mode === "explore"
+                            ? await this.store.fetchMemory(MemoryFetch.Explore)
+                            : await this.store.fetchMemory({
+                                by: MemoryFetch.Sematic,
+                                words: this.normalizeFetchWords(args.words)
+                            });
 
-                    return this.serializeToolResult(result ?? null);
+                        return this.serializeToolResult(result ?? null);
+                    });
                 },
                 {
                     toolName: `${tools_prefix}fetch_memory`,
@@ -119,35 +125,40 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
             ),
             tool(
                 async (args) => {
-                    const uinqueId = randomUUID();
-                    const record = this.normalizeMemoryRecord({
-                        ...args.record,
-                        id: uinqueId
-                    });
-
-                    if (!record) {
-                        return this.serializeToolResult({
-                            saved: false,
-                            reason: "Invalid memory record payload"
+                    return await withTelemetry(`${tools_prefix}save_memory`, {
+                        memory_name: this.multimemory?.name ?? "General",
+                        record_title: args.record.title
+                    }, async () => {
+                        const uinqueId = randomUUID();
+                        const record = this.normalizeMemoryRecord({
+                            ...args.record,
+                            id: uinqueId
                         });
-                    }
 
-                    const duplicate = await this.findDuplicateRecord(record, args.words);
+                        if (!record) {
+                            return this.serializeToolResult({
+                                saved: false,
+                                reason: "Invalid memory record payload"
+                            });
+                        }
 
-                    if (duplicate) {
+                        const duplicate = await this.findDuplicateRecord(record, args.words);
+
+                        if (duplicate) {
+                            return this.serializeToolResult({
+                                saved: false,
+                                skipped: true,
+                                reason: "Matching memory already exists",
+                                matchedMemory: duplicate
+                            });
+                        }
+
+                        const saved = await this.store.saveMemory(record);
+
                         return this.serializeToolResult({
-                            saved: false,
-                            skipped: true,
-                            reason: "Matching memory already exists",
-                            matchedMemory: duplicate
+                            saved,
+                            record
                         });
-                    }
-
-                    const saved = await this.store.saveMemory(record);
-
-                    return this.serializeToolResult({
-                        saved,
-                        record
                     });
                 },
                 {
@@ -357,97 +368,110 @@ export function createMemoryConclusionPlugin(reactAgentConfig: ReActAgentConfig<
         name: "MemoryConcludePlugin",
         executionWay: "after_agent_run",
         async execute(executionFrom, agentConfig, graphState) {
-            if (agentConfig.memory) {
-                const { ReActAgent } = await import("../ReAct.agent");
-                
-                // Normalize memory configurations into an array of interfaces
-                const memoryInterfaces: Memory<any>[] = [];
-                if (Array.isArray(agentConfig.memory)) {
-                    agentConfig.memory.forEach(m => {
-                        memoryInterfaces.push(new Memory(m.memory, m));
-                    });
-                } else {
-                    memoryInterfaces.push(new Memory(agentConfig.memory));
-                }
-
-                const transcript = agentConfig.messages
-                    .filter((m): m is any => m.type !== 'system')
-                    .map((m: any) => {
-                        if (m.type === 'user') return `User: ${m.content}`;
-                        if (m.type === 'ai') return `Assistant: ${m.content || '(no text)'}`;
-                        if (m.type === 'thinking') return `Thought: ${m.content}`;
-                        if (m.type === 'tool') {
-                            const toolName = m.tool_name || m.tool_id;
-                            return `Tool Call [${toolName}]: ${m.content}${m.toolOutput ? `\nOutput: ${m.toolOutput}` : ''}${m.toolError ? `\nError: ${m.toolError}` : ''}`;
-                        }
-                        return '';
-                    })
-                    .filter(Boolean)
-                    .join('\n\n');
-
-                let anyUpdated = false;
-
-                const results = await Promise.all(memoryInterfaces.map(async (memoryInterface) => {
-                    const oldConclusion = await memoryInterface.getMemoryConclusionFile();
-                    const memoryName = memoryInterface.multimemory?.name ?? "General";
-                    const memoryPurpose = memoryInterface.multimemory?.purpose ?? "General persistence of facts.";
-
-                    const summarySystemPrompt = [
-                        `You are a specialized memory architecture conclusion agent.`,
-                        `Your task is to maintain a "Consolidated Conclusion" for the "${memoryName}" memory system.`,
-                        `Memory Purpose: ${memoryPurpose}`,
-                        "",
-                        "Rules:",
-                        "1. Analyze the transcript for new, stable, and durable facts/insights relevant to this memory scope.",
-                        "2. Integrate new insights into the existing conclusion.",
-                        "3. Keep the output concise, structured, and under 2048 words.",
-                        "4. If no significant new information is found, output the EXACT same content as the Old Conclusion.",
-                        "5. Output ONLY the updated conclusion text. No chat, no explanations."
-                    ].join("\n");
-
-                    const summaryUserMessage = [
-                        `### Old Conclusion for "${memoryName}":`,
-                        oldConclusion || "(Empty)",
-                        "",
-                        `### New Interaction Transcript:`,
-                        transcript,
-                        "",
-                        `Based on the transcript above, provide the updated consolidated conclusion for "${memoryName}".`
-                    ].join("\n");
-
-                    // Use model directly to avoid agent recursion and multi-turn overhead
-                    // Explicitly pass empty tools to avoid sending the full agent toolset for a simple summary
-                    const toolsFromBefore = reactAgentConfig.tools;
-                    reactAgentConfig.tools = [];
+            return await withTelemetry("MemoryConcludePlugin.execute", {
+                agent_name: `ReAct Agent`,
+                from: JSON.stringify({
+                    model: executionFrom.nodeModel,
+                    node: executionFrom.nodeName
+                }, null, 4),
+                memory_count: Array.isArray(agentConfig.memory) ? agentConfig.memory.length : 1
+            }, async () => {
+                if (agentConfig.memory) {
+                    const { ReActAgent } = await import("../ReAct.agent");
                     
-                    const modelResult = await reactAgentConfig.model.invoke({
-                        messages: [
-                            { type: "system", content: summarySystemPrompt },
-                            { type: "user", content: summaryUserMessage }
-                        ]
-                    });
-
-                    reactAgentConfig.tools = toolsFromBefore;
-
-                    const newConclusion = modelResult.answer.find(m => m.type === "ai")?.content;
-
-                    if (newConclusion && newConclusion.trim() !== "" && newConclusion.trim() !== (oldConclusion || "").trim()) {
-                        await memoryInterface.setMemoryConclusionFile(newConclusion.trim());
-                        return true;
+                    // Normalize memory configurations into an array of interfaces
+                    const memoryInterfaces: Memory<any>[] = [];
+                    if (Array.isArray(agentConfig.memory)) {
+                        agentConfig.memory.forEach(m => {
+                            memoryInterfaces.push(new Memory(m.memory, m));
+                        });
+                    } else {
+                        memoryInterfaces.push(new Memory(agentConfig.memory));
                     }
-                    return false;
-                }));
 
-                anyUpdated = results.some(r => r);
+                    const transcript = agentConfig.messages
+                        .filter((m): m is any => m.type !== 'system')
+                        .map((m: any) => {
+                            if (m.type === 'user') return `User: ${m.content}`;
+                            if (m.type === 'ai') return `Assistant: ${m.content || '(no text)'}`;
+                            if (m.type === 'thinking') return `Thought: ${m.content}`;
+                            if (m.type === 'tool') {
+                                const toolName = m.tool_name || m.tool_id;
+                                return `Tool Call [${toolName}]: ${m.content}${m.toolOutput ? `\nOutput: ${m.toolOutput}` : ''}${m.toolError ? `\nError: ${m.toolError}` : ''}`;
+                            }
+                            return '';
+                        })
+                        .filter(Boolean)
+                        .join('\n\n');
 
+                    let anyUpdated = false;
+
+                    const results = await Promise.all(memoryInterfaces.map(async (memoryInterface) => {
+                        const oldConclusion = await memoryInterface.getMemoryConclusionFile();
+                        const memoryName = memoryInterface.multimemory?.name ?? "General";
+                        const memoryPurpose = memoryInterface.multimemory?.purpose ?? "General persistence of facts.";
+
+                        const summarySystemPrompt = [
+                            `You are a specialized memory architecture conclusion agent.`,
+                            `Your task is to maintain a "Consolidated Conclusion" for the "${memoryName}" memory system.`,
+                            `Memory Purpose: ${memoryPurpose}`,
+                            "",
+                            "Rules:",
+                            "1. Analyze the transcript for new, stable, and durable facts/insights relevant to this memory scope.",
+                            "2. Integrate new insights into the existing conclusion.",
+                            "3. Keep the output concise, structured, and under 2048 words.",
+                            "4. If no significant new information is found, output the EXACT same content as the Old Conclusion.",
+                            "5. Output ONLY the updated conclusion text. No chat, no explanations."
+                        ].join("\n");
+
+                        const summaryUserMessage = [
+                            `### Old Conclusion for "${memoryName}":`,
+                            oldConclusion || "(Empty)",
+                            "",
+                            `### New Interaction Transcript:`,
+                            transcript,
+                            "",
+                            `Based on the transcript above, provide the updated consolidated conclusion for "${memoryName}".`
+                        ].join("\n");
+
+                        // Use model directly to avoid agent recursion and multi-turn overhead
+                        // Explicitly pass empty tools to avoid sending the full agent toolset for a simple summary
+                        const toolsFromBefore = reactAgentConfig.tools;
+                        reactAgentConfig.tools = [];
+                        
+                        const modelResult = await reactAgentConfig.model.invoke({
+                            messages: [
+                                { type: "system", content: summarySystemPrompt },
+                                { type: "user", content: summaryUserMessage }
+                            ]
+                        });
+
+                        reactAgentConfig.tools = toolsFromBefore;
+
+                        const newConclusion = modelResult.answer.find(m => m.type === "ai")?.content;
+
+                        if (newConclusion && newConclusion.trim() !== "" && newConclusion.trim() !== (oldConclusion || "").trim()) {
+                            await memoryInterface.setMemoryConclusionFile(newConclusion.trim());
+                            recordEventWithData("memory_conclusion_updated", {
+                                memory_name: memoryName,
+                                length: newConclusion.length
+                            });
+                            return true;
+                        }
+                        return false;
+                    }));
+
+                    anyUpdated = results.some(r => r);
+
+                    return {
+                        status: anyUpdated
+                    };
+                }
+                
                 return {
-                    status: anyUpdated
-                };
-            }
-             
-            return {
-                status: false
-            }
+                    status: false
+                }
+            });
         },
     } satisfies ReActAgentPluginSpec;
 }

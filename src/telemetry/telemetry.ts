@@ -109,7 +109,22 @@ export class RecordTracker<Config extends LLMConfig | ReActAgentConfig<any, any,
     
     registerConfig() {
         const activeSpan = trace.getActiveSpan();
-        const configStr = JSON.stringify(this.config, null, 4);
+        
+        // Use a safe stringification to avoid circular reference errors and large object issues
+        const safeJsonStringify = (obj: any) => {
+            const cache = new Set();
+            return JSON.stringify(obj, (key, value) => {
+                if (typeof value === 'object' && value !== null) {
+                    if (cache.has(value)) return '[Circular]';
+                    cache.add(value);
+                }
+                // Skip large objects or complex classes if needed
+                if (key === 'model' || key === 'client' || key === 'memory') return `[${value?.constructor?.name ?? 'Object'}]`;
+                return value;
+            }, 4);
+        };
+
+        const configStr = safeJsonStringify(this.config);
         const { value, isTruncated } = telemetryRecordSizeLimit.truncate(configStr);
         
         if (isTruncated) {
