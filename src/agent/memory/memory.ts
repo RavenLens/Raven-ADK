@@ -5,30 +5,48 @@ import { SchemaMemoryStore } from "./stores/schema";
 import { randomUUID } from "node:crypto";
 import { ReActAgentConfig, ReActAgentPluginSpec } from "../ReAct.agent";
 
-export class Memory<MemoryStore extends SchemaMemoryStore> {
-    static memorySystemPrompt: string = [
-        "You have access to long-term memory through two tools: `fetch_memory` and `save_memory` additionally you've conclusion of memory specified down below.",
-        "Follow this process:",
-        "1. In section `Memory conclusion already you've rememebered` you've specified the conclusion of all memory you've ever fathom. Use this conclusion before seek deeper for reminescents with using memory tools given to your disposal described here",        
-        "2. Before answering, decide whether the current task depends on durable facts, prior preferences, user identity, recurring goals, or established decisions.",
-        "3. If memory can help, call `fetch_memory` first to look for matching knowledge.",
-        "4. Use `fetch_memory` with semantic search for keywords, titles, content, and related memory ids.",
-        "5. Use `fetch_memory` in explore mode when you need to walk outward from a known memory node and inspect connected knowledge.",
-        "6. After reading memory, answer with the stored facts instead of guessing.",
-        "7. Save new memory only when the information is durable, useful later, and does not already exist in saved memory.",
-        "8. Before calling `save_memory`, compare the new fact with fetched memory. If it is already stored, do not save it again.",
-        "9. Save only stable information such as preferences, profile facts, task constraints, decisions, terminology, and important outcomes.",
-        "10. Do not save transient chat noise, repeated tool output, secrets, or speculative guesses.",
-        "11. When saving related facts, attach related memory ids and strength values in the range 0 to 1 when known.",
-        "12. Prefer short, normalized titles and clear content that can be reused in later turns.",
-        "13. If you are unsure whether a fact is worth remembering, fetch first and save only if it is genuinely new and durable.",
-    ].join("\n");
-    store: MemoryStore;
+/** Interface used to make the multimemory Agents - where one object can be responsible for particular thing */
+export interface MutliMemoryObject {
+    /** It's the memory object name */
+    name: string;
+    /** Description of what has to be stored in this particular `memory` object */
+    purpose: string;
+}
 
-    constructor(store: MemoryStore) {
+export class Memory<MemoryStore extends SchemaMemoryStore> {
+    store: MemoryStore;
+    multimemory?: MutliMemoryObject;
+
+    constructor(store: MemoryStore, multimemory?: MutliMemoryObject) {
         this.store = store;
+        this.multimemory = multimemory;
     }
 
+    constructMemoryToolsPrefixFromMultimemoryName() {
+        return this.multimemory?.name.split(" ").join("_").toLocaleLowerCase();
+    }
+
+    /** Creates memory object for particular memory */
+    createMemorySystemPrompt() {
+        const tools_prefix = this.multimemory ? `${this.constructMemoryToolsPrefixFromMultimemoryName()}_` : "";
+        const memorySystemPrompt: string = [
+            this.multimemory ? `### Memory System: ${this.multimemory.name}` : "### Memory System",
+            `**Purpose**: ${this.multimemory?.purpose ?? "General persistence of facts and preferences."}`,
+            `**Tools**: \`${tools_prefix}fetch_memory\`, \`${tools_prefix}save_memory\``,
+            ``,
+            `**Instructions**:`,
+            `1. Before answering, consider if this task relies on facts, preferences, identity, or prior decisions.`,
+            `2. Firstly check the memory "consolidated conclusion" for facts then if found explore them more with tools specified for this memory system or try to find facts when weren't specified - check for existance in this memory system or different`,
+            `3. If relevant info might exist, use \`${tools_prefix}fetch_memory\` (semantic mode for keywords, explore mode for related nodes).`,
+            `4. Always use stored facts instead of guessing or assuming`,
+            `5. Save only **DURABLE** and **STABLE** information using \`${tools_prefix}save_memory\`.`,
+            `6. **DO NOT** save transient chat noise, repeated outputs, or uncertain guesses.`,
+            `7. Check for duplicates with \`${tools_prefix}fetch_memory\` before saving to prevent redundancy.`,
+            `8. Use short, normalized titles and descriptive content for reused knowledge.`,
+        ].filter(instructionPart => instructionPart !== undefined).join("\n");
+        return memorySystemPrompt;
+    }
+    
     /** 
      * Use this to retrive the memory file is the conclusion of all memory the agent has and it's insert to system prompt paired with `memorySystemPrompt
      * How does the memory conclusion file work?
@@ -75,6 +93,7 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
             words: z.union([z.string(), z.array(z.string())]).optional()
         }).passthrough();
 
+        const tools_prefix = this.multimemory ? `${this.constructMemoryToolsPrefixFromMultimemoryName()}_` : "";
         const memoryTools: Tool<any, any>[] = [
             tool(
                 async (args) => {
@@ -88,7 +107,7 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
                     return this.serializeToolResult(result ?? null);
                 },
                 {
-                    toolName: "fetch_memory",
+                    toolName: `${tools_prefix}fetch_memory`,
                     toolDescription: [
                         "Search long-term memory for relevant knowledge.",
                         "Use mode='semantic' for title/content/keyword based lookup.",
@@ -132,7 +151,7 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
                     });
                 },
                 {
-                    toolName: "save_memory",
+                    toolName: `${tools_prefix}save_memory`,
                     toolDescription: [
                         "Persist a new durable memory node only when it is genuinely new.",
                         "Before saving, the agent should fetch memory and compare against existing facts.",
@@ -340,8 +359,16 @@ export function createMemoryConclusionPlugin(reactAgentConfig: ReActAgentConfig<
         async execute(executionFrom, agentConfig, graphState) {
             if (agentConfig.memory) {
                 const { ReActAgent } = await import("../ReAct.agent");
-                const memoryInterface = new Memory(agentConfig.memory);
-                const oldConclusion = await memoryInterface.getMemoryConclusionFile();
+                
+                // Normalize memory configurations into an array of interfaces
+                const memoryInterfaces: Memory<any>[] = [];
+                if (Array.isArray(agentConfig.memory)) {
+                    agentConfig.memory.forEach(m => {
+                        memoryInterfaces.push(new Memory(m.memory, m));
+                    });
+                } else {
+                    memoryInterfaces.push(new Memory(agentConfig.memory));
+                }
 
                 const transcript = agentConfig.messages
                     .filter((m): m is any => m.type !== 'system')
@@ -350,53 +377,72 @@ export function createMemoryConclusionPlugin(reactAgentConfig: ReActAgentConfig<
                         if (m.type === 'ai') return `Assistant: ${m.content || '(no text)'}`;
                         if (m.type === 'thinking') return `Thought: ${m.content}`;
                         if (m.type === 'tool') {
-                            return `Tool Call [${m.tool_name || m.tool_id}]: ${m.content}${m.toolOutput ? `\nOutput: ${m.toolOutput}` : ''}${m.toolError ? `\nError: ${m.toolError}` : ''}`;
+                            const toolName = m.tool_name || m.tool_id;
+                            return `Tool Call [${toolName}]: ${m.content}${m.toolOutput ? `\nOutput: ${m.toolOutput}` : ''}${m.toolError ? `\nError: ${m.toolError}` : ''}`;
                         }
                         return '';
                     })
                     .filter(Boolean)
                     .join('\n\n');
 
-                const summaryPrompt = [
-                    "Perform agent memory conclusion based on the interaction history.",
-                    "Determine if there are new durable facts, preferences, user identity details, or important decisions that should be remembered long-term.",
-                    "Update the 'Memory conclusion already you've rememebered' if necessary.",
-                    "",
-                    "### Rules:",
-                    "- Keep it under 2048 words.",
-                    "- Focus on durable/stable information, not transient chat noise.",
-                    "- If no significant information was gathered, do not change the conclusion.",
-                    "- Return ONLY the final conclusion text.",
-                ].join('\n');
+                let anyUpdated = false;
 
-                const concludeAgent = new ReActAgent({
-                    ...reactAgentConfig,
-                    systemPrompt: [
-                        summaryPrompt,
-                        "### Current Memory Conclusion:",
-                        oldConclusion || "Empty",
+                const results = await Promise.all(memoryInterfaces.map(async (memoryInterface) => {
+                    const oldConclusion = await memoryInterface.getMemoryConclusionFile();
+                    const memoryName = memoryInterface.multimemory?.name ?? "General";
+                    const memoryPurpose = memoryInterface.multimemory?.purpose ?? "General persistence of facts.";
+
+                    const summarySystemPrompt = [
+                        `You are a specialized memory architecture conclusion agent.`,
+                        `Your task is to maintain a "Consolidated Conclusion" for the "${memoryName}" memory system.`,
+                        `Memory Purpose: ${memoryPurpose}`,
                         "",
-                        reactAgentConfig.systemPrompt || ""
-                    ].filter(Boolean).join('\n'),
-                    messages: [
-                        {
-                            type: 'user',
-                            content: `Transcript of recent interaction:\n\n${transcript}\n\nBased on this, provide the updated consolidated memory conclusion.`
-                        }
-                    ],
-                    withConclusion: true
-                });
+                        "Rules:",
+                        "1. Analyze the transcript for new, stable, and durable facts/insights relevant to this memory scope.",
+                        "2. Integrate new insights into the existing conclusion.",
+                        "3. Keep the output concise, structured, and under 2048 words.",
+                        "4. If no significant new information is found, output the EXACT same content as the Old Conclusion.",
+                        "5. Output ONLY the updated conclusion text. No chat, no explanations."
+                    ].join("\n");
 
-                const result = await concludeAgent.invoke();
-                const lastMessage = result.messages[result.messages.length - 1];
-                const newConclusion = lastMessage?.type === 'ai' ? lastMessage.content : null;
+                    const summaryUserMessage = [
+                        `### Old Conclusion for "${memoryName}":`,
+                        oldConclusion || "(Empty)",
+                        "",
+                        `### New Interaction Transcript:`,
+                        transcript,
+                        "",
+                        `Based on the transcript above, provide the updated consolidated conclusion for "${memoryName}".`
+                    ].join("\n");
 
-                if (newConclusion && newConclusion.trim() !== "" && newConclusion !== oldConclusion) {
-                    await memoryInterface.setMemoryConclusionFile(newConclusion.trim());
-                    return {
-                        status: true
-                    };
-                }
+                    // Use model directly to avoid agent recursion and multi-turn overhead
+                    // Explicitly pass empty tools to avoid sending the full agent toolset for a simple summary
+                    const toolsFromBefore = reactAgentConfig.tools;
+                    reactAgentConfig.tools = [];
+                    
+                    const modelResult = await reactAgentConfig.model.invoke({
+                        messages: [
+                            { type: "system", content: summarySystemPrompt },
+                            { type: "user", content: summaryUserMessage }
+                        ]
+                    });
+
+                    reactAgentConfig.tools = toolsFromBefore;
+
+                    const newConclusion = modelResult.answer.find(m => m.type === "ai")?.content;
+
+                    if (newConclusion && newConclusion.trim() !== "" && newConclusion.trim() !== (oldConclusion || "").trim()) {
+                        await memoryInterface.setMemoryConclusionFile(newConclusion.trim());
+                        return true;
+                    }
+                    return false;
+                }));
+
+                anyUpdated = results.some(r => r);
+
+                return {
+                    status: anyUpdated
+                };
             }
              
             return {

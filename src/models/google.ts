@@ -9,7 +9,7 @@ import type {
     FunctionCall,
     Candidate
 } from "@google/genai";
-import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
+import { parseToolCallContentToParams, parseToolDescription, Tool } from "../agent/tools/tools";
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
@@ -284,11 +284,12 @@ export class Google implements StandardLLMShema {
         };
     }
 
-    private prepareTools(): GoogleTool[] {
-        if (!this.config.tools?.length) return [];
+    private prepareTools(toolsOverride?: Tool<any, any>[]): GoogleTool[] {
+        const toolsToPrepare = toolsOverride ?? this.config.tools ?? [];
+        if (!toolsToPrepare.length) return [];
 
         return [{
-            functionDeclarations: this.config.tools.map((tool) => {
+            functionDeclarations: toolsToPrepare.map((tool) => {
                 const schema = z.toJSONSchema(tool.toolConfig.toolArguments);
                 return {
                     name: tool.toolConfig.toolName,
@@ -426,7 +427,7 @@ export class Google implements StandardLLMShema {
 
         const contents = this.prepareContents();
         const systemInstruction = this.prepareSystemInstruction();
-        const tools = this.prepareTools();
+        const tools = this.prepareTools(options?.tools);
 
         // Reasoning configuration for Google
         const thinking_config = options?.reasoning?.budgetTokens ? {

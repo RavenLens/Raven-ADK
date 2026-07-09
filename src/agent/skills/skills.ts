@@ -713,9 +713,9 @@ export class Skills
 
         const buildTree = async (location?: string, indent = ""): Promise<string> => {
             const entries = await discoverSkillFolder(location);
-            let tree = "";
-
-            for (const entry of entries) {
+            
+            const branchResults = await Promise.all(entries.map(async (entry) => {
+                let treePart = "";
                 if ("folderName" in entry) {
                     if (entry.type === "skill") {
                         const meta = await readSkillMeta(entry.location);
@@ -723,14 +723,16 @@ export class Skills
                         const truncatedDescription = description.length > 700 
                             ? description.slice(0, 700) + "..." 
                             : description;
-                        tree += `${indent}- ${entry.folderName}${truncatedDescription ? ` - ${truncatedDescription}` : ""}\n`;
+                        treePart += `${indent}- ${entry.folderName}${truncatedDescription ? ` - ${truncatedDescription}` : ""}\n`;
                     } else if (entry.type === "skill-ward") {
-                        tree += `${indent}- (${entry.folderName})\n`;
-                        tree += await buildTree(entry.location, indent + "   ");
+                        treePart += `${indent}- (${entry.folderName})\n`;
+                        treePart += await buildTree(entry.location, indent + "   ");
                     }
                 }
-            }
-            return tree;
+                return treePart;
+            }));
+
+            return branchResults.join("");
         };
 
         const treeContent = await buildTree();

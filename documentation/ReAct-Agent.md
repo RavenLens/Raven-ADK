@@ -99,6 +99,7 @@ const reactAgent = new ReActAgent({
     // ...
 });
 
+
 // Register event listeners
 reactAgent.onEvent("reasoning", (thought) => {
     console.log("Thinking...", thought);
@@ -116,6 +117,8 @@ const result = await reactAgent.invoke({
 });
 console.log("Final Answer:", result.messages.at(-1).content);
 ```
+
+> Setup `parallelTools: true` and/or `parallelizeSubagents: true` and/or `withConclusion: true` to maximally speedup the process
 
 ### RLMs and ReAct Agent
 For some scenarios like processing the large files of text you can find combining both standards **RLMs** with **ReAct** to be more effecitve. [Check more here](./RLMs.md)

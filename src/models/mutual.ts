@@ -32,6 +32,8 @@ export interface InvokeOptions {
     stream?: boolean;
     /** Model will override his messages called in initialization with the specified here messages */
     messages?: MessagesVariations[];
+    /** Model will override his tools called in initialization with the specified here tools */
+    tools?: Tool<any, any>[];
     /** 
      * Reasoning configuration.
      * When provided, it enables reasoning for the model call.

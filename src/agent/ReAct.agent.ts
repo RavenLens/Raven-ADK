@@ -4,7 +4,7 @@ import { InvokeOptions, LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
 import { Google } from "../models/google";
 import { SchemaMemoryStore } from "./memory/stores/schema";
-import { Memory as MemoryInterface } from "./memory/memory";
+import { Memory as MemoryInterface, MutliMemoryObject } from "./memory/memory";
 import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
@@ -86,7 +86,9 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     /**
      * It's the agent memory he developed for specific user session or for organization
     */
-    memory?: Memory;
+    memory?: Memory | ({
+        memory: Memory;
+    } & MutliMemoryObject)[];
     /** It's list with agent plugins are going to be execute and can */
     plugins?: ReActAgentPluginSpec[];
     tools: Tool<any, any>[];
@@ -186,6 +188,9 @@ let REACT_SYSTEM_PROMPT = [
     "3. Observe tool outputs and continue reasoning from those observations.",
     "4. Repeat Reason/Act/Observe until the task is solved or blocked.",
     "5. Provide a final answer only when enough evidence is collected.",
+    "Latency Optimization:",
+    "- Parallelize: If multiple independent tools (e.g., saving facts to different memory stores) are required, call them ALL in a single turn.",
+    "- Efficient Reasoning: Provide clear, concise reasoning and avoid unnecessary internal recalls.",
     "Internal recall protocol:",
     "- If you need another internal reasoning pass without tools, reply ONLY with:",
     `  ${RECALL_MAIN_NODE_PREFIX} <instruction for the next reasoning pass>`,
@@ -229,7 +234,7 @@ export class ReActAgent
     private firstTokenTracked = false;
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
-    agentMemoryInterface: MemoryInterface<Memory> | undefined = undefined;
+    agentMemoryInterface: MemoryInterface<Memory> | MemoryInterface<Memory>[] | undefined = undefined;
     /** It's overall amount of used tokens by the ReAct agent */
     usedTokens: LLMAnswer["tokens"];
     /** Contains all activity of agent registered. Access it to get log */
@@ -256,7 +261,17 @@ export class ReActAgent
             ...config.skills.config,
             skillStorage: config.skills,
         }) : undefined;
-        this.agentMemoryInterface = config.memory ? new MemoryInterface(config.memory) : undefined;
+        this.agentMemoryInterface = (() => {
+            if (!config.memory) return;
+
+            if (config.memory instanceof Array) {
+                return config.memory.map(memoryWithPurpose => {
+                    const { memory, ...multimemory } = memoryWithPurpose;
+                    return new MemoryInterface(memory, multimemory);
+                })
+            }
+            else return new MemoryInterface(config.memory);
+        })();
         this.usedTokens = {
             input: 0,
             output: 0,
@@ -361,12 +376,23 @@ export class ReActAgent
 
         // Add memory
         if (this.agentMemoryInterface) {
-            const memoryTools = this.agentMemoryInterface.createMemoryTools();
-
-            for (const tool of memoryTools) {
-                if (!this.agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
-                    this.agentConfig.tools.push(tool);
+            const addMemoryTools = (memoryTools: Tool<any, any>[]) => {
+                for (const tool of memoryTools) {
+                    if (!this.agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
+                        this.agentConfig.tools.push(tool);
+                    }
                 }
+            }
+            
+            if (this.agentMemoryInterface instanceof Array) {
+                for (const memoryInstanceInterface of this.agentMemoryInterface) {
+                    const memoryTools = memoryInstanceInterface.createMemoryTools();
+                    addMemoryTools(memoryTools);
+                }
+            }
+            else {
+                const memoryTools = this.agentMemoryInterface.createMemoryTools();
+                addMemoryTools(memoryTools);
             }
         }
 
@@ -520,20 +546,20 @@ export class ReActAgent
                             });
 
                             // Execute all subagents in parallel
-                            await Promise.all(subagentsToRun.map(async ({ agent, instruction }) => {
-                                // Add user calling message for this subagent
-                                this.agentConfig.messages.push({
-                                    type: "user",
-                                    content: `[CALLING SUBAGENT: ${agent.role}] Task: ${instruction}`
-                                });
-
+                            const subagentResults = await Promise.all(validInstructions.map(async ({ role, instruction }) => {
+                                const agent = this.agentConfig.subagents!.find(a => a.role === role)!;
+                                
                                 const subagentInitialMsgsCount = this.agentConfig.messages.length;
 
                                 const subagent = new ReActAgent<Skills, Memory, any, any>({
                                     model: agent.model,
                                     systemPrompt: agent.systemPrompt,
                                     messages: [
-                                        ...this.agentConfig.messages
+                                        ...this.agentConfig.messages,
+                                        {
+                                            type: "user",
+                                            content: `[CALLING SUBAGENT: ${agent.role}] Task: ${instruction}`
+                                        }
                                     ],
                                     skills: this.agentConfig.skills,
                                     memory: this.agentConfig.memory,
@@ -578,12 +604,7 @@ export class ReActAgent
                                     messagesToMerge = messagesToMerge.slice(0, -1);
                                 }
 
-                                const newMessages = messagesToMerge.slice(subagentInitialMsgsCount);
-
-                                this.agentConfig.messages = [
-                                    ...this.agentConfig.messages,
-                                    ...newMessages
-                                ];
+                                const newMessages = messagesToMerge.slice(subagentInitialMsgsCount + 1); // +1 because we added the instruction message
 
                                 await this.runPlugins("after_model_call", {
                                     nodeType: "subagent",
@@ -591,11 +612,27 @@ export class ReActAgent
                                     nodeModel: agent.model
                                 });
 
-                                if (subagentRecall) {
-                                    currentState.parallelRecalls = currentState.parallelRecalls || [];
-                                    currentState.parallelRecalls.push(subagentRecall);
-                                }
+                                return {
+                                    role: agent.role,
+                                    instruction,
+                                    newMessages,
+                                    recall: subagentRecall
+                                };
                             }));
+
+                            // Merge results after all finished to avoid race conditions on this.agentConfig.messages
+                            for (const res of subagentResults) {
+                                this.agentConfig.messages.push({
+                                    type: "user",
+                                    content: `[CALLING SUBAGENT: ${res.role}] Task: ${res.instruction}`
+                                });
+                                this.agentConfig.messages.push(...res.newMessages);
+                                
+                                if (res.recall) {
+                                    currentState.parallelRecalls = currentState.parallelRecalls || [];
+                                    currentState.parallelRecalls.push(res.recall);
+                                }
+                            }
 
                             if (currentState.parallelRecalls && currentState.parallelRecalls.length > 0) {
                                 const recallsCount = currentState.reasoningRecallsCount ?? 0;
@@ -1092,17 +1129,44 @@ export class ReActAgent
         }
 
         if (this.agentMemoryInterface) {
-            const memoryConclusionSystemPrompt = this.agentMemoryInterface.getMemoryConclusionFile();
-            
-            baseSystemPrompt += `\n\n\n\n## Memory and recall system:
-${MemoryInterface.memorySystemPrompt}
+            if (this.agentMemoryInterface instanceof Array) {
+                const memorySystemsList = await Promise.all(
+                    this.agentMemoryInterface.map(async memoryInstance => {
+                        const conclusion = await memoryInstance.getMemoryConclusionFile();
+                        const hasToRemember = memoryInstance.store.config.hasToRemember;
+                        
+                        return [
+                            memoryInstance.createMemorySystemPrompt(),
+                            hasToRemember ? `**Mandatory facts to track for this system**:\n> ${hasToRemember}` : undefined,
+                            `**Consolidated Conclusion for this system**:\n${conclusion || "No prior conclusion available. Use tools to query or start a new summary."}`
+                        ].filter(Boolean).join("\n\n");
+                    })
+                );
+                
+                baseSystemPrompt += `\n\n\n\n## Memory and Recall Systems:
+You have access to multiple specialized memory systems. Each system handles a distinct domain of knowledge.
 
+### Rules of Engagement:
+1. Identify the correct memory system for the data you are processing based on the names and purposes below.
+2. Review the **Consolidated Conclusion** of each system before performing deep searches.
+3. Use the system-specific tools (e.g., \`prefix_fetch_memory\`) to access each domain.
 
-> You've to remember following informations always when has occured in conversation transcript and were't already remembered:
-> ${this.agentMemoryInterface.store.config.hasToRemember}
- 
-${memoryConclusionSystemPrompt}
+${memorySystemsList.join("\n\n---\n\n")}
 `;
+            }
+            else {
+                const memoryConclusionSystemPrompt = await this.agentMemoryInterface.getMemoryConclusionFile();
+                const hasToRemember = this.agentMemoryInterface.store.config.hasToRemember;
+                
+                baseSystemPrompt += `\n\n\n\n## Memory and Recall System:
+${this.agentMemoryInterface.createMemorySystemPrompt()}
+
+${hasToRemember ? `**Mandatory facts to track**:\n> ${hasToRemember}` : ""}
+
+### Consolidated Conclusion:
+${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to seek knowledge."}
+`;
+            }
         }
 
         if (this.agentConfig.hitl) {
@@ -1650,6 +1714,14 @@ ${memoryConclusionSystemPrompt}
         }, async (span) => {
             agentRunCounter.add(1);
 
+            // Keep the message history
+            if (modelOptions?.messages) {
+                this.agentConfig.messages.push(...modelOptions.messages);
+                // Delete messages from modelOptions to avoid double-passing/overwriting in main_node
+                const { messages, ...restOptions } = modelOptions;
+                modelOptions = restOptions;
+            }
+
             // Starts from begining for this call
             /// ... Resets tokens usage
             this.usedTokens = { input: 0, output: 0, reasoning: 0 };
@@ -1665,6 +1737,7 @@ ${memoryConclusionSystemPrompt}
                 .registerTimeTracker();
 
             try {
+
                 // Initialize graph state first so plugins can modify it
                 this.AgentGraph.graphState = {
                     ...(withGraphState ?? {}),

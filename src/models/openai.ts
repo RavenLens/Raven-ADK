@@ -2,13 +2,14 @@ import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema }
 import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
 import type * as ChatAPI from "openai/resources/chat/completions";
-import { parseToolCallContentToParams, parseToolDescription } from "../agent/tools/tools";
+import { parseToolCallContentToParams, parseToolDescription, Tool } from "../agent/tools/tools";
 import { AIMessage, ToolMessage, ResponseInputVideo, ReasoningMessage } from "../agent/state";
 import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 import { withTelemetry, recordTokenUsage, RecordTracker, RecordTrackerType, recordLog } from "../telemetry/telemetry";
 import { TelemetryProviderSchema } from "../telemetry/providers/schema";
+import { randomUUID } from "node:crypto";
 
 export interface OpenAIConfig extends LLMConfig {
     reasoningEffort?: ReasoningEffort | null;
@@ -162,12 +163,14 @@ export class OpenAI implements StandardLLMShema {
         return (inputItems as ResponsesAPI.ResponseInputItem[]) ?? [];
     }
 
-    private prepareTools(): ResponsesAPI.CustomTool[] {
-        return this.config.tools?.map(tool => {
+    private prepareTools(toolsOverride?: Tool<any, any>[]): any[] {
+        const toolsToPrepare = toolsOverride ?? this.config.tools ?? [];
+        return toolsToPrepare.map(tool => {
             return {
-                type: "custom",
+                type: "function",
                 name: tool.toolConfig.toolName,
-                description: parseToolDescription(tool.toolConfig)
+                description: parseToolDescription(tool.toolConfig),
+                parameters: (z as any).toJSONSchema(tool.toolConfig.toolArguments)
             }
         }) ?? []
     }
@@ -258,8 +261,9 @@ export class OpenAI implements StandardLLMShema {
         })) ?? [];
     }
 
-    private prepareChatTools(): ChatAPI.ChatCompletionTool[] {
-        return this.config.tools?.map(tool => {
+    private prepareChatTools(toolsOverride?: Tool<any, any>[]): ChatAPI.ChatCompletionTool[] {
+        const toolsToPrepare = toolsOverride ?? this.config.tools ?? [];
+        return toolsToPrepare.map(tool => {
             return {
                 type: "function",
                 function: {
@@ -278,29 +282,45 @@ export class OpenAI implements StandardLLMShema {
         }).join("\n") ?? "";
     }
 
-    private prepareCreatePayload(reasoning?: InvokeOptions["reasoning"]): Omit<ResponsesAPI.ResponseCreateParamsBase, "stream"> {
+    private prepareCreatePayload(reasoning?: InvokeOptions["reasoning"], toolsOverride?: Tool<any, any>[]): Omit<ResponsesAPI.ResponseCreateParamsBase, "stream"> {
         return {
             model: this.config.model,
             reasoning: {
                 effort: reasoning?.effort ?? this.config.reasoningEffort ?? undefined
             },
             input: this.prepareInput(),
-            tools: this.prepareTools()
+            tools: this.prepareTools(toolsOverride)
         };
     }
 
     private parseResponseToAnswer(response: ResponsesAPI.Response): LLMAnswer {
         const answerContentText = response.output_text?.trim() ? response.output_text : null;
-        const answerTools = response.output.filter((outputItem): outputItem is ResponsesAPI.ResponseCustomToolCall => outputItem.type === "custom_tool_call");
+        
+        const answerTools = response.output.filter((outputItem): any => 
+            outputItem.type === "custom_tool_call" || 
+            outputItem.type === "function_call"
+        );
 
         // Map output for answer
         const calledToolsMessage = answerTools.map(toolCall => {
+            const casted = toolCall as any;
+            const toolId = casted.call_id || casted.id || `call_${randomUUID().slice(0, 8)}`;
+            
+            // Handle both Model-neutral 'input' and Chat-specific 'arguments' or 'function_call.arguments'
+            let content = casted.input || casted.arguments;
+            let name = casted.name;
+
+            if (casted.type === "function_call" && casted.function_call) {
+                content = casted.function_call.arguments || casted.function_call.input;
+                name = casted.function_call.name;
+            }
+
             return {
                 type: "tool",
-                tool_id: toolCall.call_id,
-                tool_name: toolCall.name,
-                content: toolCall.input,
-                arguments: parseToolCallContentToParams(toolCall.input)
+                tool_id: toolId,
+                tool_name: name,
+                content: content,
+                arguments: parseToolCallContentToParams(content)
             } satisfies ToolMessage;
         });
 
@@ -545,13 +565,14 @@ export class OpenAI implements StandardLLMShema {
                         return result;
                     }
 
-                    const response = await this.openai.chat.completions.create({
-                        model: this.config.model,
-                        messages: this.prepareChatInput(),
-                        tools: this.prepareChatTools().length > 0 ? this.prepareChatTools() : undefined,
-                        stream: false,
-                        reasoning_effort: options?.reasoning?.effort ?? undefined
-                    } as any);
+            const chatTools = this.prepareChatTools(options?.tools);
+            const response = await this.openai.chat.completions.create({
+                model: this.config.model,
+                messages: this.prepareChatInput(),
+                tools: chatTools.length > 0 ? chatTools : undefined,
+                stream: false,
+                reasoning_effort: options?.reasoning?.effort ?? undefined
+            } as any);
 
                     const result = this.parseChatResponseToAnswer(response);
                     
