@@ -102,6 +102,8 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     parallelizeSubagents?: boolean;
     /** As default is `false` boolean */
     parallelTools?: boolean;
+    /** Use to elegenatly abort actions */
+    abort?: AbortSignal;
 }
 
 interface ReActAgentEvents extends SkillEvents {
@@ -114,6 +116,8 @@ interface ReActAgentEvents extends SkillEvents {
     reasoning_end: (thoughts: string) => void | Promise<void>;
     /** When agent starts to produce output */
     result_producing_start: () => void | Promise<void>;
+    /** Spawned when user aborts signal */
+    abort: () => void | Promise<void>;
     concluding_start: () => void | Promise<void>;
     concluding_end: (conclusion: string) => void | Promise<void>;
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
@@ -151,6 +155,9 @@ interface ReActAgentStreamEventMap {
     result_producing_start: {
         content: null;
     };
+    abort: {
+        content: null;
+    };
     concluding_start: {
         content: null;
     };
@@ -168,9 +175,11 @@ export type ReActAgentStreamChunk = {
 }[keyof ReActAgentStreamEventMap];
 
 type ReActAgentStreamListener = (event: ReActAgentStreamChunk) => void;
+type AbortableOperationResult<Result> = Result | typeof ABORTED_OPERATION;
 
 const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
 const DEFAULT_MAX_REASONING_RECALLS = 3;
+const ABORTED_OPERATION = Symbol("react-agent-aborted-operation");
 let REACT_SYSTEM_PROMPT = [
     "Ultimate statement: You are RavenADK ReAct agent.",
     "Follow the ReAct loop strictly:",
@@ -230,6 +239,7 @@ export class ReActAgent
     private cachedUserSystemPrompt?: string;
     private cachedToolsCount?: number;
     private cachedSubagentsCount?: number;
+    private abortEventEmitted = false;
 
     constructor(config: ReActAgentConfig<Skills, Memory, HITL>) {
         this.agentConfig = {
@@ -351,6 +361,10 @@ export class ReActAgent
             .addNode("main_node", async state => {
                 let currentState = state;
 
+                if (state.isAborted || this.isAbortRequested()) {
+                    return this.createAbortedNodeResult(currentState);
+                }
+
                 // Resolve tools inline -> eliminate dead turns!
                 if (state.callTools?.tools.length) {
                     const toolIds = new Set(state.callTools.tools.map(t => t.tool_id));
@@ -378,28 +392,42 @@ export class ReActAgent
                 }
 
                 // Run plugins
-                await this.runPlugins("before_model_call", {
+                const beforeModelPlugins = await this.runAbortable(() => this.runPlugins("before_model_call", {
                     nodeType: "main",
                     nodeName: "main_node",
                     nodeModel: this.agentConfig.model
-                });
+                }));
+
+                if (beforeModelPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+                    return this.createAbortedNodeResult(currentState);
+                }
                 
                 // Invoke model
-                const modelInvoke = await this.agentConfig.model.invoke({
+                const modelInvokeResult = await this.runAbortable(() => this.agentConfig.model.invoke({
                     messages: this.agentConfig.messages,
                     ...state.modelOptions
-                });
+                }));
+
+                if (modelInvokeResult === ABORTED_OPERATION || this.isAbortRequested()) {
+                    return this.createAbortedNodeResult(currentState);
+                }
+
+                const modelInvoke = modelInvokeResult;
 
                 this.calculateUsedTokens(modelInvoke);
                 this.agentConfig.messages = modelInvoke.messages;
                 this.emitEvent("llm_result", modelInvoke);
 
                 // Run plugins
-                await this.runPlugins("after_model_call", {
+                const afterModelPlugins = await this.runAbortable(() => this.runPlugins("after_model_call", {
                     nodeType: "main",
                     nodeName: "main_node",
                     nodeModel: this.agentConfig.model
-                });
+                }));
+
+                if (afterModelPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+                    return this.createAbortedNodeResult(currentState);
+                }
 
                 // Reasoning
                 const reasoningMessages = modelInvoke.answer
@@ -433,6 +461,10 @@ export class ReActAgent
                 }
 
                 if (toolAnswers.length) {
+                    if (this.isAbortRequested()) {
+                        return this.createAbortedNodeResult(currentState);
+                    }
+
                     return {
                         callNode: "tools_node",
                         stateUpdate: {
@@ -471,13 +503,8 @@ export class ReActAgent
 
                     if (validInstructions.length > 0) {
                         if (this.agentConfig.parallelizeSubagents) {
-                            const subagentsToRun = validInstructions.map(({ role, instruction }) => {
-                                const agent = this.agentConfig.subagents!.find(a => a.role === role)!;
-                                return { agent, instruction };
-                            });
-
                             // Execute all subagents in parallel
-                            const subagentResults = await Promise.all(validInstructions.map(async ({ role, instruction }) => {
+                            const subagentResultsExecution = await this.runAbortable(() => Promise.all(validInstructions.map(async ({ role, instruction }) => {
                                 const agent = this.agentConfig.subagents!.find(a => a.role === role)!;
                                 
                                 const subagentInitialMsgsCount = this.agentConfig.messages.length;
@@ -501,7 +528,8 @@ export class ReActAgent
                                     ],
                                     plugins: this.agentConfig.plugins,
                                     subagents: this.agentConfig.subagents,
-                                    withConclusion: false
+                                    withConclusion: false,
+                                    abort: this.agentConfig.abort
                                 });
 
                                 subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
@@ -509,13 +537,45 @@ export class ReActAgent
                                 subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
                                 subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
 
-                                await this.runPlugins("before_model_call", {
+                                const beforeSubagentPlugins = await this.runAbortable(() => this.runPlugins("before_model_call", {
                                     nodeType: "subagent",
                                     nodeName: agent.role,
                                     nodeModel: agent.model
-                                });
+                                }));
 
-                                const result = await subagent.invoke();
+                                if (beforeSubagentPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+                                    return {
+                                        role: agent.role,
+                                        instruction,
+                                        newMessages: [],
+                                        recall: null,
+                                        aborted: true
+                                    };
+                                }
+
+                                const subagentResultExecution = await this.runAbortable(() => subagent.invoke());
+
+                                if (subagentResultExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                                    return {
+                                        role: agent.role,
+                                        instruction,
+                                        newMessages: [],
+                                        recall: null,
+                                        aborted: true
+                                    };
+                                }
+
+                                const result = subagentResultExecution;
+
+                                if (result.state.isAborted) {
+                                    return {
+                                        role: agent.role,
+                                        instruction,
+                                        newMessages: [],
+                                        recall: null,
+                                        aborted: true
+                                    };
+                                }
 
                                 this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
 
@@ -530,19 +590,40 @@ export class ReActAgent
 
                                 const newMessages = messagesToMerge.slice(subagentInitialMsgsCount + 1); // +1 because we added the instruction message
 
-                                await this.runPlugins("after_model_call", {
+                                const afterSubagentPlugins = await this.runAbortable(() => this.runPlugins("after_model_call", {
                                     nodeType: "subagent",
                                     nodeName: agent.role,
                                     nodeModel: agent.model
-                                });
+                                }));
+
+                                if (afterSubagentPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+                                    return {
+                                        role: agent.role,
+                                        instruction,
+                                        newMessages: [],
+                                        recall: null,
+                                        aborted: true
+                                    };
+                                }
 
                                 return {
                                     role: agent.role,
                                     instruction,
                                     newMessages,
-                                    recall: subagentRecall
+                                    recall: subagentRecall,
+                                    aborted: false
                                 };
-                            }));
+                            })));
+
+                            if (subagentResultsExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                                return this.createAbortedNodeResult(currentState);
+                            }
+
+                            const subagentResults = subagentResultsExecution;
+
+                            if (subagentResults.some(result => result.aborted)) {
+                                return this.createAbortedNodeResult(currentState);
+                            }
 
                             // Merge results after all finished to avoid race conditions on this.agentConfig.messages
                             for (const res of subagentResults) {
@@ -583,6 +664,11 @@ export class ReActAgent
                                     };
                                 } else {
                                     await this.concludeAndAppendConclusionMessage();
+
+                                    if (this.isAbortRequested()) {
+                                        return this.createAbortedNodeResult(currentState);
+                                    }
+
                                     this.emitEvent("result_producing_start");
                                 }
                             }
@@ -593,6 +679,11 @@ export class ReActAgent
                             };
                         } else {
                             const { role, instruction } = validInstructions[0];
+
+                            if (this.isAbortRequested()) {
+                                return this.createAbortedNodeResult(currentState);
+                            }
+
                             this.agentConfig.messages.push({
                                 type: "user",
                                 content: `[CALLING SUBAGENT: ${role}] Task: ${instruction}`
@@ -623,6 +714,11 @@ export class ReActAgent
                     else if (this.AgentGraph.graphState.produceStructuredOutput) {
                         await this.concludeWithStructuredOutput();
                     }
+
+                    if (this.isAbortRequested()) {
+                        return this.createAbortedNodeResult(currentState);
+                    }
+
                     this.emitEvent("result_producing_start");
                 }
 
@@ -632,7 +728,12 @@ export class ReActAgent
                 };
             })
             .addNode("tools_node", async state => {
+                if (state.isAborted || this.isAbortRequested()) {
+                    return this.createAbortedNodeResult(state);
+                }
+
                 if (state.callTools?.tools.length) {
+                    const toolsToExecute = state.callTools.tools;
                     const { tools: definedTools } = this.agentConfig;
                     const definedToolsByName = new Map(
                         definedTools.map((definedTool) => [definedTool.toolConfig.toolName, definedTool])
@@ -672,7 +773,7 @@ export class ReActAgent
                             })
                             .filter((approvalTarget): approvalTarget is { toolName: string; callIndex: number } => !!approvalTarget);
 
-                        const approvals: HITLApprovalResult[] = await Promise.all(
+                        const approvalsExecution = await this.runAbortable(() => Promise.all(
                             toolsRequiringApproval.map(async ({ toolName, callIndex }) => {
                                 try {
                                     const allowance = await hitlTransport.emitToolUsage(toolName);
@@ -690,7 +791,13 @@ export class ReActAgent
                                     };
                                 }
                             })
-                        );
+                        ));
+
+                        if (approvalsExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                            return this.createAbortedNodeResult(state);
+                        }
+
+                        const approvals: HITLApprovalResult[] = approvalsExecution;
 
                         approvals.forEach((approvalResult) => {
                             if ("allowance" in approvalResult) {
@@ -705,6 +812,10 @@ export class ReActAgent
                     }
 
                     const executeSingleTool = async (tool: any, callIndex: number) => {
+                        if (this.isAbortRequested()) {
+                            return ABORTED_OPERATION;
+                        }
+
                         const toolName = tool.tool_name ?? tool.tool_id;
                         const definedTool = definedToolsByName.get(toolName);
                         const toolParams = tool.arguments ?? {};
@@ -747,12 +858,22 @@ export class ReActAgent
                             };
                         }
 
+                        if (this.isAbortRequested()) {
+                            return ABORTED_OPERATION;
+                        }
+
                         this.emitEvent("tool_invoked", toolName, toolParams);
 
                         try {
-                            const toolOutput = definedTool instanceof MCPTool
-                                ? await definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
-                                : await definedTool.invoke(toolParams as never);
+                            const toolOutputExecution = await this.runAbortable(() => definedTool instanceof MCPTool
+                                ? definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
+                                : definedTool.invoke(toolParams as never));
+
+                            if (toolOutputExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                                return ABORTED_OPERATION;
+                            }
+
+                            const toolOutput = toolOutputExecution;
                             this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
 
                             return {
@@ -763,6 +884,10 @@ export class ReActAgent
                                 content: toolOutput
                             };
                         } catch (error) {
+                            if (this.isAbortRequested()) {
+                                return ABORTED_OPERATION;
+                            }
+
                             const errorMessage = error instanceof Error ? error.message : "Unknown tool execution error";
                             const toolFailureOutput = `Tool "${toolName}" failed during execution: ${errorMessage}`;
 
@@ -776,18 +901,33 @@ export class ReActAgent
                         }
                     };
 
-                    let toolsStatePrepared;
+                    let toolsStatePrepared: ToolMessage[];
                     if (this.agentConfig.parallelTools) {
-                        toolsStatePrepared = await Promise.all(
-                            state.callTools.tools.map(async (tool, callIndex) => {
+                        const parallelToolsExecution = await this.runAbortable(() => Promise.all(
+                            toolsToExecute.map(async (tool, callIndex) => {
                                 return await executeSingleTool(tool, callIndex);
                             })
-                        );
+                        ));
+
+                        if (parallelToolsExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                            return this.createAbortedNodeResult(state);
+                        }
+
+                        if (parallelToolsExecution.some(toolResult => toolResult === ABORTED_OPERATION)) {
+                            return this.createAbortedNodeResult(state);
+                        }
+
+                        toolsStatePrepared = parallelToolsExecution as ToolMessage[];
                     } else {
                         toolsStatePrepared = [];
-                        for (let callIndex = 0; callIndex < state.callTools.tools.length; callIndex++) {
-                            const tool = state.callTools.tools[callIndex];
+                        for (let callIndex = 0; callIndex < toolsToExecute.length; callIndex++) {
+                            const tool = toolsToExecute[callIndex];
                             const prepared = await executeSingleTool(tool, callIndex);
+
+                            if (prepared === ABORTED_OPERATION || this.isAbortRequested()) {
+                                return this.createAbortedNodeResult(state);
+                            }
+
                             toolsStatePrepared.push(prepared);
                         }
                     }
@@ -819,6 +959,10 @@ export class ReActAgent
         if (this.agentConfig.subagents?.length) {
             for (const agent of this.agentConfig.subagents) {
                 reactAgentGraph.addNode(agent.role, async state => {
+                    if (state.isAborted || this.isAbortRequested()) {
+                        return this.createAbortedNodeResult(state);
+                    }
+
                     const subagent = new ReActAgent<Skills, Memory, any, any>({
                         model: agent.model,
                         systemPrompt: agent.systemPrompt,
@@ -834,7 +978,8 @@ export class ReActAgent
                         ],
                         plugins: this.agentConfig.plugins,
                         subagents: this.agentConfig.subagents,
-                        withConclusion: false
+                        withConclusion: false,
+                        abort: this.agentConfig.abort
                     });
 
                     subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
@@ -844,15 +989,29 @@ export class ReActAgent
 
                     
                     // Run plugins // WARNING: As far as subagents inherits the messages context from the rest of models the compress algorithm will work
-                    await this.runPlugins("before_model_call", {
+                    const beforeSubagentPlugins = await this.runAbortable(() => this.runPlugins("before_model_call", {
                         nodeType: "subagent",
                         nodeName: agent.role,
                         nodeModel: agent.model
-                    });
+                    }));
+
+                    if (beforeSubagentPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+                        return this.createAbortedNodeResult(state);
+                    }
                     
                     const subagentInitialMsgsCount = this.agentConfig.messages.length;
 
-                    const result = await subagent.invoke();
+                    const subagentResultExecution = await this.runAbortable(() => subagent.invoke());
+
+                    if (subagentResultExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                        return this.createAbortedNodeResult(state);
+                    }
+
+                    const result = subagentResultExecution;
+
+                    if (result.state.isAborted) {
+                        return this.createAbortedNodeResult(state);
+                    }
 
                     this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
 
@@ -875,11 +1034,15 @@ export class ReActAgent
                     ];
 
                     // Run after subagent
-                    await this.runPlugins("after_model_call", {
+                    const afterSubagentPlugins = await this.runAbortable(() => this.runPlugins("after_model_call", {
                         nodeType: "subagent",
                         nodeName: agent.role,
                         nodeModel: agent.model
-                    });
+                    }));
+
+                    if (afterSubagentPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+                        return this.createAbortedNodeResult(state);
+                    }
 
                     // If subagent requested recall, convert it into main internal recall flow
                     if (subagentRecall) {
@@ -908,6 +1071,11 @@ export class ReActAgent
 
                         // Exceeded recall limit: conclude
                         await this.concludeAndAppendConclusionMessage();
+
+                        if (this.isAbortRequested()) {
+                            return this.createAbortedNodeResult(state);
+                        }
+
                         this.emitEvent("result_producing_start");
 
                         return {
@@ -928,6 +1096,123 @@ export class ReActAgent
         }
         
         this.AgentGraph = reactAgentGraph;
+    }
+
+    private isAbortRequested(): boolean {
+        const abortSignal = this.agentConfig.abort;
+
+        if (!abortSignal?.aborted) {
+            return false;
+        }
+
+        this.emitAbortEventOnce();
+        return true;
+    }
+
+    private emitAbortEventOnce(): void {
+        if (this.abortEventEmitted) {
+            return;
+        }
+
+        this.abortEventEmitted = true;
+
+        // TODO: Register this abort transition with OpenTelemetry when abort telemetry is enabled.
+        this.emitEvent("abort");
+    }
+
+    private createAbortedState(state: AgentMessagesGraphState): AgentMessagesGraphState {
+        this.emitAbortEventOnce();
+        return {
+            ...state,
+            isAborted: true
+        };
+    }
+
+    private createAbortedNodeResult(state: AgentMessagesGraphState) {
+        return {
+            stateUpdate: this.createAbortedState(state)
+        };
+    }
+
+    private createAbortedInvokeResult(): ReActAgentInvokeResult {
+        const abortedState = this.createAbortedState(this.AgentGraph.graphState);
+        this.AgentGraph.graphState = abortedState;
+
+        return {
+            messages: this.agentConfig.messages,
+            state: abortedState
+        };
+    }
+
+    /** Runs operation and allows to stop when was aborted with handy implementation for each action */
+    private async runAbortable<Result>(operation: () => Promise<Result>): Promise<AbortableOperationResult<Result>> {
+        const abortSignal = this.agentConfig.abort;
+
+        if (!abortSignal) {
+            return await operation();
+        }
+
+        if (abortSignal.aborted) {
+            this.emitAbortEventOnce();
+            return ABORTED_OPERATION;
+        }
+
+        return await new Promise<AbortableOperationResult<Result>>((resolve, reject) => {
+            let settled = false;
+
+            const cleanup = () => {
+                abortSignal.removeEventListener("abort", onAbort);
+            };
+
+            const onAbort = () => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+                cleanup();
+                this.emitAbortEventOnce();
+                resolve(ABORTED_OPERATION);
+            };
+
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+
+            if (abortSignal.aborted) {
+                onAbort();
+                return;
+            }
+
+            let operationPromise: Promise<Result>;
+            try {
+                operationPromise = operation();
+            } catch (error) {
+                settled = true;
+                cleanup();
+                reject(error);
+                return;
+            }
+
+            Promise.resolve(operationPromise).then(
+                (result) => {
+                    if (settled) {
+                        return;
+                    }
+
+                    settled = true;
+                    cleanup();
+                    resolve(result);
+                },
+                (error) => {
+                    if (settled) {
+                        return;
+                    }
+
+                    settled = true;
+                    cleanup();
+                    reject(error);
+                }
+            );
+        });
     }
 
     private async buildWrappedSystemPrompt(userSystemPrompt: string): Promise<string> {
@@ -1206,6 +1491,10 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
 
     // Generate the final conclusion with a dedicated LLM summary call over the full transcript.
     private async concludeAndAppendConclusionMessage(): Promise<void> {
+        if (this.isAbortRequested()) {
+            return;
+        }
+
         this.emitEvent("concluding_start");
         
         // FIXME: Since transcript is truncated instead of it as evidence use prior messages
@@ -1233,9 +1522,15 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
                 }
             ];
 
-            const conclusionResult = await this.agentConfig.model.invoke({
+            const conclusionResultExecution = await this.runAbortable(() => this.agentConfig.model.invoke({
                 messages: this.agentConfig.model.config.messages
-            });
+            }));
+
+            if (conclusionResultExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                return;
+            }
+
+            const conclusionResult = conclusionResultExecution;
             this.calculateUsedTokens(conclusionResult);
 
             this.emitEvent("llm_result", conclusionResult);
@@ -1262,6 +1557,10 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
 
     /** conclude final message with usage of the schema use wants */
     private async concludeWithStructuredOutput(): Promise<void> {
+        if (this.isAbortRequested()) {
+            return;
+        }
+
         const produceConfig = this.AgentGraph.graphState.produceStructuredOutput;
         if (!produceConfig) return;
 
@@ -1290,7 +1589,13 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
                 }
             ];
 
-            const structuredResult = await this.agentConfig.model.invokeStructuredOutput(zodSchema, retriesCount);
+            const structuredResultExecution = await this.runAbortable(() => this.agentConfig.model.invokeStructuredOutput(zodSchema, retriesCount));
+
+            if (structuredResultExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+                return;
+            }
+
+            const structuredResult = structuredResultExecution;
             this.calculateUsedTokens(structuredResult);
             this.emitEvent("llm_result", structuredResult);
 
@@ -1315,6 +1620,11 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
 
     private async ensureWrappedSystemPrompt(): Promise<void> {
         const wrappedSystemPrompt = await this.buildWrappedSystemPrompt(this.agentConfig.systemPrompt);
+
+        if (this.isAbortRequested()) {
+            return;
+        }
+
         const nonSystemMessages = this.agentConfig.messages.filter(message => message.type !== "system");
 
         this.agentConfig.messages = [
@@ -1378,6 +1688,11 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
             case "result_producing_start":
                 return {
                     event: "result_producing_start",
+                    content: null
+                };
+            case "abort":
+                return {
+                    event: "abort",
                     content: null
                 };
             case "concluding_start":
@@ -1450,10 +1765,18 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
         const pluginsToRun = this.agentConfig.plugins?.filter(plugin => plugin.executionWay instanceof Array ? plugin.executionWay.includes(executionWay) : plugin.executionWay === executionWay);
         if (pluginsToRun?.length) {
             for (const plugin of pluginsToRun) {
+                if (this.isAbortRequested()) {
+                    return;
+                }
+
                 this.emitEvent("plugin_invoking", plugin.name, executionWay);
                 
                 const executionFromObjPass: ExecutionFrom = executionFrom ? { ...executionFrom, way: executionWay } : { way: executionWay, nodeType: "aside" };
                 const runResult = await plugin.execute(executionFromObjPass, this.agentConfig, this.AgentGraph.graphState);
+
+                if (this.isAbortRequested()) {
+                    return;
+                }
                 
                 this.emitEvent("plugin_result", plugin.name, executionWay, runResult);
 
@@ -1471,6 +1794,8 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
      * @returns 
      */
     private async runGraph(withGraphState?: Record<string, any>, modelOptions?: InvokeOptions): Promise<ReActAgentInvokeResult> {
+        this.abortEventEmitted = false;
+
         // Keep the message history
         if (modelOptions?.messages) {
             this.agentConfig.messages.push(...modelOptions.messages);
@@ -1485,20 +1810,41 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
             modelOptions: modelOptions ?? this.AgentGraph.graphState?.modelOptions
         };
 
+        if (this.AgentGraph.graphState.isAborted || this.isAbortRequested()) {
+            return this.createAbortedInvokeResult();
+        }
+
         // Runs Plugins
-        await this.runPlugins("before_agent_run");
+        const beforeAgentPlugins = await this.runAbortable(() => this.runPlugins("before_agent_run"));
+
+        if (beforeAgentPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+            return this.createAbortedInvokeResult();
+        }
         
-        await this.ensureWrappedSystemPrompt();
+        const systemPromptExecution = await this.runAbortable(() => this.ensureWrappedSystemPrompt());
+
+        if (systemPromptExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+            return this.createAbortedInvokeResult();
+        }
+
         this.synchronizeModelConfig();
 
         // Run Agent
-        await this.AgentGraph.start();
+        const graphExecution = await this.runAbortable(() => this.AgentGraph.start());
+
+        if (graphExecution === ABORTED_OPERATION || this.isAbortRequested()) {
+            return this.createAbortedInvokeResult();
+        }
 
         // Sync
         this.synchronizeModelConfig();
 
         // Runs plugins
-        await this.runPlugins("after_agent_run");
+        const afterAgentPlugins = await this.runAbortable(() => this.runPlugins("after_agent_run"));
+
+        if (afterAgentPlugins === ABORTED_OPERATION || this.isAbortRequested()) {
+            return this.createAbortedInvokeResult();
+        }
         
         return {
             messages: this.agentConfig.messages,

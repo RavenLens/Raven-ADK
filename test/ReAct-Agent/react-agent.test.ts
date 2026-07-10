@@ -1,14 +1,17 @@
+import "dotenv/config";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ReActAgent } from "../../src/agent/ReAct.agent";
-import { Google } from "../../src/models/google";
+import { OpenAI } from "../../src/models/openai";
 import { tool } from "../../src/agent/tools/tools";
 import { AIMessage } from "../../src/agent/state";
 
+const openaiApiKey = process.env.OPENAI_API_KEY?.trim();
+
 const makeModel = (structuredOutput: any) => {
-    const model = new Google({
-        model: "gemini-3-flash-preview",
-        apiKey: "test-key"
+    const model = new OpenAI({
+        model: "gpt-5-mini",
+        apiKey: openaiApiKey!
     });
 
     vi.spyOn(model, "invoke").mockImplementation(async (options) => {
@@ -43,9 +46,9 @@ const makeModel = (structuredOutput: any) => {
 describe("ReActAgent subagents", () => {
     it("can call a subagent using [[RAVEN_CALL_SUBAGENT]]", async () => {
         let callCount = 0;
-        const mainModel = new Google({
-            model: "gemini-3-flash-preview",
-            apiKey: "test-key"
+        const mainModel = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
         });
 
         vi.spyOn(mainModel, "invoke").mockImplementation(async (options) => {
@@ -76,9 +79,9 @@ describe("ReActAgent subagents", () => {
             }
         });
 
-        const subModel = new Google({
-            model: "gemini-3-flash-preview",
-            apiKey: "test-key"
+        const subModel = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
         });
 
         vi.spyOn(subModel, "invoke").mockImplementation(async (options) => {
@@ -214,9 +217,9 @@ describe("ReActAgent structured output", () => {
 
 describe("ReActAgent parallel subagents", () => {
     it("can run multiple subagents in parallel", async () => {
-        const mainModel = new Google({
-            model: "gemini-3-flash-preview",
-            apiKey: "test-key"
+        const mainModel = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
         });
 
         let mainCallCount = 0;
@@ -246,9 +249,9 @@ describe("ReActAgent parallel subagents", () => {
             }
         });
 
-        const subModel = new Google({
-            model: "gemini-3-flash-preview",
-            apiKey: "test-key"
+        const subModel = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
         });
 
         vi.spyOn(subModel, "invoke").mockImplementation(async (options) => {
@@ -310,9 +313,9 @@ describe("ReActAgent parallel subagents", () => {
 
 describe("ReActAgent parallel tools", () => {
     it("can run tools sequentially when parallelTools is false (default)", async () => {
-        const model = new Google({
-            model: "gemini-3-flash-preview",
-            apiKey: "test-key"
+        const model = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
         });
 
         let callCount = 0;
@@ -382,9 +385,9 @@ describe("ReActAgent parallel tools", () => {
     });
 
     it("can run tools in parallel when parallelTools is true", async () => {
-        const model = new Google({
-            model: "gemini-3-flash-preview",
-            apiKey: "test-key"
+        const model = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
         });
 
         let callCount = 0;
@@ -451,5 +454,137 @@ describe("ReActAgent parallel tools", () => {
 
         // Since they run in parallel, tool2 starts BEFORE tool1 ends, and tool2 finishes first
         expect(timeline).toEqual(["t1_start", "t2_start", "t2_end", "t1_end"]);
+    });
+});
+
+describe("ReActAgent abort", () => {
+    it("returns an aborted state without invoking the model when already aborted", async () => {
+        const model = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
+        });
+        const invoke = vi.spyOn(model, "invoke");
+        const abortController = new AbortController();
+        abortController.abort();
+
+        const agent = new ReActAgent({
+            model,
+            systemPrompt: "Abortable agent",
+            messages: [{ type: "user", content: "Do not run" }],
+            tools: [],
+            withConclusion: false,
+            abort: abortController.signal
+        });
+        const abortListener = vi.fn();
+        agent.onEvent("abort", abortListener);
+
+        const result = await agent.invoke();
+
+        expect(invoke).not.toHaveBeenCalled();
+        expect(result.state.isAborted).toBe(true);
+        expect(abortListener).toHaveBeenCalledOnce();
+    });
+
+    it("returns immediately when the model is still pending", async () => {
+        const model = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
+        });
+        let resolveModel: ((value: any) => void) | undefined;
+        vi.spyOn(model, "invoke").mockImplementation(() => new Promise((resolve) => {
+            resolveModel = resolve;
+        }));
+
+        const abortController = new AbortController();
+        const agent = new ReActAgent({
+            model,
+            systemPrompt: "Abortable agent",
+            messages: [{ type: "user", content: "Wait for cancellation" }],
+            tools: [],
+            withConclusion: false,
+            abort: abortController.signal
+        });
+        const abortListener = vi.fn();
+        agent.onEvent("abort", abortListener);
+
+        const invocation = agent.invoke();
+        await vi.waitFor(() => expect(model.invoke).toHaveBeenCalledOnce());
+
+        abortController.abort();
+        const result = await invocation;
+
+        expect(result.state.isAborted).toBe(true);
+        expect(abortListener).toHaveBeenCalledOnce();
+
+        resolveModel?.({
+            messages: agent.messages,
+            answer: [{ type: "ai", content: "Late model result" }],
+            tokens: { input: 1, output: 1, reasoning: 0 }
+        });
+    });
+
+    it("ignores an in-flight tool result and does not start another model turn", async () => {
+        const model = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
+        });
+        let modelCallCount = 0;
+        vi.spyOn(model, "invoke").mockImplementation(async (options) => {
+            modelCallCount += 1;
+            const currentMessages = options?.messages || model.config.messages || [];
+            const aiMessage = modelCallCount === 1
+                ? {
+                    type: "ai" as const,
+                    content: "Calling a tool.",
+                    calledTools: [
+                        { type: "tool" as const, tool_id: "call_pending", tool_name: "pending_tool", arguments: {}, content: "" }
+                    ]
+                }
+                : { type: "ai" as const, content: "Done." };
+
+            return {
+                messages: [...currentMessages, aiMessage],
+                answer: [aiMessage],
+                tokens: { input: 1, output: 1, reasoning: 0 }
+            };
+        });
+
+        let resolveTool: ((value: string) => void) | undefined;
+        const pendingTool = tool(
+            () => new Promise<string>((resolve) => {
+                resolveTool = resolve;
+            }),
+            {
+                toolName: "pending_tool",
+                toolDescription: "A pending tool",
+                toolArguments: z.object({})
+            }
+        );
+
+        const abortController = new AbortController();
+        const agent = new ReActAgent({
+            model,
+            systemPrompt: "Abortable agent",
+            messages: [{ type: "user", content: "Run the pending tool" }],
+            tools: [pendingTool],
+            withConclusion: false,
+            abort: abortController.signal
+        });
+        const toolInvoked = vi.fn();
+        const toolExecuted = vi.fn();
+        agent.onEvent("tool_invoked", toolInvoked);
+        agent.onEvent("tool_executed", toolExecuted);
+
+        const invocation = agent.invoke();
+        await vi.waitFor(() => expect(toolInvoked).toHaveBeenCalledOnce());
+
+        abortController.abort();
+        const result = await invocation;
+
+        expect(result.state.isAborted).toBe(true);
+        expect(modelCallCount).toBe(1);
+        expect(toolExecuted).not.toHaveBeenCalled();
+
+        resolveTool?.("Late tool result");
     });
 });

@@ -50,6 +50,7 @@ The `ReActAgent` is built on an event-driven architecture. You can listen to var
 | `reasoning` | Emitted during the reasoning phase (useful for streaming chunks). | `content: string` |
 | `reasoning_end` | Emitted at the end of the reasoning phase with the full thought summary. | `thoughts: string` |
 | `result_producing_start` | Emitted when the agent begins to generate its final output. | - |
+| `abort` | Emitted once when the configured abort signal stops the run. | - |
 | `concluding_start` | Emitted when the agent starts generating the final conclusion summary. | - |
 | `concluding_end` | Emitted when the final conclusion is ready. | `conclusion: string` |
 
@@ -146,3 +147,34 @@ console.log(result.messages.at(-1).structuredOutput);
 
 ## RAG
 Combine your ReAct Agent with RAG for better outcomes check more at [RAG Documentation](./augmented%20generation/RAG.md)
+
+## `AbortSignal`
+Use [AbortSignal](https://developer.mozilla.org/en-US/docs/Web/API/AbortSignal) to stop the agent with immediate denial of the next step and suppression of results from currently pending steps.
+
+### Essential Characteristics
+- Once the signal is aborted, the agent stops scheduling new actions, emits the `abort` event once, and returns a `ReActAgentInvokeResult` with `state.isAborted = true`.
+- Results from pending model, tool, HITL, or subagent operations are ignored after the abort.
+- OpenTelemetry registration is intentionally deferred. The implementation contains the integration point for a later telemetry stage.
+
+### Configuration
+```typescript
+const abortController = new AbortController();
+const agent = new ReActAgent({
+    // ...Obvious config
+    abort: abortController.signal
+})
+
+// Simulation for Aborting after 2 sec
+setTimeout(() => abortController.abort(), 2000);
+
+agent.onEvent("abort", () => {
+    console.log("Agent run aborted");
+});
+
+// Asynchronous run
+agent.invoke()
+    .then(result => console.log("Agent result", result));
+
+```
+
+<!-- TODO: Add abort to opentelemetry -->
