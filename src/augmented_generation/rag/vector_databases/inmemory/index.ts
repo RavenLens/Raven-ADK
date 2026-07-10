@@ -80,7 +80,7 @@ export class InMemoryRAGDb implements RAGDbSchema {
         return withTelemetry("inmemory_get_all", {
             "db.type": "inmemory",
             "db.doc_count": this.documents.length
-        }, () => {
+        }, async () => {
             return this.documents;
         }) as any;
     }
