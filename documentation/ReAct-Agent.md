@@ -51,8 +51,8 @@ The `ReActAgent` is built on an event-driven architecture. You can listen to var
 | `reasoning_end` | Emitted at the end of the reasoning phase with the full thought summary. | `thoughts: string` |
 | `result_producing_start` | Emitted when the agent begins to generate its final output. | - |
 | `abort` | Emitted once when the configured abort signal stops the run. | - |
-| `concluding_start` | Emitted when the agent starts generating the final conclusion summary. | - |
-| `concluding_end` | Emitted when the final conclusion is ready. | `conclusion: string` |
+| `concluding_start` | Emitted when the agent starts generating the final conclusion summary. It's right before `result_producing_start` event | - |
+| `concluding_end` | Emitted when the final conclusion is ready. It's right before `result_producing_start` event | `conclusion: string` |
 
 ## Example Usage
 
@@ -164,7 +164,7 @@ const agent = new ReActAgent({
     abort: abortController.signal
 })
 
-// Simulation for Aborting after 2 sec
+// Simulation for Aborting after 2 sec -> In production evironment this will look differently
 setTimeout(() => abortController.abort(), 2000);
 
 agent.onEvent("abort", () => {
