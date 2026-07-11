@@ -254,7 +254,9 @@ export class ReActAgentAbortable {
 
         this.abortEventEmitted = true;
 
-        // TODO: Register this abort transition with OpenTelemetry when abort telemetry is enabled.
+        // Register this abort transition with OpenTelemetry when abort telemetry is enabled.
+        recordEventWithData("agent.abort", JSON.stringify({ timestamp: Date.now() }));
+        
         this.context.emitAbortEvent();
     }
 
