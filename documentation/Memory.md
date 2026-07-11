@@ -6,6 +6,8 @@ Memory in RavenADK agents provide you way to remember data from interactions wit
     - user conversation style schema - it can be 
 Finally you've full agency to decide what agent has to remember, what should so you decide the agent behaviour
 
+> Check [MemRL](./MemRL.md) as Runtime Continous Learning method for your agent
+
 ## Configuring memory for ReAct Agent
 1. Singular Memory Object - use when you want to store memory in one consolidated source
 ```typescript

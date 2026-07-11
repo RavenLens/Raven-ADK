@@ -67,7 +67,7 @@ import { HITLSocketIo } from "@ravenlens/raven-adk/tools/hitl";
 
 const reactAgent = new ReActAgent({
     model: new OpenAI({
-        model: "gpt-4",
+        model: "gpt-5.6-sol",
         apiKey: "your-api-key",
     }),
     systemPrompt: "You are a helpful assistant.",
