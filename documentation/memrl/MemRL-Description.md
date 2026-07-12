@@ -7,7 +7,7 @@ Episodic Memory](https://arxiv.org/pdf/2601.03192)
 > <br><br>It comes with cost since MemRL requires embedding generation out of user query and updation of Q-Score after action
 > **!Imporant:** MemRL Requires to use some Embedding Model and **VectorDB**
 
-![alt text](./images/memrl.png)
+![alt text](../images/memrl.png)
 
 ## Concepts
 - **Q-Score** - describes usability of memroy rememebred information like skill or method. This is the score assigned from feedback like user feedback and it represents the rembered information as usefull or not. It acts as the critique for initial semanitc retrival
