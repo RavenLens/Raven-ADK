@@ -2,6 +2,8 @@
 
 RAG enhances Language Model capabilities by providing them with relevant, retrieved context from external knowledge bases before generating a response. This reduces hallucinations and allows the model to "know" facts about your specific data without fine-tuning.
 
+<!-- TODO: Add voice agent example here -->
+
 ## How RAG Works in RavenADK
 
 RavenADK implements a high-level `ResourceAugmentedGeneration` class that acts as a wrapper for either **Standalone Models** (`AgentModel`) or the **ReAct Agent**.
@@ -14,6 +16,7 @@ RavenADK implements a high-level `ResourceAugmentedGeneration` class that acts a
 
 You can "register" any component that implements the standard LLM schema or the ReAct Agent.
 
+<!-- TODO: Add `chromaDbInstance` there -->
 ```typescript
 import { ResourceAugmentedGeneration } from "@ravenlens/raven-adk/augmented_generation";
 import { OpenAI, OpenAIEmbedding } from "@ravenlens/raven-adk/models";
