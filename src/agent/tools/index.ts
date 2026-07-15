@@ -1,4 +1,4 @@
-export { tool, Tool, type ToolConfig } from "./tools.js";
+export { tool, Tool, type ToolConfig, type ToolLogic } from "./tools.js";
 export * from "./mcp/index.js";
 export * from "./hitl/index.js";
 export * from "./CodeExecutionSandboxes/index.js";

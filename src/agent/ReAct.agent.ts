@@ -79,8 +79,8 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     /**
      * Skills is the set of skills the agent can use to perform some action
      * In CASCADE (https://arxiv.org/abs/2512.23880) scenario -> agent can develop his own skills
-    skills?: Skills;
     */
+    skills?: Skills;
     /**
      * It's the agent memory he developed for specific user session or for organization
     */

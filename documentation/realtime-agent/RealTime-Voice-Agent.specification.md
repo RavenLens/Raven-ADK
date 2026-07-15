@@ -118,7 +118,7 @@ Utilize OpenAI API to communicate with The HuggingFace opensource models or othe
 3. **Streaming STT:** The `ASR` engine converts PCM chunks into partial transcript strings on the fly.
     Synchronous Streaming
     [Possibility] **Asynchronous Pre-filling & Endpointing (Bottleneck Mitigation):** Partial transcripts stream asynchronously into the ReAct Agent's context to pre-fill the KV cache. When semantic turn-detection determines intent completion, execution triggers immediately.
-5. **ReAct Agent Routing:**
+5. **ReAct Agent Routing:** ReAct Agent collects full request and when retrived starts processing
     - **Fast Translation Model (SLM)** - when agent begins or reasons, Models streams tokens to **TTS model** generates speech and **`streams` on fly** base on the **reasoning stream chunk headers**
         - This can be turned on/off via settings e.g: turn off at the begining or at the end
     - Conversation tokens bypass the **SLM** and stream directly to the **TTS Model**
@@ -217,7 +217,64 @@ Utilize OpenAI API to communicate with The HuggingFace opensource models or othe
 <!-- /* TODO: Defint the types  -->
 ### Configuration Interface
 ```typescript
-import { ReActAgentConfig, AgentModel } from "@ravenlens/ravenadk/agents";
+import { ReActAgentConfig, AgentModel, ReActAgentPluginSpec } from "@ravenlens/ravenadk/agents";
+import { HITLConfigSchema, ToolUsageConfObject, HITLTransportSchema } from "@ravenlens/ravenadk/hitl";
+import { Tool } from "@ravenlens/ravenadk/tools";
+
+/**
+ * Specify to teel whether describe and optionally how the Plugin Execution
+ * * Specify `true` to give agent free will in description the plugin execution - under such condition the execution will be communicated only base on rest of configuration
+ * * Specify object to give agent additional instructions about plugin execution
+ * @default false
+*/
+type VoiceAgentDescriptionConfig = boolean | {
+  /** Whether to describe the plugin execution */
+  describe: boolean;
+  /** 
+   * Give instruction to tell voice agent how to describe the operation
+   * Usable only when was specified `describe: true`
+  */
+  describeVoiceInstruction?: string;
+}
+
+class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> extends Tool<ToolArgs, ToolOutputSchema> {
+  describeVoiceInstruction?: VoiceAgentDescriptionConfig;
+  
+  /** 
+   * @param describeVoiceInstruction - Optionally describe the execution the agent. When no specified the 
+  */
+  constructor(
+    toolLogic: ToolLogic<ToolArgs>,
+    toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>,
+    describeVoiceInstruction?: VoiceAgentDescriptionConfig
+  ) {
+    super(toolLogic, toolConfig);
+    this.describeVoiceInstruction = describeVoiceInstruction;
+
+    // Moficiations
+    // ... Modified the .invoke method to emit the description of exectuion and stream to the tts specified model
+  }
+}
+
+interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
+  describeVoiceAgentConfig?: VoiceAgentDescriptionConfig
+}
+
+interface HITLLiveTimeVoiceAgent extends Omit<HITLConfigSchema, "toolsUsage"> {
+  /** (Optional) Add tools and describe how should RealTime-Voice-Agent Communicate its usage */
+  toolsUsage?: {
+    [toolName: string]: {
+      config: ToolUsageConfObject | true;
+      /** Give instruction in what fashio should the tts model communicate tool usage */
+      describeVoiceInstruction: string;
+    };
+  };
+  /** (Optional) Question Types Voice Description Instruction 
+   * Describe what adgen should say when using these objects
+  */
+  actionsDescribeVoiceInstruction?: Partial<Record<keyof NonNullable<Pick<<HITLTransportSchema>, "emitAbcQuestion" | "emitOpenQuestion" | "emitToolUsage" | "emitAcceptance">>, string>>;
+}
+
 
 interface RealTimeAgentConfig {
   /** Configuration for server where RealTime Agent is spawned */
@@ -246,6 +303,7 @@ interface RealTimeAgentConfig {
     /** Rules for your agent e.g: role playing definitions */
     systemPrompt: string;
     messages: MessagesVariations[];
+    skills?: RealTimeVoiceAgentSkills;
     /** Memory version with transcription definition */
     memory?: MemoryVoiceAgent | ({
       memory: MemoryVoice;
@@ -256,8 +314,8 @@ interface RealTimeAgentConfig {
     subagents?: RealTimeVoiceSubAgent[];
     /** List with Plugins for voice agent with supperpowers */
     plugins?: RealTimeVoiceAgentPluginSpec[];
-    // Common for ReAct Agent
-    hitl?: HITL;
+    // HITL With usage
+    hitl?: HITLLiveTimeVoiceAgent;
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
     maximumReasoningRecalls?: number;
     /** As default is `true` boolean */
