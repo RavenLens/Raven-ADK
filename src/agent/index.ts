@@ -1,4 +1,5 @@
 export { ReActAgent, type ReActAgentConfig, type SubAgent } from "./ReAct.agent.js";
+export * as RealTimeVoiceAgent from "./real-time-voice-agent/index.js";
 export * from "./RLM/index.js";
 export * as RLM from "./RLM/index.js";
 export * from "./tools/index.js";

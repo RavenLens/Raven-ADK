@@ -2,7 +2,15 @@
 
 ## Assumptions
 * User has full management over whether and how the execution of tools is told by specifying settings such as: `communicationInstruction` for tools, memory, skills and more
-* **Real-Time-Voice-Agent** serves as a **WebRTC Peer** is in communication with client, that retrives user VAD PCM stream - hence you don't have to carry its logic
+<!-- * **Real-Time-Voice-Agent** serves as a **WebRTC Peer** is in communication with client, that retrives user VAD PCM stream - hence you don't have to carry its logic -->
+* **Real-Time-Voice-Agent** can run on locall device or incloud with out **custom server adapter** (SFU - Selective Forwarding Unit)
+  - **Remote Execution** - ***SFU*** and ***Load Balancer*** are shipped as different packages for the architecture
+    - These role is to distribute `socket.io` sessions and `WebRTC` traffic across different architecture real-time agent adapters (servers)
+    - Role of **SFU** and **Load Balancer** is to scale architecture providing customer the best UX along the lowest headaque for developers to maintaint the architecture
+    - **Load Balancer** - must rely on advanced balancing techniques that consider current server CPU/Memory usage and the number of requests currently being handled.
+    > Both will be implement in Rust/C to provide the best performance for load and shipped to node.js as ***native components***
+  - **Local Execution** - RealTime Agent can run fully on user device without requirement of any **server adapater**
+    - On local side the communication among `@ravenlens/ravenadk-client` is done via `Browser Events` or `IPC` or `local connection` according to the specification
 * **Real-Time-Voice-Agent** responds with response audio and/or video+audio live avatar WebRTC stream
 * **Real-Time-Voice-Agent** ships streaming among the models to reduce the latency for your UX
 * RavenADK Frontend Utility library can be leveraged for
