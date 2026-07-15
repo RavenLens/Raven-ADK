@@ -2,14 +2,99 @@
 
 ## Assumptions
 * User has full management over whether and how the execution of tools is told by specifying settings such as: `communicationInstruction` for tools, memory, skills and more
-* **Real-Time-Voice-Agent** serves WebRTC Server, that retrives user VAD PCM stream - hence you don't have to carry its logic
+* **Real-Time-Voice-Agent** serves as a **WebRTC Peer** is in communication with client, that retrives user VAD PCM stream - hence you don't have to carry its logic
 * **Real-Time-Voice-Agent** responds with response audio and/or video+audio live avatar WebRTC stream
 * **Real-Time-Voice-Agent** ships streaming among the models to reduce the latency for your UX
 * RavenADK Frontend Utility library can be leveraged for
     - Using `Silero-VAD` and streaming
         - User begins stream whenever needs
+    - Communication with WebRTC RavenADK RealTimeVoiceAgent by establishing `handshake` and connection with peers
     - Saving the record of user
         - Export to the file is possible then
+
+---
+
+## Production Solutions
+1. Install requited packages for hosting agent on backend on server:
+```bash
+npm install express socket.io @roamhq/wrtc
+```
+- socket.io is for handshaking
+- Native Node WebRTC (`@roamhq/wrtc`) - Using `@roamhq/wrtc` (a actively maintained fork of node-webrtc), Node.js creates standard RTCPeerConnection objects on the server.
+- Use this script:
+```typescript
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = require('@roamhq/wrtc');
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
+
+app.use(express.static('public'));
+
+io.on('connection', (socket) => {
+  let pc = new RTCPeerConnection({
+    iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+  });
+
+  // 1. Handle incoming media track from client
+  pc.ontrack = (event) => {
+    console.log('Received track from client:', event.track.kind);
+    
+    if (event.track.kind === 'audio') {
+      const audioStream = event.streams[0];
+      
+      // Pass audioStream to your AI Pipeline (e.g., Whisper, Deepgram, or Custom STT)
+      processIncomingAudio(audioStream);
+    }
+  };
+
+  // 2. Pass server ICE candidates to client
+  pc.onicecandidate = (event) => {
+    if (event.candidate) {
+      socket.emit('ice-candidate', event.candidate);
+    }
+  };
+
+  // 3. Receive offer from browser and create answer
+  socket.on('offer', async (sdp) => {
+    await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    
+    // (Optional) Add server audio track to send back to client
+    // const agentAudioTrack = createAgentAudioTrack();
+    // pc.addTrack(agentAudioTrack);
+
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    
+    socket.emit('answer', pc.localDescription);
+  });
+
+  socket.on('ice-candidate', async (candidate) => {
+    if (pc) {
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    }
+  });
+
+  socket.on('disconnect', () => {
+    pc.close();
+  });
+});
+
+function processIncomingAudio(stream) {
+  // Use non-blocking audio sink / PCM frame extractors to stream raw audio bytes to your LLM/Speech engine
+  console.log('Processing stream for AI Agent...');
+}
+
+server.listen(3000, () => console.log('Agent Server running on port 3000'));
+```
+
+---
+
+### Pointer Pinups
+Utilize OpenAI API to communicate with The HuggingFace opensource models or other API Providers
 
 ---
 
@@ -129,7 +214,69 @@
 ---
 
 ## III. Real-Time-Agent Configuration
-### Configuration Object
+<!-- /* TODO: Defint the types  -->
+### Configuration Interface
 ```typescript
+import { ReActAgentConfig, AgentModel } from "@ravenlens/ravenadk/agents";
 
+interface RealTimeAgentConfig {
+  /** Configuration for server where RealTime Agent is spawned */
+  server: {
+    socketIo: {
+      port: number;
+      // ... Rest Socket.io config
+    };
+    RTCPeerConnection: {
+      iceServers: {
+        urls: string;
+      }[]; // [{ urls: 'stun:stun.l.google.com:19302' }];
+      // ... Rest RTC Peer Config object
+    }
+  };
+  /** RealTime Agent configuration */
+  agent: {
+    models: {
+      stt: AgentModel;
+      /** Main Reasoning model */
+      reasoning: AgentModel;
+      /** Fast model to perform transcription for some tasks */
+      transcriber: AgentModel;
+      tts: AgentModel;
+    };
+    /** Rules for your agent e.g: role playing definitions */
+    systemPrompt: string;
+    messages: MessagesVariations[];
+    /** Memory version with transcription definition */
+    memory?: MemoryVoiceAgent | ({
+      memory: MemoryVoice;
+    } & MutliMemoryVoiceTool)[];
+    /** Tools have defined description instruction */
+    tools: RealTimeVoiceAgentTool[];
+    /** Subagents definition for Real-Time-Voice Agent */
+    subagents?: RealTimeVoiceSubAgent[];
+    /** List with Plugins for voice agent with supperpowers */
+    plugins?: RealTimeVoiceAgentPluginSpec[];
+    // Common for ReAct Agent
+    hitl?: HITL;
+    /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
+    maximumReasoningRecalls?: number;
+    /** As default is `true` boolean */
+    withConclusion?: boolean;
+    /** As default is `false` boolean */
+    parallelizeSubagents?: boolean;
+    /** As default is `false` boolean */
+    parallelTools?: boolean;
+    /** Use aside of VAD detection while answering in order to stop processing and flush buffers/further processing for current models */
+    abort: AbortSignal;
+  };
+}
+```
+
+### Configured agent
+```typescript
+import { RealTimeVoiceAgent } from "@ravenlens/ravenadk/agents";
+
+const voiceAgent = new RealTimeVoiceAgent({
+  // ... Config Interfacinterface
+})
 ```

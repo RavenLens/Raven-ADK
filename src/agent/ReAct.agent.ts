@@ -79,8 +79,8 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     /**
      * Skills is the set of skills the agent can use to perform some action
      * In CASCADE (https://arxiv.org/abs/2512.23880) scenario -> agent can develop his own skills
-    */
     skills?: Skills;
+    */
     /**
      * It's the agent memory he developed for specific user session or for organization
     */
@@ -88,8 +88,8 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
         memory: Memory;
     } & MutliMemoryObject)[];
     /** It's list with agent plugins are going to be execute and can */
-    plugins?: ReActAgentPluginSpec[];
     tools: Tool<any, any>[];
+    plugins?: ReActAgentPluginSpec[];
     /** specify this schema to use the Human In The Loop */
     hitl?: HITL;
     /** Subagents definition */
