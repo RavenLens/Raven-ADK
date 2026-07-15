@@ -9,7 +9,7 @@
     - Role of **SFU** and **Load Balancer** is to scale architecture providing customer the best UX along the lowest headaque for developers to maintaint the architecture
     - **Load Balancer** - must rely on advanced balancing techniques that consider current server CPU/Memory usage and the number of requests currently being handled.
     > Both will be implement in Rust/C to provide the best performance for load and shipped to node.js as ***native components***
-  - **Local Execution** - RealTime Agent can run fully on user device without requirement of any **server adapater**
+  - **Local Execution** (**EdgeAI**) - RealTime Agent can run fully on user device without requirement of any **server adapater**
     - On local side the communication among `@ravenlens/ravenadk-client` is done via `Browser Events` or `IPC` or `local connection` according to the specification
 * **Real-Time-Voice-Agent** responds with response audio and/or video+audio live avatar WebRTC stream
 * **Real-Time-Voice-Agent** ships streaming among the models to reduce the latency for your UX
@@ -115,7 +115,21 @@ Utilize OpenAI API to communicate with The HuggingFace opensource models or othe
 
 ## I. End-to-End Execution Workflow
 
-### Drawning
+## Infrastructure
+Showcases the differences in local and remote agent execution
+<!-- TODO: -->
+
+### Agent Remote
+[Excalidraw overview]()
+
+#### Load balancers & SFU Adapters
+[Excalidraw overview]()
+
+### Agent Local
+[Excalidraw overview]()
+
+## Agent
+### Drawning Agent Behaviour
 [Excalidraw overview](https://excalidraw.com/#json=ws7vMGjHKGEC_kRO3yN8r,B9lyLFoei40dWP3FJPKhBA)
 
 ### Step-by-Step Description
