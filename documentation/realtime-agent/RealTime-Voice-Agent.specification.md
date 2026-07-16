@@ -119,11 +119,54 @@ Utilize OpenAI API to communicate with The HuggingFace opensource models or othe
 Showcases the differences in local and remote agent execution
 <!-- TODO: -->
 
-### Agent Remote
-[Excalidraw overview]()
+### Agent Remote & Load balancers with SFU Adapters
+[Excalidraw overview - Holistic]()
 
-#### Load balancers & SFU Adapters
-[Excalidraw overview]()
+#### Specification
+- Client library
+  - **Role:**
+    - Connection
+      - **Remote:** Connect to the **Load Balancer** that sends the response to the server where happens the communication
+      - **Local:** Connects to locally working `RealtimeAgent`
+    - Live Progress displaying:
+      - Show the Textual events communication - display what agent is doing as events
+      - Show answer - show the answer as the `<video>` with audio for liveavatar and `audio` for only mode
+        - use special elements where the response is going to be shown
+    - VAD - serves the basic Silero-VAD over **ONNX** Format
+    - **Interruption Signals:** Handles and ships the interruption signals
+    - **Abort Signals:** Send Abort signal via method e.g: `.abort()` to use in such scenarios:
+      - user clicked **Cancel** button
+      - user switched the interface
+      - 
+- Load Balancer
+  - **Strategy:** Load-Based delegation strategy
+    - looks on the resources available by RealTimeAgent and designates the load to server has the best capacity to handle user request
+  - **Role:**
+    - **Primary:** Middleware among the Load Balancer and Client Library connections
+    - Establish WebRTC Handshake among the servers
+    - Delegate the user request to the server when current request still happens
+    - Session awareness - delegates to the server stores the current session information via the **Session Adapter**
+- RealtimeAgentAdapter - it's Socket.io and WebRTC server
+  - **Role:**
+    - Serve the Socket.io server and WebRTC connections
+    - Handles the RealTime Agent communication logic
+    - Retrives and handles the `interruption signal` and flushing the all requests
+    - Handling the streaming among the pieces to avoid `Waterfall` model
+    - Combining the Video and Audio frames from LiveAgent and TTS Model
+    - Handling the **packages** loss
+    - Streams the response to user as socket.io events and WebRTC video/audio where:
+      - video - is for generated liveavatar and ships video and audio
+      - audio - is generated for tts only interaction without specified model
+      - text - communicates as text what is agent doing now - client listens these as events
+  - **Implementation:**
+    - **TypeScript** - Core system
+    - **Rust** - _Package loss_ and combining **WebRTC** and **Audio** signals
+  - **Challenges:**
+    - Handle **TTS PCM/OPUS** audio buffers combining with Video stream
+    - Handle WebRTC Streaming to the end-client
+    - Work in *client* as `Browser Events`, `IPC` and `Local Server`
+    - Work in unified and similiar fashion as ReActAgent where is the RealTimeAgent Loigic and ship with real-time agent phases as `TTS`, `STT` and `LiveAgent`
+    - Handling the 2 types of different **LiveAgent** pipelines
 
 ### Agent Local
 [Excalidraw overview]()
@@ -236,122 +279,6 @@ Showcases the differences in local and remote agent execution
 ---
 
 ## III. Real-Time-Agent Configuration
-<!-- /* TODO: Defint the types  -->
-### Configuration Interface
-```typescript
-import { ReActAgentConfig, AgentModel, ReActAgentPluginSpec } from "@ravenlens/ravenadk/agents";
-import { HITLConfigSchema, ToolUsageConfObject, HITLTransportSchema } from "@ravenlens/ravenadk/hitl";
-import { Tool } from "@ravenlens/ravenadk/tools";
-
-/**
- * Specify to teel whether describe and optionally how the Plugin Execution
- * * Specify `true` to give agent free will in description the plugin execution - under such condition the execution will be communicated only base on rest of configuration
- * * Specify object to give agent additional instructions about plugin execution
- * @default false
-*/
-type VoiceAgentDescriptionConfig = boolean | {
-  /** Whether to describe the plugin execution */
-  describe: boolean;
-  /** 
-   * Give instruction to tell voice agent how to describe the operation
-   * Usable only when was specified `describe: true`
-  */
-  describeVoiceInstruction?: string;
-}
-
-class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> extends Tool<ToolArgs, ToolOutputSchema> {
-  describeVoiceInstruction?: VoiceAgentDescriptionConfig;
-  
-  /** 
-   * @param describeVoiceInstruction - Optionally describe the execution the agent. When no specified the 
-  */
-  constructor(
-    toolLogic: ToolLogic<ToolArgs>,
-    toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>,
-    describeVoiceInstruction?: VoiceAgentDescriptionConfig
-  ) {
-    super(toolLogic, toolConfig);
-    this.describeVoiceInstruction = describeVoiceInstruction;
-
-    // Moficiations
-    // ... Modified the .invoke method to emit the description of exectuion and stream to the tts specified model
-  }
-}
-
-interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
-  describeVoiceAgentConfig?: VoiceAgentDescriptionConfig
-}
-
-interface HITLLiveTimeVoiceAgent extends Omit<HITLConfigSchema, "toolsUsage"> {
-  /** (Optional) Add tools and describe how should RealTime-Voice-Agent Communicate its usage */
-  toolsUsage?: {
-    [toolName: string]: {
-      config: ToolUsageConfObject | true;
-      /** Give instruction in what fashio should the tts model communicate tool usage */
-      describeVoiceInstruction: string;
-    };
-  };
-  /** (Optional) Question Types Voice Description Instruction 
-   * Describe what adgen should say when using these objects
-  */
-  actionsDescribeVoiceInstruction?: Partial<Record<keyof NonNullable<Pick<<HITLTransportSchema>, "emitAbcQuestion" | "emitOpenQuestion" | "emitToolUsage" | "emitAcceptance">>, string>>;
-}
-
-
-interface RealTimeAgentConfig {
-  /** Configuration for server where RealTime Agent is spawned */
-  server: {
-    socketIo: {
-      port: number;
-      // ... Rest Socket.io config
-    };
-    RTCPeerConnection: {
-      iceServers: {
-        urls: string;
-      }[]; // [{ urls: 'stun:stun.l.google.com:19302' }];
-      // ... Rest RTC Peer Config object
-    }
-  };
-  /** RealTime Agent configuration */
-  agent: {
-    models: {
-      stt: AgentModel;
-      /** Main Reasoning model */
-      reasoning: AgentModel;
-      /** Fast model to perform transcription for some tasks */
-      transcriber: AgentModel;
-      tts: AgentModel;
-    };
-    /** Rules for your agent e.g: role playing definitions */
-    systemPrompt: string;
-    messages: MessagesVariations[];
-    skills?: RealTimeVoiceAgentSkills;
-    /** Memory version with transcription definition */
-    memory?: MemoryVoiceAgent | ({
-      memory: MemoryVoice;
-    } & MutliMemoryVoiceTool)[];
-    /** Tools have defined description instruction */
-    tools: RealTimeVoiceAgentTool[];
-    /** Subagents definition for Real-Time-Voice Agent */
-    subagents?: RealTimeVoiceSubAgent[];
-    /** List with Plugins for voice agent with supperpowers */
-    plugins?: RealTimeVoiceAgentPluginSpec[];
-    // HITL With usage
-    hitl?: HITLLiveTimeVoiceAgent;
-    /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
-    maximumReasoningRecalls?: number;
-    /** As default is `true` boolean */
-    withConclusion?: boolean;
-    /** As default is `false` boolean */
-    parallelizeSubagents?: boolean;
-    /** As default is `false` boolean */
-    parallelTools?: boolean;
-    /** Use aside of VAD detection while answering in order to stop processing and flush buffers/further processing for current models */
-    abort: AbortSignal;
-  };
-}
-```
-
 ### Configured agent
 ```typescript
 import { RealTimeVoiceAgent } from "@ravenlens/ravenadk/agents";
