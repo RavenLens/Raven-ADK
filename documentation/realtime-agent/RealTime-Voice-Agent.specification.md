@@ -2,8 +2,8 @@
 
 ## Assumptions
 * User has full management over whether and how the execution of tools is told by specifying settings such as: `communicationInstruction` for tools, memory, skills and more
-<!-- * **Real-Time-Voice-Agent** serves as a **WebRTC Peer** is in communication with client, that retrives user VAD PCM stream - hence you don't have to carry its logic -->
-* **Real-Time-Voice-Agent** can run on locall device or incloud with out **custom server adapter** (SFU - Selective Forwarding Unit)
+* **Real-Time-Voice-Agent Server** and **Real-Time-Voice-Agent Client** are communicated with `Adepters` concept
+* **Real-Time-Voice-Agent** can run on locall device or incloud with out **custom server adapter** (Load Balancer and Replicas or as standalone non-replicated replica)
   - **Remote Execution** - ***SFU*** and ***Load Balancer*** are shipped as different packages for the architecture
     - These role is to distribute `socket.io` sessions and `WebRTC` traffic across different architecture real-time agent adapters (servers)
     - Role of **SFU** and **Load Balancer** is to scale architecture providing customer the best UX along the lowest headaque for developers to maintaint the architecture
@@ -117,13 +117,69 @@ Utilize OpenAI API to communicate with The HuggingFace opensource models or othe
 
 ## Infrastructure
 Showcases the differences in local and remote agent execution
-<!-- TODO: -->
+
+## Adapters
+Use client side and realtime-voice-agent adapters to communicate them
+> Both have to use the same type of adapters to work properly
+
+- Remote
+  - Load Balancer - LB (client) + LB (server)
+  - Directly to Server - DirectServer (client) + DirectServer (server)
+    - Has configuration fo the `DIRECT` or `TURN` based conection with `TURN` server spec
+- Local
+  - Borwser - BrowserEvents (client) + BrowserEvents (server)
+    - base on the `window` or `document` events base on the config
+
+## Common Patterns:
+- Use the standalone the communication adapter on 2 sides to allow the usage of different communication among the applications e.g:
+  - Browser: Use the Web events
+  - Electron - use the `IPC`
+  - Tauri - use the `IPC` or Custom
+  - Server side - use the `LB` or `ServerDirect` communication
+- **Communication Adapters**
+  - Adapaters have to be specified on the `Client` side and `RealTimeVoiceLive` Agent replica
+    - Specify for `@ravenlens/ravenadk-client` and `@ravenlens/ravenadk/realtime-voice-agent`
+      - Default set of adapters can be:
+        - `LB` - client is communicated via load balancers with the server
+        - `ServerDirect` - client is communicated directly with the server
+        - `IPC` - communicate with the ipc
+        - `Custom` - specify the documentation for the adapter to make it able to be specified
 
 ### Agent Local
-[Excalidraw overview]()
+Local Agent uses one of the `adapters` made for local execution for either `@ravenlens/ravenadk/realtime-voice-agent/connection-adapters` (backend) and `@ravenlens/ravenadk-client//connection-adapters`
+> Use some predefined or make own adapter
+
+```markdown
+    ┌─────────────────────────────────────────────────────────────────────────┐
+    │                           SINGLE BROWSER TAB                            │
+    │                                                                         │
+    │   ┌─────────────────────┐    CustomEvents    ┌──────────────────────┐   │
+    │   │ Client Peer (pc1)   │ ◄────────────────► │  Agent Peer (pc2)    │   │
+    │   └──────────┬──────────┘   (SDP & ICE)      └──────────┬───────────┘   │
+    │              │                                          │               │
+    │              └────────── Direct Local Media Stream ─────┘               │
+    │                        (Audio / Video Tracks)                           │
+    └─────────────────────────────────────────────────────────────────────────┘
+  ```
+
+#### Where can it work
+Describes places from where the communication can happen
+- Browser
+- Tauri app
+- Electron app
+- INK TUI app
+
+#### Roles:
+- `Client` - is the `@ravenlens/ravenadk-client` connects with the server
+- `RealTimeVoiceAgent` - communicates with the client and answers to user requests
 
 ### Agent Remote
 [Excalidraw overview]()
+
+#### Versions:
+- Base on the specified adapater the proper version can be specified for `Remote Version`
+  - `LB` - communicates via the `LB`
+  - `DirectServer` - communicates directly with the `Server`
 
 #### Roles:
 - `Client` - uses the **RavenADK** client library
@@ -161,11 +217,12 @@ Showcases the differences in local and remote agent execution
         - Works perfectly if Client or Server is hidden behind **NAT** or **FireWall**
         - `RealTimeVoiceAgent Replica` can be hidden from public
         - FAIL if the specified TURN Server didn't get the credntials or need the additional charge and client balance is empty
+          - emits failure event
       ```txt
         [ Client ] <--- WSS (Socket.io) ---> [ Rust LB ] <--- WS ---> [ Replica ] (Signaling)
         [ Client ] <================ Media (SRTP/WebRTC) ============> [ Replica ] (Direct)
       ```
-    - `Direct-FIRST` - When client isn't available publicly it uses the configured TURN server
+    - `DIRECT-FIRST` - When client isn't available publicly it uses the configured TURN server
     > **Communication Apporach** base on the `RealTimeVoiceAgent` configuration and whether is the Client / 
 
 #### Types of communication Replica-Client
@@ -185,6 +242,8 @@ Showcases the differences in local and remote agent execution
 ##### Features:
 - **Configuration:** Setup `RealTimeVoiceAgent`
 ```typescript
+import type { ConnectionAdapter } from "@ravenlens/ravenadk-client/connection-adapters";
+
 /** Each VAD listener has to implement the interface like this */
 interface VADHandler {
   /** Specification for the VAD method */
@@ -224,6 +283,8 @@ interface RealTimeVoiceAgentConfig {
     /** Credentials list is required to establish the connection */
     credentials: Record<string, any>;
   };
+  /** Specify the connection adapter the client will use to communicate with 2nd party */
+  connectionAdapter: ConnectionAdapter;
 }
 ```
 - **Connect to `RealTimeVoiceAgent`**: Has to support `Remote` and `Local` agent
@@ -242,6 +303,7 @@ interface RealTimeVoiceAgentConfig {
     - `Local` - used to connect to local agent
   - `.connect()` method - use this method to connect the `Client` to the `Agent` with specified strategy configuration
 - **Textual Communications as Events Listening:** Client can call `.onEvent` to listen the `Text based stream`
+  - use `.onCustomEvent` to detect and handle the custom event
   - The events list has to be specified
   - use `.eventsLog` method to get all events as log with assigned timestamp for each event where event is specified as object has the eventname and payload.
   ```typescript
@@ -271,6 +333,7 @@ interface RealTimeVoiceAgentConfig {
 - **Manual aborting:**
   - Use manual `.abort()` method to send to server via the `WebRTCDataChannel` the abort manual signal - this will cause to flush all state
 - **Representation of Media:** Represent the voice and media connection
+  - **Detect Media:** Use the special method `getMediaType()` to check whether agent is responding with what media
   - **Visual Elementns:** Collection of standalone - Compiled from **Svelte** Visual Elements can be used to represent the `Voice` or wrap the `Voice + Video (of liveavatar)` with additional effects like *border effects*
   - **Embedding Methods:** 
 
@@ -347,9 +410,14 @@ struct LoadBalancerConfig {
 
 #### RealTimeVoiceAgent Replica
 - **Payload and Credentials:** `LB` passed the credentials and payload to each `RealTimeVoiceAgent` and `RealTimeVoiceAgent` can have specified the logic and can send the omission event
+  - **Implement in handling logic:** Payload can be used to make the agent able to answer with video or liveavatar base on the properties
+    - RealTimeVoiceAgent handling logic can implement custom event to announce something is happening and client can listen it with custom `.onCustomEvent`
 
 
-### Load balancing (Client - Balancer - RealTimeAgent)
+### Load balancing (Client - Balancer (Signaling Server) - RealTimeVoiceAgent)
+Works for the `LB` adapter
+
+##### Excalidraw Overview
 [Excalidraw overview](https://excalidraw.com/#json=oO1gsgtA7r338bdXSH0X8,is-EmuGwwH9N8zj68aJaXg)
 
 #### Specification
@@ -407,9 +475,6 @@ struct LoadBalancerConfig {
     - Work in *client* as `Browser Events`, `IPC` and `Local Server`
     - Work in unified and similiar fashion as ReActAgent where is the RealTimeAgent Loigic and ship with real-time agent phases as `TTS`, `STT` and `LiveAgent`
     - Handling the 2 types of different **LiveAgent** pipelines
-
-### Agent Local
-[Excalidraw overview]()
 
 ## Agent
 ### Drawning Agent Behaviour
