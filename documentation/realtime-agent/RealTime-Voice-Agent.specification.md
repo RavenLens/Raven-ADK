@@ -119,8 +119,235 @@ Utilize OpenAI API to communicate with The HuggingFace opensource models or othe
 Showcases the differences in local and remote agent execution
 <!-- TODO: -->
 
-### Agent Remote & Local
-[Excalidraw overview - Holistic]()
+### Agent Local
+[Excalidraw overview]()
+
+### Agent Remote
+[Excalidraw overview]()
+
+#### Roles:
+- `Client` - uses the **RavenADK** client library
+- `Load Balancer` (`LB`) - wroten in **Rust**, `Reverse-Proxy` directing with `Resource-Load-Based` designation to replicas. Has subroles-communication protocols
+  - `Signaling Server` (subrole) - uses `Socket.io` instance
+    - Client connects
+    - `RealTimeVoiceAgent Replica` connection
+  - Among `RealTimeVoiceAgent Replica` communication - uses `Socket.io` for the simplicity
+- `RealTimeVoiceAgent Replica` - **RavenADK** Library **Node.js** agent can have rust *NeonBindings* extensions to optimize the load
+  - For *WebRTC* it's `client` **one-from-sides**
+
+#### Protocols Usecase
+- `Socket.io`:
+  - `Signaling Server` - to establish WebRTC connection among the `RealTimeVoiceAgent` and `Client`
+  - `LB` to `Replica` communication. It's responsibilities:
+    - **bi-directional** communication: about **load**, **configuration** and **spikes**
+    - **Goal:** Guide user to the replica has the least of load
+- `WebRTC` technology - Used to share `Textual` events and `Media` among client and `RealTimeVoiceAgent`
+  - `RTCDataChannel` (`Textual Events`) - used to stream **bi-directionally** informations:
+    - From `RealTimeVoiceAgent` - streamlines events like: **processing info**, **tool usage**, **final answer**, **lipsync configuration (possibly)**, **interruption event**  (when user spoke while agent was answering),  **information agent is answering** (this allow to detect that vad and client that client was answering), **result of interruption** (success or failure), **payload omission** (when payload was unaccepted), **credentials omission** (when credentials were unaccepted)
+      - Travels alongside the `audio` and/or `video`
+    - From `Client` - streamlines the events like: `abort`, `Payload and Credentials`
+  - `MediaStream` - used to stream bi-directionally the informations
+    - From `RealTimeVoiceAgent` - streamlines data as: `Audio (Answer Speech)`, `Video + Audio stream (Answer Speech + Live Avatar)`
+    - From `Client` - streamlines the data as: `Voice`, `Voice Interruption Signal` (when user speak meanwhile agent was answering)
+  - **Communication Apporaches (`WebRTCConnectionPatternConfig`)** below apporaches are stored in `LB` config
+    - `DIRECT` - `Client` and `RealTimeVoiceAgent` communicates directly without `TURN` middleware
+      - **Traits:**
+        - Doesn't require the **TURN Server** is mostly *PAID*
+        - Require each `RealTimeVoiceAgent Replica` to be publicly available 
+        - Is not going to work when `Client` is hidden behind **FireWall**, **NAT** or `RealTimeVoiceAgent` has same or is publicly unavailable
+    - `TURN (Traverlas Using Relays Around NAT)` based - `Client` and `RealTimeVoiceAgent` are communicated via the external `TURN server` acts as the proxy in streamlining the information. 
+      - **Traits:**
+        - IP of both sides are undisplayable only known is **TURN Server**
+        - Works perfectly if Client or Server is hidden behind **NAT** or **FireWall**
+        - `RealTimeVoiceAgent Replica` can be hidden from public
+        - FAIL if the specified TURN Server didn't get the credntials or need the additional charge and client balance is empty
+      ```txt
+        [ Client ] <--- WSS (Socket.io) ---> [ Rust LB ] <--- WS ---> [ Replica ] (Signaling)
+        [ Client ] <================ Media (SRTP/WebRTC) ============> [ Replica ] (Direct)
+      ```
+    - `Direct-FIRST` - When client isn't available publicly it uses the configured TURN server
+    > **Communication Apporach** base on the `RealTimeVoiceAgent` configuration and whether is the Client / 
+
+#### Types of communication Replica-Client
+- Text
+  - stream the textual events of what is agent doing what the client can listen with `.onEvent` method
+  - stream the **final-textual-output** along the media answer
+  - Can listen and informa about omission
+- Media via **WebRTC** (Audio (Speech Answer) / Audio+Video (LiveAvatar)) - stream the RealTimeVoice Agent progress answers and the final answer of RealTimeAgent
+
+#### Client (`@ravenlens/ravenadk-client`)
+> Utilities are shipped with `@ravenlens/ravenadk-client` package to make the `RealTimeVoiceAgent` and `Client` connection seamless and fast going for programmers and progressing businesses.
+>In this package has to occur:
+> - RealTimeVoiceAgent **namespace** (typescript **namespace** - formerly known as the **internal modules**)
+>   - submodule can be called from main `@ravenlens/ravenadk-client` or ``@ravenlens/ravenadk-client/realtime-voice-agent`
+
+
+##### Features:
+- **Configuration:** Setup `RealTimeVoiceAgent`
+```typescript
+/** Each VAD listener has to implement the interface like this */
+interface VADHandler {
+  /** Specification for the VAD method */
+}
+
+/** This object is insert to the client config */
+interface RealTimeVoiceAgentConfig {
+  /** URL of server is signaling server / loadbalancer and familiar with protocol documentation */
+  signalingServerURL: string;
+  vad: {
+    handler: VADHandler;
+    /**
+     * Use to setup time from what the time streaming has begun
+    */
+    startEmitAfterSpeechMs?: number;
+    /**
+      After specified time of silence the VAD will interupt further listening and will send to server the information to start generating the answer
+    */
+    stopAfterSillenceMs?: number;
+  };
+  /**
+   * Function used to listen the microphone
+   * * as defult the funnction uses the 
+   *  ```typescript
+   * const constraints = { 
+      audio: true, // Request microphone access
+      video: false // Change to true if you also need the camera
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+   *  ```
+  */
+  microphoneListener: () => Promise<MediaStream>;
+  /** List payload with credentials is send via the signaling server to the RealTimeVoiceAgent */
+  payload?: {
+    [field: string]: any;
+    /** Credentials list is required to establish the connection */
+    credentials: Record<string, any>;
+  };
+}
+```
+- **Connect to `RealTimeVoiceAgent`**: Has to support `Remote` and `Local` agent
+  - Setup Client:
+  ```typescript
+  import { RealTimeVoiceAgentClient, type RealTimeVoiceAgentConfig } from "@ravenlens/ravenadk-client/realtime-voice-agent/vad";
+
+  const realTimeVoiceAgentClient = new RealTimeVoiceAgentClient({
+    // ... configuration RealTimeVoiceAgentConfig
+  })
+
+  realTimeVoiceAgentClient.config();
+  ```
+  - Strategy - `Remote` and `Local` with agent configuration
+    - `Remote` - used to connect to load balancer
+    - `Local` - used to connect to local agent
+  - `.connect()` method - use this method to connect the `Client` to the `Agent` with specified strategy configuration
+- **Textual Communications as Events Listening:** Client can call `.onEvent` to listen the `Text based stream`
+  - The events list has to be specified
+  - use `.eventsLog` method to get all events as log with assigned timestamp for each event where event is specified as object has the eventname and payload.
+  ```typescript
+  type TimeStamp = number;
+  type EventRecord = [TimeStamp, { eventName: string; eventPayload: Record<string, any>; }];
+  ```
+- **Talking management**: 
+  - use `.start` and `.end` to start and stop the listening period programatically
+    - When user first click `.start` it'll show the permission information
+    ```typescript
+    const constraints = { 
+      audio: true, // Request microphone access
+      video: false // Change to true if you also need the camera
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    ```
+    - In this period the `vad` is scanning for the user voce
+  - **auto interuption** - use the **configuration** to (optionally) _specify_ the time treshold after what the listening is ***aborted*** when exists the 
+  - **`vad`** - specify in the **configuration** the `vad` local method to listen for the execution
+    - ships as default the `Silero-VAD` user can import from `@ravenlens/ravenadk-client/realtime-voice-agent/vad` - assign this to the **vad** property
+    ```typescript
+      import { SileroVAD } from "@ravenlens/ravenadk-client/realtime-voice-agent/vad";
+    ```
+    - After specified `stopAfterSillenceMs` time of silence the VAD will interupt further microphone listening and will send to server the information to start generating the answer - information is send as the `WebRTCDataChannel`
+    - From the moment the `VAD` detected the first world or `startEmitAfterSpeechMs` propety of speech sends to `RealTimeVoiceAgent` the chunks of media as stream to allow it to transcript it on fly. Speech is send via the `WebRTCDataChannel`
+- **Manual aborting:**
+  - Use manual `.abort()` method to send to server via the `WebRTCDataChannel` the abort manual signal - this will cause to flush all state
+- **Representation of Media:** Represent the voice and media connection
+  - **Visual Elementns:** Collection of standalone - Compiled from **Svelte** Visual Elements can be used to represent the `Voice` or wrap the `Voice + Video (of liveavatar)` with additional effects like *border effects*
+  - **Embedding Methods:** 
+
+
+#### Load Balancer
+- Acts as the `Signaling Server` and the `Load Balancer` base on the **Reverse-Proxy and Resource-based-Load-balancer**
+  - Guides `Client` to the `RealTimeVoiceAgent Replica` has the least load - there client establoshed the **Media** and **Text** connection
+- Holds the `WebRTCConnectionPatternConfig` determines the connectivity of `Client` and `RealTimeVoiceAgent Replica` over the `WebRTC`
+- **Bi-Directionaly** Communicates with `RealTimeVoiceAgent Replica` via **Socket.io** connection to get time to time the load update
+  - When it starts running propagates with **safety hash** to the all replicas the load after what reaching these have to call it to info
+    - Replicas override their internall loaded config when retrives this
+  - Gets the current **load** by voluntarly calling with TTL
+  - Gets the **load** from replica when **spikes** above the propagated norm
+- Configuration object of `Load Balancer` is:
+
+```rust
+struct ReplicaLoad {
+  cpu_percentage: Option<f32>;
+  ram_percentage: Option<f32>;
+  parallel_connections_count: Option<u64>;
+}
+
+struct ReplicaConfig {
+  address: String;
+  /// Replica Max Load
+  load: ReplicaLoad;
+}
+
+enum WebRTCConnectionMethod {
+  Direct,
+  Turn,
+  DirectFirst
+}
+
+struct TurnServerConfig {
+  urls: Vec<String>;
+  username: String;
+  api_key: String;
+}
+
+struct SocketIOConfig {
+  /// Port for the Signaling Server and Internal communication
+  port: u16;
+  /// Path for the socket.io endpoint
+  path: String;
+  /// CORS allowed origins
+  cors_allowed_origins: Vec<String>;
+  /// Connection timeout in milliseconds
+  connect_timeout_ms: u32;
+  /// Ping interval for heartbeat
+  ping_interval_ms: u32;
+  /// Ping timeout for heartbeat
+  ping_timeout_ms: u32;
+}
+
+struct LoadBalancerConfig {
+  replica_config: Vec<ReplicaConfig>;
+  webrtc_connection_pattern_config: WebRTCConnectionConfig;
+  /// Hash with what the replica gets the call
+  safety_hash: String;
+  #[doc="Time with what repical will be called"]
+  ttl_replica_call_ms: u32;
+  socket_io_config: SocketIOConfig;
+}
+```
+- **Payload and Credentials** from a `Client` are forwarded to the `Replica` where each replica can define its own verification criteria
+
+##### Ideas:
+- Semantic routing
+- Session id routing - when the RealTimeVoiceAgent stores some fields to avoid restoring or starting from the begining the user according to session id is routed to the specific same server all way to this id
+  - stored information has persistance
+  - this can be useafull for messages
+  > I assume user can implement this manually for each agent in each early version
+
+#### RealTimeVoiceAgent Replica
+- **Payload and Credentials:** `LB` passed the credentials and payload to each `RealTimeVoiceAgent` and `RealTimeVoiceAgent` can have specified the logic and can send the omission event
+
 
 ### Load balancing (Client - Balancer - RealTimeAgent)
 [Excalidraw overview](https://excalidraw.com/#json=oO1gsgtA7r338bdXSH0X8,is-EmuGwwH9N8zj68aJaXg)
@@ -190,7 +417,7 @@ Showcases the differences in local and remote agent execution
 
 ### Step-by-Step Description
 1. **User Ingest:** The user initiates an audio stream (via continuous stream or push-to-talk - you decide when)
-> Use ***RavenADK*** Frontend Utility lib for **Semaless Real-Time-Voice-Agent Experiences**
+> Use `@ravenlens/ravenadk-client/realtime-voice-agent` Frontend Utility lib for **Semaless Real-Time-Voice-Agent Experiences**
 2. **VAD Classification:** `Silero-VAD` or other `VAD` classifies chunks as speech or non-speech. Non-speech is discarded; speech chunks stream to the STT model.
 3. **WebRTC Server Request**: Transmits Speech to the LiveAgent provider WebRTC Server
 3. **Streaming STT:** The `ASR` engine converts PCM chunks into partial transcript strings on the fly.
