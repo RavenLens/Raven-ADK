@@ -119,8 +119,11 @@ Utilize OpenAI API to communicate with The HuggingFace opensource models or othe
 Showcases the differences in local and remote agent execution
 <!-- TODO: -->
 
-### Agent Remote & Load balancers with SFU Adapters
+### Agent Remote & Local
 [Excalidraw overview - Holistic]()
+
+### Load balancing (Client - Balancer - RealTimeAgent)
+[Excalidraw overview](https://excalidraw.com/#json=oO1gsgtA7r338bdXSH0X8,is-EmuGwwH9N8zj68aJaXg)
 
 #### Specification
 - Client library
@@ -139,8 +142,17 @@ Showcases the differences in local and remote agent execution
       - user switched the interface
       - 
 - Load Balancer
-  - **Strategy:** Load-Based delegation strategy
-    - looks on the resources available by RealTimeAgent and designates the load to server has the best capacity to handle user request
+  - **Strategy:** **Load-Based** delegation strategy with **Reverse-Proxy**
+    - looks on the resources available by **RealTimeAgent** and designates the load to server has the best capacity to handle user request
+  - **Implementation:** 
+    - Communication
+      - with **load balancer** and **liveagent servers** - gRPC HTTP/3(QUIC) - RealTimeAgent and LoadBalancer use this to communicate the load
+        - RealTimeAgent informs about spikes and excessive load
+        - Both maintain active connection in pool of connections
+      - with Client and Load balancer
+        - wss / WebRTC - udp
+        - WebRTC connects client and server directly - this explicitly demands to have configured the IP Public Address for each node/pear
+          - **TURN (Relay)** server can be configured to avoid explicitly showing the ip of both sides to each other
   - **Role:**
     - **Primary:** Middleware among the Load Balancer and Client Library connections
     - Establish WebRTC Handshake among the servers
@@ -148,6 +160,7 @@ Showcases the differences in local and remote agent execution
     - Session awareness - delegates to the server stores the current session information via the **Session Adapter**
 - RealtimeAgentAdapter - it's Socket.io and WebRTC server
   - **Role:**
+    - **Loadbalancer** has defined configuration shares among the replicas - where each replica has its own individual resource load config or shares the custom one among themself distributed by loadbalancer
     - Serve the Socket.io server and WebRTC connections
     - Handles the RealTime Agent communication logic
     - Retrives and handles the `interruption signal` and flushing the all requests
