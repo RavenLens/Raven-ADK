@@ -1,4 +1,5 @@
 import { Tool, ToolConfig, ToolLogic } from "../tools";
+import { ServerOptions } from "socket.io";
 import z from "zod/v4";
 import { HITLConfigSchema, HITLTransportSchema, ToolUsageConfObject } from "../tools/hitl/hitlToolSchema";
 import { AgentModel, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
@@ -6,6 +7,7 @@ import { MessagesVariations } from "../state";
 import { SchemaSkillStore } from "../skills/stores/schema";
 import { SchemaMemoryStore } from "../memory/stores/schema";
 import { AvatarOneStepPipeline, AvatarTwoStepPipeline } from "./live-avatar.pipelines";
+import { ParsedUrlQuery } from "node:querystring";
 
 /**
  * Specify to teel whether describe and optionally how the Plugin Execution
@@ -81,7 +83,9 @@ export interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
   describeVoiceAgentConfig?: VoiceAgentDescriptionConfig
 }
 
-export interface HITLLiveTimeVoiceAgent extends Omit<HITLConfigSchema, "toolsUsage"> {
+export interface HITLLiveTimeVoiceAgent<HITL extends HITLTransportSchema> extends Omit<HITLConfigSchema, "toolsUsage"> {
+  /** HITL Configuration is used to setup the hitl execution */
+  hitl: HITL;
   /** (Optional) Add tools and describe how should RealTime-Voice-Agent Communicate its usage */
   toolsUsage?: {
     [toolName: string]: {
@@ -99,16 +103,19 @@ export interface HITLLiveTimeVoiceAgent extends Omit<HITLConfigSchema, "toolsUsa
 export interface RealTimeVoiceAgentServerConfig {
   socketIo: {
     port: number;
+    /** Cross-Origin-Resource-Sharing policy */
+    serverOptions?: ServerOptions;
     // ... TODO: Rest Socket.io config
   };
   /**
    * Configuration for WebRTC.
    * If 'mediaProxy' is specified, the agent connects via an SFU/Media Server instead of P2P to decouple Media Plane.
    */
-  webRTC?: {
+  webRTC: {
+    /** List with servers to accomplish connection. E.g: [{ urls: 'stun:stun.l.google.com:19302' }]; */
     iceServers: {
       urls: string;
-    }[]; // [{ urls: 'stun:stun.l.google.com:19302' }];
+    }[];
     /**
      * Configuration for Decoupled Media Plane (SFU/Media Server)
      * e.g., a Rust-based high-performance server.
@@ -180,12 +187,20 @@ export interface ExecutionLocalMode {
   textEventsCommunicationCarrier: EventsCommunicationCarrier | IPCCommunicationCarrier | LocalServerCommunicationCarrier;
 }
 
+type ExecutionRemoteModeVerificator = { clientID: string; } | string | boolean;
 export interface ExecutionRemoteMode {
   mode: "remote";
   /** 
    * Configuration for server where RealTime Agent is spawned.
    */
   server: RealTimeVoiceAgentServerConfig;
+  /**
+   * Verifies user particiapation for allowement to connect with socket.io server
+   * Triggered before each event sent to socket.io server
+   * Setup as undefined/false or ignore to disable verification
+   * 
+  */
+  eventVerification?: false | ((auth: { [key: string]: any }, query: ParsedUrlQuery) => Promise<ExecutionRemoteModeVerificator> | ExecutionRemoteModeVerificator);
 }
 
 export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealTimeVoiceAgentSkillsSchema, Memory extends RealTimeVoiceAgentSchemaMemoryStore, HITL extends HITLTransportSchema> {
@@ -193,9 +208,8 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
    * The environment where the agent is executing.
    * - 'remote': Hosted on a backend with WebRTC/Socket.io
    * - 'local': Running directly on the user's device. It doesn't spawn server (Edge AI)
-   * @default "server"
    */
-  executionMode?: ExecutionRemoteMode | ExecutionLocalMode;
+  executionMode: ExecutionRemoteMode | ExecutionLocalMode;
   /** RealTime Agent configuration */
   agent: {
     /**
@@ -244,7 +258,7 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     /** List with Plugins for voice agent with supperpowers */
     plugins?: RealTimeVoiceAgentPluginSpec[];
     // HITL With usage
-    hitl?: HITLLiveTimeVoiceAgent;
+    hitl?: HITLLiveTimeVoiceAgent<HITL>;
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
     maximumReasoningRecalls?: number;
     /** As default is `true` boolean */
@@ -274,4 +288,9 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
       } */
     };
   };
+  /**
+   * Use `dev` to see the logs from the agent
+   * @default "production"
+  */
+  operationMode?: "dev" | "production";
 }

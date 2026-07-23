@@ -8,6 +8,10 @@
         - WebRTC STUN, TURN, And strategies
         - Show the Socket.io protocols
     - [Drawning Agent Behaviour](./RealTime-Voice-Agent.specification.md#drawning-agent-behaviour)
+        - Credentials have to be deliveried with webrtc to assign the media buffer to the specific user
+        - Include the VAD socket.io event send when user finished speech - this event triggers the agent to process the text
+        - Include events goes from the server when it starts to generate the answer
+        - Include that client voice goes to stt model
     - [Agent Remote](./RealTime-Voice-Agent.specification.md#agent-remote)
 2. Agent Accomplishement
     1. Add `adapters` concept to code and Agent config
