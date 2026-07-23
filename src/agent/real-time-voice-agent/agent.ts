@@ -1,7 +1,7 @@
 import { HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
 import { ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema } from "./agentConfig";
 import { EventEmitter } from "node:events";
-import { STTModel, STTResponse } from "./stt";
+import { STTModel } from "./stt";
 
 export class RealTimeVoiceAgent<
     RealTimeVoiceAgentSkills extends RealTimeVoiceAgentSkillsSchema,
@@ -12,16 +12,15 @@ export class RealTimeVoiceAgent<
     usersTrackID = new Map<string, string>([]);
     speekingUsers = new Map<string, number>();
     clientAudioStreams = new Map<string, MediaStream>();
-    
     // Unblocking audio processing queues and STT stream sessions per client
     private activeSpeechSessions = new Map<string, {
         audioBuffers: Buffer[];
         chunkQueue: Buffer[];
+        queueReadHead: number;
         chunkResolvers: Array<() => void>;
         isSpeaking: boolean;
         sessionAbortController: AbortController;
     }>();
-
     private internalEvents: EventEmitter = new EventEmitter();
     
     constructor(config: RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills, Memory, HITL>) {
@@ -44,9 +43,11 @@ export class RealTimeVoiceAgent<
     /** Push raw audio chunk received for client to active session buffer/queue */
     public pushAudioChunk(clientID: string, chunk: Buffer) {
         const session = this.activeSpeechSessions.get(clientID);
+        
         if (session && session.isSpeaking) {
             session.audioBuffers.push(chunk);
             session.chunkQueue.push(chunk);
+            
             const resolver = session.chunkResolvers.shift();
             if (resolver) {
                 resolver();
@@ -65,17 +66,33 @@ export class RealTimeVoiceAgent<
         // Terminate any existing speech session for this client
         const existingSession = this.activeSpeechSessions.get(clientID);
         if (existingSession) {
+            existingSession.isSpeaking = false;
             existingSession.sessionAbortController.abort();
+
+            // Flush and notify any pending resolvers so they wake up and terminate
+            existingSession.chunkResolvers.forEach((resolve) => resolve());
+            existingSession.chunkResolvers = [];
         }
+
+        const sessionAbortController = new AbortController();
 
         // Initialize new speech session
         const session = {
             audioBuffers: [],
             chunkQueue: [],
-            chunkResolvers: [],
+            queueReadHead: 0,
+            chunkResolvers: [] as Array<() => void>,
             isSpeaking: true,
-            sessionAbortController: new AbortController()
+            sessionAbortController
         };
+
+        // Attach abort handler to flush resolvers if aborted asynchronously
+        sessionAbortController.signal.addEventListener("abort", () => {
+            session.isSpeaking = false;
+            session.chunkResolvers.forEach((resolve) => resolve());
+            session.chunkResolvers = [];
+        }, { once: true });
+
         this.activeSpeechSessions.set(clientID, session);
 
         // Execute STT pipeline unblockingly (asynchronously without blocking WebRTC/Event thread)
@@ -84,12 +101,42 @@ export class RealTimeVoiceAgent<
         });
     }
 
+    /** Helper to create a WAV file Buffer with RIFF header around raw PCM16 audio */
+    private createWavBuffer(pcmBuffer: Buffer, sampleRate: number = 16000, numChannels: number = 1, bitDepth: number = 16): Buffer {
+        const dataSize = pcmBuffer.length;
+        const headerSize = 44;
+        const wavBuffer = Buffer.alloc(headerSize + dataSize);
+
+        // RIFF chunk descriptor
+        wavBuffer.write("RIFF", 0);
+        wavBuffer.writeUInt32LE(36 + dataSize, 4);
+        wavBuffer.write("WAVE", 8);
+
+        // fmt sub-chunk
+        wavBuffer.write("fmt ", 12);
+        wavBuffer.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
+        wavBuffer.writeUInt16LE(1, 20);  // AudioFormat (1 for PCM)
+        wavBuffer.writeUInt16LE(numChannels, 22);
+        wavBuffer.writeUInt32LE(sampleRate, 24);
+        wavBuffer.writeUInt32LE(sampleRate * numChannels * (bitDepth / 8), 28); // ByteRate
+        wavBuffer.writeUInt16LE(numChannels * (bitDepth / 8), 32); // BlockAlign
+        wavBuffer.writeUInt16LE(bitDepth, 34);
+
+        // data sub-chunk
+        wavBuffer.write("data", 36);
+        wavBuffer.writeUInt32LE(dataSize, 40);
+
+        pcmBuffer.copy(wavBuffer, headerSize);
+        return wavBuffer;
+    }
+
     /** Asynchronous unblocking pipeline for interim / volatile STT processing */
     private async executeSTTPipelineUnblocking(
         clientID: string,
         session: {
             audioBuffers: Buffer[];
             chunkQueue: Buffer[];
+            queueReadHead: number;
             chunkResolvers: Array<() => void>;
             isSpeaking: boolean;
             sessionAbortController: AbortController;
@@ -109,14 +156,23 @@ export class RealTimeVoiceAgent<
         if (sttMode === "volatile" && isCustomSTT) {
             this.devConsole(`[RealTimeVoiceAgent] Starting volatile STT stream pipeline for ClientID: ${clientID}`, "log");
             
-            // Create AsyncIterable for incoming subchunks
-            const self = this;
+            // Create AsyncIterable for incoming subchunks with O(1) queue reading
             const audioStream: AsyncIterable<Buffer> = {
                 async *[Symbol.asyncIterator]() {
-                    while (session.isSpeaking || session.chunkQueue.length > 0) {
+                    while (session.isSpeaking || session.queueReadHead < session.chunkQueue.length) {
                         if (session.sessionAbortController.signal.aborted) break;
-                        if (session.chunkQueue.length > 0) {
-                            yield session.chunkQueue.shift()!;
+
+                        if (session.queueReadHead < session.chunkQueue.length) {
+                            const chunk = session.chunkQueue[session.queueReadHead];
+                            
+                            session.queueReadHead++;
+                            // Reclaim memory periodically when read head gets large
+                            if (session.queueReadHead > 100 && session.queueReadHead >= session.chunkQueue.length) {
+                                session.chunkQueue = [];
+                                session.queueReadHead = 0;
+                            }
+                            
+                            yield chunk;
                         } else {
                             await new Promise<void>((resolve) => {
                                 session.chunkResolvers.push(resolve);
@@ -160,11 +216,14 @@ export class RealTimeVoiceAgent<
             session.chunkResolvers.forEach((resolve) => resolve());
             session.chunkResolvers = [];
 
-            const fullAudioBuffer = Buffer.concat(session.audioBuffers);
             const sttModel = this.config.agent.models.stt;
             let finalTranscript = "";
 
-            if (sttModel) {
+            if (session.audioBuffers.length > 0 && sttModel) {
+                const fullAudioBuffer = session.audioBuffers.length === 1
+                    ? session.audioBuffers[0]
+                    : Buffer.concat(session.audioBuffers);
+
                 try {
                     if (typeof (sttModel as STTModel).transcribeInterim === "function") {
                         const res = await (sttModel as STTModel).transcribeInterim(fullAudioBuffer, {
@@ -173,22 +232,38 @@ export class RealTimeVoiceAgent<
                         });
                         finalTranscript = res.text;
                     } else if (typeof (sttModel as any).stt === "function") {
-                        const file = new File([fullAudioBuffer as any], "speech.wav", { type: "audio/wav" });
+                        const wavBuffer = this.createWavBuffer(fullAudioBuffer, 16000, 1, 16);
+                        const file = new File([wavBuffer as any], "speech.wav", { type: "audio/wav" });
                         finalTranscript = await (sttModel as any).stt(file);
                     }
                 } catch (err) {
                     this.devConsole(`[RealTimeVoiceAgent] Error transcribing interim audio for ClientID ${clientID}: ${err}`, "error");
                 }
+
+                if (!session.sessionAbortController.signal.aborted) {
+                    this.internalEvents.emit("stt-transcript-final", {
+                        clientID,
+                        transcript: finalTranscript,
+                        audioBuffer: fullAudioBuffer
+                    });
+                }
+            } else if (!session.sessionAbortController.signal.aborted) {
+                this.internalEvents.emit("stt-transcript-final", {
+                    clientID,
+                    transcript: "",
+                    audioBuffer: Buffer.alloc(0)
+                });
             }
 
-            this.internalEvents.emit("stt-transcript-final", {
-                clientID,
-                transcript: finalTranscript,
-                audioBuffer: fullAudioBuffer
-            });
-
             this.devConsole(`[RealTimeVoiceAgent] Finalized speech transcript [${clientID}]: "${finalTranscript}"`, "log");
-            this.activeSpeechSessions.delete(clientID);
+
+            // Abort session signal to notify external background listeners
+            session.sessionAbortController.abort();
+
+            // Delete session only if it's still the active session for this client
+            if (this.activeSpeechSessions.get(clientID) === session) {
+                this.activeSpeechSessions.delete(clientID);
+            }
         }
     }
 

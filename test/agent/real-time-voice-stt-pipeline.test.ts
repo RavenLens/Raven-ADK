@@ -73,4 +73,48 @@ describe("RealTimeVoiceAgent STT Pipeline Unblocking Integration Test", () => {
 
         expect(finalTranscriptReceived).toBe("Final full audio transcript");
     });
+
+    it("cleans up pending resolvers and terminates old STT stream when onSpeechStart is called repeatedly", async () => {
+        const mockCustomSTT = new CustomSTTModel({
+            providerName: "TestSTT",
+            modelName: "test-volatile",
+            transcribeInterimFn: async () => ({ text: "Final", isFinal: true }),
+            transcribeVolatileFn: async function* (stream) {
+                for await (const chunk of stream) {
+                    yield { text: `chunk:${chunk.toString()}`, isFinal: false };
+                }
+            }
+        });
+
+        const agent = new RealTimeVoiceAgent({
+            executionMode: { mode: "local", textEventsCommunicationCarrier: { type: "events" } },
+            agent: {
+                models: { stt: mockCustomSTT, sttMode: "volatile", reasoning: {} as any, tts: {} as any },
+                systemPrompt: "Test prompt",
+                messages: [],
+                tools: [],
+                abort: new AbortController().signal
+            }
+        });
+
+        const clientID = "client-abort-test";
+
+        // Start session 1
+        (agent as any).onSpeechStart(clientID, Date.now());
+        agent.pushAudioChunk(clientID, Buffer.from("first"));
+
+        // Restart session 2 without waiting for onSpeechEnd (simulating interrupted speech start)
+        (agent as any).onSpeechStart(clientID, Date.now());
+        agent.pushAudioChunk(clientID, Buffer.from("second"));
+
+        await new Promise((resolve) => setTimeout(resolve, 50));
+
+        let finalReceived = "";
+        (agent as any).internalEvents.on("stt-transcript-final", (data: any) => {
+            finalReceived = data.transcript;
+        });
+
+        await (agent as any).onSpeechEnd(clientID, Date.now());
+        expect(finalReceived).toBe("Final");
+    });
 });
