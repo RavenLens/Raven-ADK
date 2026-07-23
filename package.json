@@ -129,6 +129,16 @@
       "import": "./dist/agent/abstract/sequential/index.js",
       "require": "./dist/agent/abstract/sequential/index.js"
     },
+    "./realtime-voice-agent": {
+      "types": "./dist/agent/real-time-voice-agent/index.d.ts",
+      "import": "./dist/agent/real-time-voice-agent/index.js",
+      "require": "./dist/agent/real-time-voice-agent/index.js"
+    },
+    "./realtime-voice-agent/stt": {
+      "types": "./dist/agent/real-time-voice-agent/stt/index.d.ts",
+      "import": "./dist/agent/real-time-voice-agent/stt/index.js",
+      "require": "./dist/agent/real-time-voice-agent/stt/index.js"
+    },
     "./augmented_generation": {
       "types": "./dist/augmented_generation/index.d.ts",
       "import": "./dist/augmented_generation/index.js",
@@ -167,12 +177,15 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.94.0",
+    "@deepgram/sdk": "^5.7.0",
     "@e2b/code-interpreter": "^2.6.1",
+    "@elevenlabs/client": "^1.15.2",
     "@google/genai": "^2.8.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@pinecone-database/pinecone": "^4.0.0",
     "@roamhq/wrtc": "^0.10.0",
     "chromadb": "^3.4.3",
+    "elevenlabs": "^1.59.0",
     "mqtt": "^5.15.1",
     "openai": "^6.36.0",
     "runpod-sdk": "^1.1.2",

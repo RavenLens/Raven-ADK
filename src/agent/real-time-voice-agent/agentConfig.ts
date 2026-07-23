@@ -8,6 +8,7 @@ import { SchemaSkillStore } from "../skills/stores/schema";
 import { SchemaMemoryStore } from "../memory/stores/schema";
 import { AvatarOneStepPipeline, AvatarTwoStepPipeline } from "./live-avatar.pipelines";
 import { ParsedUrlQuery } from "node:querystring";
+import { STTModel, STTMode } from "./stt";
 
 /**
  * Specify to teel whether describe and optionally how the Plugin Execution
@@ -226,8 +227,15 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     };
     /** List with models fanned in RealTime communication */
     models: {
-      /** Model that converts speech-to-text */
-      stt: AgentModel;
+      /** Model that converts speech-to-text (either standard AgentModel or specialized STTModel instance) */
+      stt: AgentModel | STTModel;
+      /**
+       * Speech-to-text execution mode.
+       * - 'volatile': processes audio subchunks in real time on the fly as speech flows.
+       * - 'interim': processes the full audio buffer after user speech concludes.
+       * @default "volatile"
+       */
+      sttMode?: STTMode;
       /** Main Reasoning model */
       reasoning: AgentModel;
       /** 
