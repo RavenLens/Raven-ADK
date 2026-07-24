@@ -160,7 +160,7 @@ export interface TranscriberByPassConversation {
  */
 export interface TranscriberSpecific {
   routingStrategy: "fine-grained";
-  transcribeFor: Partial<Record<"conversation" | "tools" | "memory" | "skills", {
+  transcribeFor: Partial<Record<"conversation" | "stt-transcript" | "thoughts" | "tools" | "memory" | "skills", {
     /** Optional `systemPromptAddition` */
     systemPromptAddition?: string;
   }>>;

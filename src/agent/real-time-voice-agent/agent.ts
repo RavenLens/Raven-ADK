@@ -4,6 +4,44 @@ import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
 import { ReActAgent } from "../ReAct.agent";
 
+/** Store RTC Data Channels */
+export class ClientDataChannels {
+    private channels = new Map<string, { [channelName: string]: RTCDataChannel; }>();
+
+    /**
+     * 
+     * @param clientID - client Identifier
+     * @param throwError - specify as **true** to throw error when channel isn't specififed
+     * @throws {Error} - when client events channel wasn't specified and `throwError` param was speecified as **true**
+     * @returns 
+     */
+    getClientEventsChannel(clientID: string, throwError: true): RTCDataChannel;
+    getClientEventsChannel(clientID: string, throwError?: boolean): RTCDataChannel | undefined;
+    getClientEventsChannel(clientID: string, throwError?: boolean): RTCDataChannel | undefined {
+        const clientEventChannel = this.channels.get(clientID)?.["events"];
+
+        if (throwError && !clientEventChannel) {
+            throw(`Client '${clientID}' events channel isn't specified`);
+        }
+        
+        return clientEventChannel;
+    }
+
+    /**
+     * Sends event via `events` RTCDataChannel
+     * @throws {Error} - always when events channel doesn't exist
+    */
+    sendEvent(clientID: string, event: string, data?: any) {
+        const clientEventsChannel = this.getClientEventsChannel(clientID, true);
+        clientEventsChannel?.send(JSON.stringify({ event, data }));
+    }
+
+    /** Use to modify channels */
+    get operand() {
+        return this.channels;
+    }
+}
+
 export class RealTimeVoiceAgent<
     RealTimeVoiceAgentSkills extends RealTimeVoiceAgentSkillsSchema,
     Memory extends RealTimeVoiceAgentSchemaMemoryStore,
@@ -11,6 +49,10 @@ export class RealTimeVoiceAgent<
 > {
     config: RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills, Memory, HITL>;
     usersTrackID = new Map<string, string>([]);
+    /**
+     * Store RTCData channels
+    */
+    clientsDataChannels: ClientDataChannels = new ClientDataChannels();
     speekingUsers = new Map<string, number>();
     clientAudioStreams = new Map<string, MediaStream>();
     // Unblocking audio processing queues and STT stream sessions per client
@@ -33,9 +75,14 @@ export class RealTimeVoiceAgent<
         };
 
         // Configure ReAct Agent
+        /* TODO: Apply Transcriber System prompt addition from `model.transcriber` model */
         this.agent = new ReActAgent({
             model: config.agent.models.reasoning,
-            systemPrompt: config.agent.systemPrompt,
+            systemPrompt: `${config.agent.systemPrompt}
+
+## Thoughs generation rule
+- You work in the RealTimeVoice Agent pipeline where the thoughs are said aloud by another tts model, therefore you've to generate thoughts are able to be said in understandable way for human and simulatenously showing what you're doing
+            `,
             messages: config.agent.messages,
             skills: config.agent.skills,
             memory: config.agent.memory,
@@ -53,8 +100,12 @@ export class RealTimeVoiceAgent<
             abort: config.agent.abort
         })
         
-        this.internalEvents.on("interrupt-internal", () => {
+        /* TODO: Listen Agent events and send to client with `react-agent` initial prefix */
+        
+        /* Listen internal logic events */
+        this.internalEvents.on("interrupt-internal", (clientID: string) => {
             // TODO: Emit the interruption text event
+
             // TODO: Emit the interruption voice sound when configured on ReAct agent, when agent was talking
             // TODO: Flush the all generated content
         });
@@ -65,15 +116,23 @@ export class RealTimeVoiceAgent<
             isFinal,
             raw
         }: { clientID: string; transcript: string; isFinal: boolean; raw: any; }) => {
-            // TODO: Emit event
+            // Emit event
+            this.clientsDataChannels.sendEvent(clientID, "stt-transcript-interim", { transcript, isFinal });
+            
             // TODO: Generate the content right now as speculative decoding mechanism -> model generates thoughts base on the specified text by asking questions - Least-To-Most Technique -> then attach this to the full transcript prompt
+            // TODO: generate speculative events before and after
         });
         
         // It's the final trasncript arrived from the message
         this.internalEvents.on("stt-transcript-final", async ({ clientID, transcript, audioBuffer }: { clientID: string; transcript: string; audioBuffer: Buffer }) => {
-            // TODO: Emit event
-            // TODO: Adjust the system prompt for: - it's to generate thoughts in the way is redable
-            // TODO: Emit generation text event -> Retrive on frontend
+            // Emit Client Text Event
+            this.clientsDataChannels.sendEvent(clientID, "stt-transcript-final", { transcript });
+            
+            // TODO: Optionally allow the transcript to go through transcriber - add options to config, emit such event before and after, trigger transcriber model when specifiwd (transcriber before and after has to be specified)
+            
+            // Emit generation text event -> Retrive on frontend
+            this.clientsDataChannels.sendEvent(clientID, "realtime_agent_logic_start", { transcript });
+
             // TODO: Emit generation begin voice communication over webrtc channel
             
             const result = await this.agent.invoke({
@@ -87,7 +146,11 @@ export class RealTimeVoiceAgent<
             });
 
 
-            // TODO: Emit generated response text event
+            // Emit generated response text event
+            this.clientsDataChannels.sendEvent(clientID, "realtime_agent_logic_finish", {
+                result: result
+            });
+            
             // TODO: Emit generated response spoken annd send to client via WebRTC Channel
                 // TODO: Handle retriving via server
 
@@ -126,7 +189,7 @@ export class RealTimeVoiceAgent<
         this.devConsole(`[RealTimeVoiceAgent] User started speaking (ClientID: ${clientID}, Timestamp: ${timestamp})`, "log");
         
         // Interrupt ongoing background/synthesis actions when user starts talking
-        this.internalEvents.emit("interrupt-internal");
+        this.internalEvents.emit("interrupt-internal", clientID);
 
         // Terminate any existing speech session for this client
         const existingSession = this.activeSpeechSessions.get(clientID);
@@ -418,13 +481,43 @@ export class RealTimeVoiceAgent<
                                 this.usersTrackID.delete(clientID);
                             }
                         }
+                        else if (eventType === "abort") {
+                            /* TODO: Handle abort */
+                        }
                     }
                     catch(err) {
                         console.error(`RealTimeAgent: Data Channel error detected`, err);
                     }
                 };
 
-                receiveChannel.onopen = () => this.devConsole('Data channel is ready', "log");
+                receiveChannel.onopen = () => {
+                    this.devConsole('Data channel is ready', "log");
+
+                    // Add new channel
+                    const channel = this.clientsDataChannels.operand.get(clientID);
+                    if (channel) {
+                        channel[receiveChannel.label] = receiveChannel;
+                        this.clientsDataChannels.operand.set(clientID, channel);
+                    }
+                    else {
+                        this.clientsDataChannels.operand.set(clientID, {
+                            events: receiveChannel
+                        });
+                    }
+                };
+                receiveChannel.onclose = () => {
+                    // Delete Specific channel
+                    const channel = this.clientsDataChannels.operand.get(clientID);
+                    if (channel) {
+                        if (!Object.keys(channel).length) {
+                            this.clientsDataChannels.operand.delete(clientID);
+                        }
+                        else {
+                            delete channel[receiveChannel.label];
+                            this.clientsDataChannels.operand.set(clientID, channel);
+                        }
+                    }
+                }
             };
             
             // 1. Handle incoming media track from client
@@ -499,6 +592,7 @@ export class RealTimeVoiceAgent<
                 this.clientAudioStreams.delete(clientID);
                 this.speekingUsers.delete(clientID);
                 this.usersTrackID.delete(clientID);
+                // TODO: Handle agent abort
                 pc.close();
             });
         });
