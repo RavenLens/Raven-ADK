@@ -9,6 +9,7 @@ import { SchemaMemoryStore } from "../memory/stores/schema";
 import { AvatarOneStepPipeline, AvatarTwoStepPipeline } from "./live-avatar.pipelines";
 import { ParsedUrlQuery } from "node:querystring";
 import { STTModel, STTMode } from "./stt";
+import { MutliMemoryObject } from "../memory/memory";
 
 /**
  * Specify to teel whether describe and optionally how the Plugin Execution
@@ -40,11 +41,11 @@ export interface RealTimeVoiceAgentSkillsSchema extends ConfigLessSchemaSkillsSt
 export type ConfigLessSchemaMemoryStore = Omit<SchemaMemoryStore, "config">;
 export interface RealTimeVoiceAgentSchemaMemoryStore extends ConfigLessSchemaMemoryStore {
     config: SchemaMemoryStore["config"] & {
-        /**
-         * Give description for specific action that has to be communicated
-         * @default - no action is communicated if desired specify object for specific action
-         */
-        actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaMemoryStore, VoiceAgentDescriptionConfig>>;
+      /**
+       * Give description for specific action that has to be communicated
+       * @default - no action is communicated if desired specify object for specific action
+       */
+      actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaMemoryStore, VoiceAgentDescriptionConfig>>;
     }
 }
 
@@ -211,6 +212,18 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
    * - 'local': Running directly on the user's device. It doesn't spawn server (Edge AI)
    */
   executionMode: ExecutionRemoteMode | ExecutionLocalMode;
+  /**
+   * Describe what you want to have communicated by 'tts' model and correlated "avatar" model/pipeline
+   * @default "all"
+  */
+  communicationSpeechLevels?: {
+    thoughts: boolean;
+    tools: boolean;
+    skills: boolean;
+    hitl: boolean;
+    memory: boolean;
+    subagents: boolean;
+  } | "all";
   /** RealTime Agent configuration */
   agent: {
     /**
@@ -255,7 +268,7 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     /** Memory version with transcription definition */
     memory?: Memory | ({
       memory: Memory;
-    } & Memory)[];
+    } & MutliMemoryObject)[];
     /** Tools have defined description instruction */
     tools: RealTimeVoiceAgentTool<any, any>[];
     /** 

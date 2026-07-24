@@ -2,6 +2,7 @@ import { HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
 import { ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema } from "./agentConfig";
 import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
+import { ReActAgent } from "../ReAct.agent";
 
 export class RealTimeVoiceAgent<
     RealTimeVoiceAgentSkills extends RealTimeVoiceAgentSkillsSchema,
@@ -22,12 +23,74 @@ export class RealTimeVoiceAgent<
         sessionAbortController: AbortController;
     }>();
     private internalEvents: EventEmitter = new EventEmitter();
+    private agent: ReActAgent<any, any, any, any>;
     
     constructor(config: RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills, Memory, HITL>) {
         this.config = {
             ...config,
-            operationMode: config.operationMode ?? "production"
+            operationMode: config.operationMode ?? "production",
+            communicationSpeechLevels: config.communicationSpeechLevels ?? "all"
         };
+
+        // Configure ReAct Agent
+        this.agent = new ReActAgent({
+            model: config.agent.models.reasoning,
+            systemPrompt: config.agent.systemPrompt,
+            messages: config.agent.messages,
+            skills: config.agent.skills,
+            memory: config.agent.memory,
+            tools: config.agent.tools,
+            plugins: [
+                ...config.agent.plugins ?? [],
+                // TODO: Setup react agent plugins for: memory, tools, skills, thoughts (reasoning), HITL, subagents -> add these plugins implementations to ReAct Agent 
+            ],
+            hitl: config.agent.hitl?.hitl,
+            subagents: config.agent.subagents,
+            maximumReasoningRecalls: config.agent.maximumReasoningRecalls,
+            withConclusion: config.agent.withConclusion,
+            parallelizeSubagents: config.agent.parallelizeSubagents,
+            parallelTools: config.agent.parallelTools,
+            abort: config.agent.abort
+        })
+        
+        this.internalEvents.on("interrupt-internal", () => {
+            // TODO: Emit the interruption text event
+            // TODO: Emit the interruption voice sound when configured on ReAct agent, when agent was talking
+            // TODO: Flush the all generated content
+        });
+        
+        this.internalEvents.on("stt-transcript-interim", ({
+            clientID,
+            transcript,
+            isFinal,
+            raw
+        }: { clientID: string; transcript: string; isFinal: boolean; raw: any; }) => {
+            // TODO: Generate the content right now as speculative decoding mechanism -> model generates thoughts base on the specified text by asking questions - Least-To-Most Technique -> then attach this to the full transcript prompt
+        });
+        
+        // It's the final trasncript arrived from the message
+        this.internalEvents.on("stt-transcript-final", async ({ clientID, transcript, audioBuffer }: { clientID: string; transcript: string; audioBuffer: Buffer }) => {
+            // TODO: Adjust the system prompt for: - it's to generate thoughts in the way is redable
+            // TODO: Emit generation text event -> Retrive on frontend
+            // TODO: Emit generation begin voice communication over webrtc channel
+            
+            const result = await this.agent.invoke({
+                messages: [
+                    ...this.agent.messages,
+                    {
+                        type: "user",
+                        content: transcript
+                    }
+                ]
+            });
+
+
+            // TODO: Emit generated response text event
+            // TODO: Emit generated response spoken annd send to client via WebRTC Channel
+                // TODO: Handle retriving via server
+
+            // TODO: Add the pipeline avatar model to talk when start generation
+        });
     }
 
     /**
