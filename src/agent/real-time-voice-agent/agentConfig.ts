@@ -164,7 +164,7 @@ export interface TranscriberByPassConversation {
  */
 export interface TranscriberSpecific {
   routingStrategy: "fine-grained";
-  transcribeFor: Partial<Record<"conversation" | "after-full-stt-transcript" | "thoughts" | "tools" | "memory" | "skills", {
+  transcribeFor: Partial<Record<"conversation" | "after-full-stt-transcript" | "thoughts" | "tools" | "memory" | "skills" | "hitl", {
     model: AgentModel;
     /**
      * Optional `systemPromptAddition`
@@ -216,6 +216,19 @@ export interface ExecutionRemoteMode {
 export type AuthPayload = { query: ParsedUrlQuery, headers: IncomingHttpHeaders; };
 type UnitDependencyWrapper<ReturnType> = (clientID: string, authPayload: AuthPayload) => ReturnType;
 
+/**
+ * @param result - isn't specified to don't disable the RealtimeLiveAgentFunction 
+ */
+export interface CommunicationSpeechLevelsDetails {
+  afterFullSTTTranscript: boolean;
+  thoughts: boolean;
+  tools: boolean;
+  skills: boolean;
+  hitl: boolean;
+  memory: boolean;
+  subagents: boolean;
+}
+
 export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealTimeVoiceAgentSkillsSchema, Memory extends RealTimeVoiceAgentSchemaMemoryStore, HITL extends HITLTransportSchema> {
   /** 
    * The environment where the agent is executing.
@@ -227,15 +240,7 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
    * Describe what you want to have communicated by 'tts' model and correlated "avatar" model/pipeline
    * @default "all"
   */
-  communicationSpeechLevels?: {
-    afterTranscript: boolean;
-    thoughts: boolean;
-    tools: boolean;
-    skills: boolean;
-    hitl: boolean;
-    memory: boolean;
-    subagents: boolean;
-  } | "all";
+  communicationSpeechLevels?: CommunicationSpeechLevelsDetails | "all";
   /** RealTime Agent configuration */
   agent: {
     /**

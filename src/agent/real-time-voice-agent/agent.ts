@@ -4,7 +4,10 @@ import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
 import { ReActAgent } from "../ReAct.agent";
 
-type SpeechLevel = keyof Exclude<NonNullable<RealTimeVoiceAgentConfig<any, any, any>["communicationSpeechLevels"]>, string>;
+/**
+ * @param result - isn't included in `CommunicationSpeechLevelsDetails` to don't introduce the breaking feature
+*/
+type SpeechLevel = keyof Exclude<NonNullable<RealTimeVoiceAgentConfig<any, any, any>["communicationSpeechLevels"]>, string> | "result";
 
 /** Store RTC Data Channels */
 export class ClientDataChannels {
@@ -33,9 +36,20 @@ export class ClientDataChannels {
      * Sends event via `events` RTCDataChannel
      * @throws {Error} - always when events channel doesn't exist
     */
-    sendEvent(clientID: string, event: string, data?: any) {
+    emitEvent(clientID: string, event: string, data?: any) {
         const clientEventsChannel = this.getClientEventsChannel(clientID, true);
         clientEventsChannel?.send(JSON.stringify({ event, data }));
+    }
+
+    /**
+     * Specific to emit the transcription event
+     * @param clientID
+     * @param mode 
+     * @param body 
+     */
+    emitTranscriptionEvent(clientID: string, mode: "start" | "end", body: { place: Exclude<SpeechLevel, "result">; transcript: string; body?: Record<string, any>; }) {
+        const eventName = mode === "start" ? "realtime_agent.transcriber_start" : "realtime_agent.transcriber_finish";
+        this.emitEvent(clientID, eventName, body);
     }
 
     /** Use to modify channels */
@@ -92,7 +106,7 @@ export class RealTimeVoiceAgent<
             raw
         }: { clientID: string; transcript: string; isFinal: boolean; raw: any; }) => {
             // Emit event
-            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.stt-transcript-interim", { transcript, isFinal });
+            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.stt-transcript-interim", { transcript, isFinal });
             
             // TODO: Generate the content right now as speculative decoding mechanism -> model generates thoughts base on the specified text by asking questions - Least-To-Most Technique -> then attach this to the full transcript prompt
             // TODO: generate speculative events before and after
@@ -102,7 +116,7 @@ export class RealTimeVoiceAgent<
         // From this place agent begins execution
         this.internalEvents.on("stt-transcript-final", async ({ clientID, transcript, audioBuffer }: { clientID: string; transcript: string; audioBuffer: Buffer }) => {
             // Emit Client Text Event
-            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.stt-transcript-final", { transcript });
+            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.stt-transcript-final", { transcript });
             
             // Abort previous turn if running
             const client = this.activeClients.get(clientID);
@@ -134,7 +148,7 @@ export class RealTimeVoiceAgent<
                     // Produces the transcript with events
                     if (currentTranscriber) {
                         if (logicAbortController.signal.aborted) return;
-                        this.clientsDataChannels.sendEvent(clientID, "realtime_agent.transcriber_start", { originalTranscript: transcript });
+                        this.clientsDataChannels.emitTranscriptionEvent(clientID, "start", { place: "afterFullSTTTranscript", transcript: transcript });
                         
                         const transcriberResult = await currentTranscriber.model.invoke({
                             messages: [
@@ -157,7 +171,7 @@ export class RealTimeVoiceAgent<
                             transcript = aiMessage.content;
                         }
     
-                        this.clientsDataChannels.sendEvent(clientID, "realtime_agent.transcriber_finish", { transcribedTranscript: transcript });
+                        this.clientsDataChannels.emitTranscriptionEvent(clientID, "end", { place: "afterFullSTTTranscript", transcript: transcript });
                     }
                 }
             })()
@@ -165,7 +179,7 @@ export class RealTimeVoiceAgent<
             if (logicAbortController.signal.aborted) return;
 
             // Emit generation text event -> Retrive on frontend
-            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.logic_start", { transcript });
+            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.logic_start", { transcript });
 
             // Config ReAct Agent
             const { authParams } = this.activeClients.get(clientID)!;
@@ -256,9 +270,13 @@ export class RealTimeVoiceAgent<
                     }
                 }
                 
-                this.clientsDataChannels.sendEvent(clientID, `agent.${event}`, args.length === 1 ? args[0] : args);
+                this.clientsDataChannels.emitEvent(clientID, `agent.${event}`, args.length === 1 ? args[0] : args);
             });
 
+            // TODO: Register listening for plugin execution by: config.agent.plugins and tell when it's possible
+
+            // TODO: Optionally before agent run run the speech voice when was configured
+            
             // Call agent
             const result = await agent.invoke({
                 messages: [
@@ -272,34 +290,41 @@ export class RealTimeVoiceAgent<
 
 
             // Emit generated response text event
-            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.logic_finish", {
+            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.logic_finish", {
                 result: result
             });
             
             // Speak result
             const lastAiMessage = result.messages.filter(m => m.type === "ai").pop();
             if (lastAiMessage && "content" in lastAiMessage && typeof lastAiMessage.content === "string") {
-                this.speak(clientID, lastAiMessage.content, "afterTranscript", logicAbortController.signal);
+                this.speak(clientID, lastAiMessage.content, "result", logicAbortController.signal);
             }
             
             // TODO: Add the pipeline avatar model to talk when start generation
         });
     }
 
-    private canAgentCommunicate(checkForCaseLevel: SpeechLevel) {
+    /* 
+        TODO: Base on specific entry decide whether to speak: hitl, plugin, voice agent tool, subagent, memory, skills
+    */
+    private canAgentCommunicate(checkForCaseLevel: Exclude<SpeechLevel, "result">) {
         if (this.config.communicationSpeechLevels === "all") return true;
         if (typeof this.config.communicationSpeechLevels === "object") {
-            const levels = this.config.communicationSpeechLevels as Record<string, boolean>;
+            const levels = this.config.communicationSpeechLevels;
             return levels[checkForCaseLevel] === true;
         }
         return false;
     }
     
+    /*
+        TODO: Base on the config decide what to say and whether to user transcriber -> take the instruction for the specific unit
+        TODO: Emit events via client data channel: transcriber start, transcriber end, tts_start, tts_end - unify with simple function when it's possible
+    */
     private async speak(clientID: string, text: string, type: SpeechLevel, abort?: AbortSignal) {
         const client = this.activeClients.get(clientID);
         if (!client || !client.audioSource) return;
 
-        if (!this.canAgentCommunicate(type)) return;
+        if (type !== "result" && !this.canAgentCommunicate(type)) return;
 
         try {
             // Optional transcription adjustment
@@ -330,9 +355,9 @@ export class RealTimeVoiceAgent<
 
             // TTS
             const ttsModel = this.config.agent.models.tts;
-            const audioBuffer = await ttsModel.tts(textToSpeak, {
+            const audioBuffer = await ttsModel.tts(textToSpeak, { // TODO: Prepare better model then
                 model: (ttsModel as any).config?.model ?? "tts-1",
-                voice: "alloy" // Default voice
+                voice: "alloy" // Default voice // TODO: Configure voice
             } as any);
             
             if (audioBuffer && audioBuffer.length > 0) {
@@ -350,7 +375,7 @@ export class RealTimeVoiceAgent<
                 }
                 
                 // Notify client via data channel
-                this.clientsDataChannels.sendEvent(clientID, "realtime_agent.speech_segment", { type, text: textToSpeak });
+                this.clientsDataChannels.emitEvent(clientID, "realtime_agent.speech_segment", { type, text: textToSpeak });
             }
         } catch (err) {
             this.devConsole(`[RealTimeVoiceAgent] Speak error for ClientID ${clientID}: ${err}`, "error");
@@ -863,7 +888,7 @@ export class RealTimeVoiceAgent<
             }
 
             // Emit abort to client
-            this.clientsDataChannels.sendEvent(clientID, "abort", { reason: "Global abort triggered" });
+            this.clientsDataChannels.emitEvent(clientID, "abort", { reason: "Global abort triggered" });
 
             // Close connection
             client.pc.close();
