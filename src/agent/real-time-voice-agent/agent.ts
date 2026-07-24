@@ -65,11 +65,13 @@ export class RealTimeVoiceAgent<
             isFinal,
             raw
         }: { clientID: string; transcript: string; isFinal: boolean; raw: any; }) => {
+            // TODO: Emit event
             // TODO: Generate the content right now as speculative decoding mechanism -> model generates thoughts base on the specified text by asking questions - Least-To-Most Technique -> then attach this to the full transcript prompt
         });
         
         // It's the final trasncript arrived from the message
         this.internalEvents.on("stt-transcript-final", async ({ clientID, transcript, audioBuffer }: { clientID: string; transcript: string; audioBuffer: Buffer }) => {
+            // TODO: Emit event
             // TODO: Adjust the system prompt for: - it's to generate thoughts in the way is redable
             // TODO: Emit generation text event -> Retrive on frontend
             // TODO: Emit generation begin voice communication over webrtc channel

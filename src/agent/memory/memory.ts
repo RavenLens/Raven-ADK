@@ -13,13 +13,34 @@ export interface MutliMemoryObject {
     purpose: string;
 }
 
+export type MemoryActionType = "fetch" | "save" | "get_conclusion" | "set_conclusion";
+export type MemoryActionListener = (action: MemoryActionType, payload: Record<string, any>) => void;
+
 export class Memory<MemoryStore extends SchemaMemoryStore> {
     store: MemoryStore;
     multimemory?: MutliMemoryObject;
+    private actionListeners: Set<MemoryActionListener> = new Set();
 
     constructor(store: MemoryStore, multimemory?: MutliMemoryObject) {
         this.store = store;
         this.multimemory = multimemory;
+    }
+
+    onAction(listener: MemoryActionListener): () => void {
+        this.actionListeners.add(listener);
+        return () => this.actionListeners.delete(listener);
+    }
+
+    protected emitAction(action: MemoryActionType, payload: Record<string, any>): void {
+        const memoryName = this.multimemory?.name ?? "default";
+        const fullPayload = { memoryName, ...payload };
+        for (const listener of this.actionListeners) {
+            try {
+                listener(action, fullPayload);
+            } catch (err) {
+                console.warn("Memory action listener failed:", err);
+            }
+        }
     }
 
     constructMemoryToolsPrefixFromMultimemoryName() {
@@ -54,11 +75,23 @@ export class Memory<MemoryStore extends SchemaMemoryStore> {
      *  - Write - at the end of agent progress agent gets the 
     */
     async getMemoryConclusionFile() {
-        return await this.store.fetchMemoryConclusionFile();
+        if (typeof this.store.fetchMemoryConclusionFile !== "function") {
+            this.emitAction("get_conclusion", { conclusion: "" });
+            return "";
+        }
+        const conclusion = await this.store.fetchMemoryConclusionFile();
+        this.emitAction("get_conclusion", { conclusion });
+        return conclusion;
     }
 
     async setMemoryConclusionFile(fileContent: string) {
-        return await this.store.writeMemoryConclusionFile(fileContent);
+        if (typeof this.store.writeMemoryConclusionFile !== "function") {
+            this.emitAction("set_conclusion", { content: fileContent, status: false });
+            return false;
+        }
+        const status = await this.store.writeMemoryConclusionFile(fileContent);
+        this.emitAction("set_conclusion", { content: fileContent, status });
+        return status;
     }
 
     async getMemoryConclusionFileSystemPrompt() {
@@ -104,6 +137,7 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
                             words: this.normalizeFetchWords(args.words)
                         });
 
+                    this.emitAction("fetch", { params: args, result });
                     return this.serializeToolResult(result ?? null);
                 },
                 {
@@ -126,29 +160,34 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
                     });
 
                     if (!record) {
-                        return this.serializeToolResult({
+                        const res = {
                             saved: false,
                             reason: "Invalid memory record payload"
-                        });
+                        };
+                        this.emitAction("save", { record: args.record, result: res });
+                        return this.serializeToolResult(res);
                     }
 
                     const duplicate = await this.findDuplicateRecord(record, args.words);
 
                     if (duplicate) {
-                        return this.serializeToolResult({
+                        const res = {
                             saved: false,
                             skipped: true,
                             reason: "Matching memory already exists",
                             matchedMemory: duplicate
-                        });
+                        };
+                        this.emitAction("save", { record, result: res });
+                        return this.serializeToolResult(res);
                     }
 
                     const saved = await this.store.saveMemory(record);
-
-                    return this.serializeToolResult({
+                    const res = {
                         saved,
                         record
-                    });
+                    };
+                    this.emitAction("save", { record, result: res });
+                    return this.serializeToolResult(res);
                 },
                 {
                     toolName: `${tools_prefix}save_memory`,
@@ -179,19 +218,19 @@ ${conclusion || "Memory conclusion is empty - use tools to seek instead"}
     }
 
     private normalizeMemoryRecord(record: MemoryRecord): MemoryRecord | null {
-        const id = record.id.trim();
-        const title = record.title.trim();
-        const content = record.content.trim();
+        const id = record.id?.trim() ?? "";
+        const title = record.title?.trim() ?? "";
+        const content = record.content?.trim() ?? "";
 
         if (!id || !title || !content) {
             return null;
         }
 
-        const keywords = record.keywords
+        const keywords = (record.keywords ?? [])
             .map(keyword => keyword.trim())
             .filter(Boolean);
 
-        const subMemoryIds = record.subMemoryIds
+        const subMemoryIds = (record.subMemoryIds ?? [])
             .map((relation) => ({
                 id: relation.id.trim(),
                 ...(typeof relation.strength === "number" ? { strength: this.clampStrength(relation.strength) } : {})

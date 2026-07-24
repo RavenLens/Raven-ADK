@@ -42,6 +42,7 @@ The `ReActAgent` follows a sophisticated execution flow designed for efficiency:
 
 The `ReActAgent` is built on an event-driven architecture. You can listen to various stages of the agent's lifecycle:
 
+### Core Lifecycle Events
 | Event Name | Description | Parameters |
 | :--- | :--- | :--- |
 | `llm_result` | Emitted whenever the underlying LLM returns a result. | `result: LLMAnswer` |
@@ -51,8 +52,115 @@ The `ReActAgent` is built on an event-driven architecture. You can listen to var
 | `reasoning_end` | Emitted at the end of the reasoning phase with the full thought summary. | `thoughts: string` |
 | `result_producing_start` | Emitted when the agent begins to generate its final output. | - |
 | `abort` | Emitted once when the configured abort signal stops the run. | - |
-| `concluding_start` | Emitted when the agent starts generating the final conclusion summary. It's right before `result_producing_start` event | - |
-| `concluding_end` | Emitted when the final conclusion is ready. It's right before `result_producing_start` event | `conclusion: string` |
+| `concluding_start` | Emitted when the agent starts generating the final conclusion summary. | - |
+| `concluding_end` | Emitted when the final conclusion is ready. | `conclusion: string` |
+
+### Plugin Events
+| Event Name | Description | Parameters |
+| :--- | :--- | :--- |
+| `plugin_invoking` | Emitted just before a plugin execution starts. | `pluginName: string`, `executionWay: string \| string[]` |
+| `plugin_result` | Emitted after a plugin has finished its execution. | `pluginName: string`, `executionWay: string \| string[]`, `result: any` |
+
+### Subagent Events
+| Event Name | Description | Parameters |
+| :--- | :--- | :--- |
+| `subagent_called` | Emitted when a subagent is invoked/delegated. | `role: string`, `instruction: string` |
+| `subagent_result` | Emitted when a subagent returns its final result. | `role: string`, `instruction: string`, `result: ReActAgentInvokeResult` |
+| `subagent_reasoning` | Emitted during subagent reasoning phase. | `role: string`, `content: string` |
+| `subagent_tool_invoked` | Emitted before a subagent calls a tool. | `role: string`, `toolName: string`, `toolParams: any` |
+| `subagent_tool_executed` | Emitted after a subagent tool execution. | `role: string`, `toolName: string`, `toolParams: any`, `output: string` |
+
+### Human-In-The-Loop (HITL) Events
+| Event Name | Description | Parameters |
+| :--- | :--- | :--- |
+| `hitl_triggered` | Emitted when an HITL interaction is requested. | `type: string`, `payload: any` |
+| `hitl_result` | Emitted when the HITL response is received. | `type: string`, `payload: any`, `result: any` |
+| `hitl_tool_approval` | Emitted during tool-usage approval request. | `toolName: string`, `allowance: any` |
+| `hitl_question` | Emitted when a question is asked to the user. | `questionType: "abc" \| "open"`, `question: string`, `answer: any` |
+| `hitl_acceptance` | Emitted for confirmation/acceptance prompts. | `question: string`, `answer: any` |
+
+### Memory Events
+| Event Name | Description | Parameters |
+| :--- | :--- | :--- |
+| `memory_action` | Generic event for any memory operation. | `action: string`, `memoryName: string`, `details: any`, `result?: any` |
+| `memory_fetch` | Emitted right after memory retrieval. | `memoryName: string`, `params: any`, `result: any` |
+| `memory_save` | Emitted right after memory storage. | `memoryName: string`, `record: any`, `result: any` |
+| `memory_get_conclusion`| Emitted when memory file conclusion is read. | `memoryName: string`, `conclusion: string` |
+| `memory_set_conclusion`| Emitted after updating a memory conclusion. | `memoryName: string`, `content: string`, `status: boolean` |
+
+## Plugins
+Plugins allow you to extend or modify the `ReActAgent` behavior at various stages of its execution loop.
+
+### Plugin Execution Ways
+A plugin can hook into the following execution points:
+
+| Execution Way | Description |
+| :--- | :--- |
+| `before_agent_run` | Runs before the agent starts. Useful for modifying configuration. |
+| `after_agent_run` | Runs after the agent finishes. Ideal for cleanup or final summaries. |
+| `before_model_call` | Runs before an LLM call (main agent or subagents). |
+| `after_model_call` | Runs after an LLM call completes its run. |
+| `before_tool_invoked` | Runs before a specific tool is called. |
+| `after_tool_result` | Runs after a tool returns a result or error. |
+| `subagent_invoked` | Runs when a subagent delegation starts. |
+| `subagent_result` | Runs when a subagent returns its result. |
+| `subagent_thought` | Runs for each subagent reasoning chunk. |
+| `memory` | Runs for each memory interaction. |
+| `thought` | Runs for each reasoning chunk produced by the main agent. |
+
+### Plugin Context (`ExecutionFrom`)
+When a plugin's `execute` method is called, it receives an `executionFrom` object containing context about the current execution point:
+
+- `way`: The current `PluginExecutionWays`.
+- `nodeType`: Either `"main"`, `"subagent"`, or `"aside"`.
+- `toolName` / `toolParams` / `toolOutput`: Available when hooking into tool execution.
+- `subagentRole` / `subagentResult`: Available when hooking into subagent execution.
+- `memoryInstance` / `memoryPosition`: Available when hooking into memory operations.
+- `thought`: The actual reasoning string when hooking into thoughts.
+
+### Using Plugins
+You can use built-in plugins like `createTodoPlugin` or create your own custom plugins.
+
+#### Custom Plugin Example
+```typescript
+const myPlugin = {
+    name: "MyCustomPlugin",
+    executionWay: "before_tool_invoked",
+    async execute(executionFrom, agentConfig, graphState) {
+        console.log(`Plugin active! Tool ${executionFrom.toolName} is about to be called.`);
+        
+        // Return status true and optionally modify config/state
+        return {
+            status: true,
+            result: {
+                // Modified agentConfig or graphState
+            }
+        };
+    }
+};
+
+const agent = new ReActAgent({
+    // ...
+    plugins: [myPlugin]
+});
+```
+
+#### Predefined Plugins
+RavenADK provides several predefined plugins to handle complex behaviors:
+
+```typescript
+import { createTodoPlugin } from "@ravenlens/raven-adk/plugins/todo";
+import { createMemoryConclusionPlugin } from "@ravenlens/raven-adk/memory";
+
+const agent = new ReActAgent({
+    // ...
+    plugins: [
+        createTodoPlugin(todoStorage),
+        createMemoryConclusionPlugin(memoryAgentConfig)
+    ]
+});
+```
+
 
 ## Example Usage
 

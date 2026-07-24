@@ -4,10 +4,10 @@ export interface MemRLConfig<Store extends SchemaMemoryStore> {
     store: Store;
 }
 
-export class MemRL {
-    config: MemRLConfig;
+export class MemRL<Store extends SchemaMemoryStore = SchemaMemoryStore> {
+    config: MemRLConfig<Store>;
 
-    constructor(config: MemRLConfig) {
+    constructor(config: MemRLConfig<Store>) {
         this.config = config;
     }
 }

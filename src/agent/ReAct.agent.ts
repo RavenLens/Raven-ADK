@@ -12,7 +12,7 @@ import { MCPTool } from "./tools/mcp/mcpTools";
 import { Tool } from "./tools/tools";
 import { RunPod } from "../models/runpod";
 import z from "zod";
-import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
+import { HITLTransportSchema, EmitToolUsageBody, HITLToolAllowancePossibleAnswer } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
@@ -30,8 +30,30 @@ export type SubAgent = Pick<ReActAgentConfig<any, any, any>, "model" | "systemPr
  * * after_agent_run  - runs after agent has finish its execution. Ideal place to sumup its execution
  * * before_model_call - runs before the master and subagents model was launched
  * * after_model_call - runs after the master and subagents model has finished its run
+ * * before_tool_invoked - runs before a tool is invoked
+ * * after_tool_result - runs after a tool returns its result or error
+ * * subagent_invoked - runs when a subagent is invoked
+ * * subagent_result - runs when a subagent returns its result
+ * * subagent_thought - runs when a subagent produces a thought/reasoning
+ * * memory - runs for each memory position/system
+ * * memory_position - synonym alias for memory
+ * * thought - runs when a thought/reasoning is produced
+ * * thoughts - synonym alias for thought
  */
-export type PluginExecutionWays = "before_agent_run" | "after_agent_run" | "before_model_call" | "after_model_call";
+export type PluginExecutionWays =
+    | "before_agent_run"
+    | "after_agent_run"
+    | "before_model_call"
+    | "after_model_call"
+    | "before_tool_invoked"
+    | "after_tool_result"
+    | "subagent_invoked"
+    | "subagent_result"
+    | "subagent_thought"
+    | "memory"
+    | "memory_position"
+    | "thought"
+    | "thoughts";
 
 export interface ExecutionFrom {
     way: PluginExecutionWays;
@@ -42,6 +64,24 @@ export interface ExecutionFrom {
      */
     nodeName?: string;
     nodeModel?: AgentModel;
+
+    /** Tool information when way is 'before_tool_invoked' or 'after_tool_result' */
+    toolName?: string;
+    toolParams?: Record<string, any>;
+    toolOutput?: string;
+    toolError?: string;
+
+    /** Subagent information when way is 'subagent_invoked', 'subagent_result', or 'subagent_thought' */
+    subagentRole?: string;
+    subagentInstruction?: string;
+    subagentResult?: ReActAgentInvokeResult;
+
+    /** Memory information when way is 'memory' or 'memory_position' */
+    memoryInstance?: MemoryInterface<any>;
+    memoryPosition?: number;
+
+    /** Thought content when way is 'thought', 'thoughts', or 'subagent_thought' */
+    thought?: string;
 }
 
 export interface ReActAgentPluginSpec {
@@ -122,6 +162,27 @@ interface ReActAgentEvents extends SkillEvents {
     concluding_end: (conclusion: string) => void | Promise<void>;
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
     plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => void | Promise<void>;
+
+    /** Subagent events */
+    subagent_called: (role: string, instruction: string) => void | Promise<void>;
+    subagent_result: (role: string, instruction: string, result: ReActAgentInvokeResult) => void | Promise<void>;
+    subagent_reasoning: (role: string, content: string) => void | Promise<void>;
+    subagent_tool_invoked: (role: string, toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
+    subagent_tool_executed: (role: string, toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
+
+    /** HITL events */
+    hitl_triggered: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>) => void | Promise<void>;
+    hitl_result: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>, result: any) => void | Promise<void>;
+    hitl_tool_approval: (toolName: string, allowance: EmitToolUsageBody) => void | Promise<void>;
+    hitl_question: (questionType: "abc" | "open", question: string, answer: any) => void | Promise<void>;
+    hitl_acceptance: (question: string, answer: HITLToolAllowancePossibleAnswer) => void | Promise<void>;
+
+    /** Memory events */
+    memory_action: (action: "fetch" | "save" | "get_conclusion" | "set_conclusion", memoryName: string, details: Record<string, any>, result?: any) => void | Promise<void>;
+    memory_fetch: (memoryName: string, params: Record<string, any>, result: any) => void | Promise<void>;
+    memory_save: (memoryName: string, record: any, result: any) => void | Promise<void>;
+    memory_get_conclusion: (memoryName: string, conclusion: string) => void | Promise<void>;
+    memory_set_conclusion: (memoryName: string, content: string, status: boolean) => void | Promise<void>;
 }
 
 interface ReActAgentInvokeResult {
@@ -164,6 +225,107 @@ interface ReActAgentStreamEventMap {
     concluding_end: {
         content: {
             conclusion: string;
+        };
+    };
+    subagent_called: {
+        content: {
+            role: string;
+            instruction: string;
+        };
+    };
+    subagent_result: {
+        content: {
+            role: string;
+            instruction: string;
+            result: ReActAgentInvokeResult;
+        };
+    };
+    subagent_reasoning: {
+        content: {
+            role: string;
+            reasoning: string;
+        };
+    };
+    subagent_tool_invoked: {
+        content: {
+            role: string;
+            toolName: string;
+            toolParams: Record<string, any>;
+        };
+    };
+    subagent_tool_executed: {
+        content: {
+            role: string;
+            toolName: string;
+            toolParams: Record<string, any>;
+            output: string;
+        };
+    };
+    hitl_triggered: {
+        content: {
+            type: "tool_usage" | "question_abc" | "question_open" | "acceptance";
+            payload: Record<string, any>;
+        };
+    };
+    hitl_result: {
+        content: {
+            type: "tool_usage" | "question_abc" | "question_open" | "acceptance";
+            payload: Record<string, any>;
+            result: any;
+        };
+    };
+    hitl_tool_approval: {
+        content: {
+            toolName: string;
+            allowance: EmitToolUsageBody;
+        };
+    };
+    hitl_question: {
+        content: {
+            questionType: "abc" | "open";
+            question: string;
+            answer: any;
+        };
+    };
+    hitl_acceptance: {
+        content: {
+            question: string;
+            answer: HITLToolAllowancePossibleAnswer;
+        };
+    };
+    memory_action: {
+        content: {
+            action: "fetch" | "save" | "get_conclusion" | "set_conclusion";
+            memoryName: string;
+            details: Record<string, any>;
+            result?: any;
+        };
+    };
+    memory_fetch: {
+        content: {
+            memoryName: string;
+            params: Record<string, any>;
+            result: any;
+        };
+    };
+    memory_save: {
+        content: {
+            memoryName: string;
+            record: any;
+            result: any;
+        };
+    };
+    memory_get_conclusion: {
+        content: {
+            memoryName: string;
+            conclusion: string;
+        };
+    };
+    memory_set_conclusion: {
+        content: {
+            memoryName: string;
+            content: string;
+            status: boolean;
         };
     };
 }
@@ -406,9 +568,13 @@ export class ReActAgent
                 return config.memory.map(memoryWithPurpose => {
                     const { memory, ...multimemory } = memoryWithPurpose;
                     return new MemoryInterface(memory, multimemory);
-                })
+                });
             }
-            else return new MemoryInterface(config.memory);
+            else if (typeof config.memory === "object" && "memory" in config.memory) {
+                const { memory, ...multimemory } = config.memory as any;
+                return new MemoryInterface(memory, multimemory);
+            }
+            else return new MemoryInterface(config.memory as any);
         })();
         this.usedTokens = {
             input: 0,
@@ -420,6 +586,12 @@ export class ReActAgent
         if ((this.agentConfig.model as any).onEvent) {
             (this.agentConfig.model as any).onEvent("reasoning", (content: string) => {
                 this.emitEvent("reasoning", content);
+                void this.runPlugins("thought", {
+                    nodeType: "main",
+                    nodeName: "main_node",
+                    nodeModel: this.agentConfig.model,
+                    thought: content
+                });
             });
         }
 
@@ -479,6 +651,8 @@ export class ReActAgent
                 const memoryTools = this.agentMemoryInterface.createMemoryTools();
                 addMemoryTools(memoryTools);
             }
+
+            this.setupMemoryEvents();
         }
 
         // Add hitl handling
@@ -491,6 +665,8 @@ export class ReActAgent
                     this.agentConfig.tools.push(tool);
                 }
             }
+
+            this.setupHITLEvents();
         }
 
         // Subagents are configured and will be spawned as graph nodes below
@@ -583,6 +759,16 @@ export class ReActAgent
 
                 if (reasoningMessages.length > 0) {
                     this.emitEvent("reasoning_end", reasoningMessages);
+                    const thoughtPlugins = await this.abortable.runAbortable(() => this.runPlugins("thought", {
+                        nodeType: "main",
+                        nodeName: "main_node",
+                        nodeModel: this.agentConfig.model,
+                        thought: reasoningMessages
+                    }));
+
+                    if (thoughtPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                        return this.abortable.createAbortedNodeResult(currentState);
+                    }
                 }
 
                 // Decide to call tools once again - check for top-level tool messages or nested calledTools in AI messages
@@ -678,9 +864,66 @@ export class ReActAgent
                                 });
 
                                 subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
-                                subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
-                                subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
-                                subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
+                                subagent.onEvent("tool_invoked", (name, params) => {
+                                    this.emitEvent("tool_invoked", name, params);
+                                    this.emitEvent("subagent_tool_invoked", agent.role, name, params);
+                                });
+                                subagent.onEvent("tool_executed", (name, params, out) => {
+                                    this.emitEvent("tool_executed", name, params, out);
+                                    this.emitEvent("subagent_tool_executed", agent.role, name, params, out);
+                                });
+                                subagent.onEvent("reasoning", (content) => {
+                                    this.emitEvent("reasoning", content);
+                                    this.emitEvent("subagent_reasoning", agent.role, content);
+                                });
+                                subagent.onEvent("reasoning_end", async (thoughts) => {
+                                    this.emitEvent("reasoning_end", thoughts);
+                                    this.emitEvent("subagent_reasoning", agent.role, thoughts);
+                                    await this.abortable.runAbortable(() => this.runPlugins("subagent_thought", {
+                                        nodeType: "subagent",
+                                        nodeName: agent.role,
+                                        nodeModel: agent.model,
+                                        subagentRole: agent.role,
+                                        thought: thoughts
+                                    }));
+                                    await this.abortable.runAbortable(() => this.runPlugins("thought", {
+                                        nodeType: "subagent",
+                                        nodeName: agent.role,
+                                        nodeModel: agent.model,
+                                        subagentRole: agent.role,
+                                        thought: thoughts
+                                    }));
+                                });
+                                subagent.onEvent("hitl_triggered", (type, payload) => this.emitEvent("hitl_triggered", type, payload));
+                                subagent.onEvent("hitl_result", (type, payload, res) => this.emitEvent("hitl_result", type, payload, res));
+                                subagent.onEvent("hitl_tool_approval", (name, allowance) => this.emitEvent("hitl_tool_approval", name, allowance));
+                                subagent.onEvent("hitl_question", (qType, q, ans) => this.emitEvent("hitl_question", qType, q, ans));
+                                subagent.onEvent("hitl_acceptance", (q, ans) => this.emitEvent("hitl_acceptance", q, ans));
+                                subagent.onEvent("memory_action", (action, name, details, res) => this.emitEvent("memory_action", action, name, details, res));
+                                subagent.onEvent("memory_fetch", (name, params, res) => this.emitEvent("memory_fetch", name, params, res));
+                                subagent.onEvent("memory_save", (name, rec, res) => this.emitEvent("memory_save", name, rec, res));
+                                subagent.onEvent("memory_get_conclusion", (name, conc) => this.emitEvent("memory_get_conclusion", name, conc));
+                                subagent.onEvent("memory_set_conclusion", (name, content, status) => this.emitEvent("memory_set_conclusion", name, content, status));
+
+                                this.emitEvent("subagent_called", agent.role, instruction);
+
+                                const subagentInvokedPlugins = await this.abortable.runAbortable(() => this.runPlugins("subagent_invoked", {
+                                    nodeType: "subagent",
+                                    nodeName: agent.role,
+                                    nodeModel: agent.model,
+                                    subagentRole: agent.role,
+                                    subagentInstruction: instruction
+                                }));
+
+                                if (subagentInvokedPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                    return {
+                                        role: agent.role,
+                                        instruction,
+                                        newMessages: [],
+                                        recall: null,
+                                        aborted: true
+                                    };
+                                }
 
                                 const beforeSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("before_model_call", {
                                     nodeType: "subagent",
@@ -711,8 +954,28 @@ export class ReActAgent
                                 }
 
                                 const result = subagentResultExecution;
+                                this.emitEvent("subagent_result", agent.role, instruction, result);
 
                                 if (result.state.isAborted) {
+                                    return {
+                                        role: agent.role,
+                                        instruction,
+                                        newMessages: [],
+                                        recall: null,
+                                        aborted: true
+                                    };
+                                }
+
+                                const subagentResultPlugins = await this.abortable.runAbortable(() => this.runPlugins("subagent_result", {
+                                    nodeType: "subagent",
+                                    nodeName: agent.role,
+                                    nodeModel: agent.model,
+                                    subagentRole: agent.role,
+                                    subagentInstruction: instruction,
+                                    subagentResult: result
+                                }));
+
+                                if (subagentResultPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
                                     return {
                                         role: agent.role,
                                         instruction,
@@ -836,7 +1099,10 @@ export class ReActAgent
 
                             return {
                                 callNode: role,
-                                stateUpdate: currentState
+                                stateUpdate: {
+                                    ...currentState,
+                                    subagentInstruction: instruction
+                                }
                             };
                         }
                     } else {
@@ -969,6 +1235,21 @@ export class ReActAgent
                         const approvalResult = approvalByCallIndex.get(callIndex);
 
                         if (approvalResult && "errorMessage" in approvalResult) {
+                            await this.abortable.runAbortable(() => this.runPlugins("before_tool_invoked", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams
+                            }));
+                            await this.abortable.runAbortable(() => this.runPlugins("after_tool_result", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams,
+                                toolOutput: approvalResult.errorMessage,
+                                toolError: approvalResult.errorMessage
+                            }));
+
                             return {
                                 ...tool,
                                 tool_name: toolName,
@@ -980,6 +1261,20 @@ export class ReActAgent
 
                         if (approvalResult && approvalResult.answer === "deny") {
                             const denyOutput = `Tool "${toolName}" execution was denied by HITL (${approvalResult.reason}).`;
+                            await this.abortable.runAbortable(() => this.runPlugins("before_tool_invoked", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams
+                            }));
+                            await this.abortable.runAbortable(() => this.runPlugins("after_tool_result", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams,
+                                toolOutput: denyOutput,
+                                toolError: denyOutput
+                            }));
 
                             return {
                                 ...tool,
@@ -993,6 +1288,20 @@ export class ReActAgent
 
                         if (!definedTool) {
                             const missingToolError = `Tool couldn't be executed because tool with name "${toolName}" does not exist`;
+                            await this.abortable.runAbortable(() => this.runPlugins("before_tool_invoked", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams
+                            }));
+                            await this.abortable.runAbortable(() => this.runPlugins("after_tool_result", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams,
+                                toolOutput: missingToolError,
+                                toolError: missingToolError
+                            }));
 
                             return {
                                 ...tool,
@@ -1008,6 +1317,12 @@ export class ReActAgent
                         }
 
                         this.emitEvent("tool_invoked", toolName, toolParams);
+                        await this.abortable.runAbortable(() => this.runPlugins("before_tool_invoked", {
+                            nodeType: "main",
+                            nodeName: "tools_node",
+                            toolName,
+                            toolParams
+                        }));
 
                         try {
                             const toolOutputExecution = await this.abortable.runAbortable(() => definedTool instanceof MCPTool
@@ -1020,6 +1335,13 @@ export class ReActAgent
 
                             const toolOutput = toolOutputExecution;
                             this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
+                            await this.abortable.runAbortable(() => this.runPlugins("after_tool_result", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams,
+                                toolOutput
+                            }));
 
                             return {
                                 ...tool,
@@ -1035,6 +1357,14 @@ export class ReActAgent
 
                             const errorMessage = error instanceof Error ? error.message : "Unknown tool execution error";
                             const toolFailureOutput = `Tool "${toolName}" failed during execution: ${errorMessage}`;
+                            await this.abortable.runAbortable(() => this.runPlugins("after_tool_result", {
+                                nodeType: "main",
+                                nodeName: "tools_node",
+                                toolName,
+                                toolParams,
+                                toolOutput: toolFailureOutput,
+                                toolError: errorMessage
+                            }));
 
                             return {
                                 ...tool,
@@ -1128,11 +1458,62 @@ export class ReActAgent
                     });
 
                     subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
-                    subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
-                    subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
-                    subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
+                    subagent.onEvent("tool_invoked", (name, params) => {
+                        this.emitEvent("tool_invoked", name, params);
+                        this.emitEvent("subagent_tool_invoked", agent.role, name, params);
+                    });
+                    subagent.onEvent("tool_executed", (name, params, out) => {
+                        this.emitEvent("tool_executed", name, params, out);
+                        this.emitEvent("subagent_tool_executed", agent.role, name, params, out);
+                    });
+                    subagent.onEvent("reasoning", (content) => {
+                        this.emitEvent("reasoning", content);
+                        this.emitEvent("subagent_reasoning", agent.role, content);
+                    });
+                    subagent.onEvent("reasoning_end", async (thoughts) => {
+                        this.emitEvent("reasoning_end", thoughts);
+                        this.emitEvent("subagent_reasoning", agent.role, thoughts);
+                        await this.abortable.runAbortable(() => this.runPlugins("subagent_thought", {
+                            nodeType: "subagent",
+                            nodeName: agent.role,
+                            nodeModel: agent.model,
+                            subagentRole: agent.role,
+                            thought: thoughts
+                        }));
+                        await this.abortable.runAbortable(() => this.runPlugins("thought", {
+                            nodeType: "subagent",
+                            nodeName: agent.role,
+                            nodeModel: agent.model,
+                            subagentRole: agent.role,
+                            thought: thoughts
+                        }));
+                    });
+                    subagent.onEvent("hitl_triggered", (type, payload) => this.emitEvent("hitl_triggered", type, payload));
+                    subagent.onEvent("hitl_result", (type, payload, res) => this.emitEvent("hitl_result", type, payload, res));
+                    subagent.onEvent("hitl_tool_approval", (name, allowance) => this.emitEvent("hitl_tool_approval", name, allowance));
+                    subagent.onEvent("hitl_question", (qType, q, ans) => this.emitEvent("hitl_question", qType, q, ans));
+                    subagent.onEvent("hitl_acceptance", (q, ans) => this.emitEvent("hitl_acceptance", q, ans));
+                    subagent.onEvent("memory_action", (action, name, details, res) => this.emitEvent("memory_action", action, name, details, res));
+                    subagent.onEvent("memory_fetch", (name, params, res) => this.emitEvent("memory_fetch", name, params, res));
+                    subagent.onEvent("memory_save", (name, rec, res) => this.emitEvent("memory_save", name, rec, res));
+                    subagent.onEvent("memory_get_conclusion", (name, conc) => this.emitEvent("memory_get_conclusion", name, conc));
+                    subagent.onEvent("memory_set_conclusion", (name, content, status) => this.emitEvent("memory_set_conclusion", name, content, status));
 
-                    
+                    const subagentInstruction = (state as any).subagentInstruction || (this.agentConfig.messages.at(-1)?.content ?? "").replace(/^\[CALLING SUBAGENT: [^\]]+\] Task: /, "");
+                    this.emitEvent("subagent_called", agent.role, subagentInstruction);
+
+                    const subagentInvokedPlugins = await this.abortable.runAbortable(() => this.runPlugins("subagent_invoked", {
+                        nodeType: "subagent",
+                        nodeName: agent.role,
+                        nodeModel: agent.model,
+                        subagentRole: agent.role,
+                        subagentInstruction
+                    }));
+
+                    if (subagentInvokedPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                        return this.abortable.createAbortedNodeResult(state);
+                    }
+
                     // Run plugins // WARNING: As far as subagents inherits the messages context from the rest of models the compress algorithm will work
                     const beforeSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("before_model_call", {
                         nodeType: "subagent",
@@ -1153,8 +1534,22 @@ export class ReActAgent
                     }
 
                     const result = subagentResultExecution;
+                    this.emitEvent("subagent_result", agent.role, subagentInstruction, result);
 
                     if (result.state.isAborted) {
+                        return this.abortable.createAbortedNodeResult(state);
+                    }
+
+                    const subagentResultPlugins = await this.abortable.runAbortable(() => this.runPlugins("subagent_result", {
+                        nodeType: "subagent",
+                        nodeName: agent.role,
+                        nodeModel: agent.model,
+                        subagentRole: agent.role,
+                        subagentInstruction,
+                        subagentResult: result
+                    }));
+
+                    if (subagentResultPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
                         return this.abortable.createAbortedNodeResult(state);
                     }
 
@@ -1243,51 +1638,66 @@ export class ReActAgent
         this.AgentGraph = reactAgentGraph;
     }
 
-    private async buildWrappedSystemPrompt(userSystemPrompt: string): Promise<string> {
+    private cachedWrappedPromptPromise?: Promise<string>;
+
+    private buildWrappedSystemPrompt(userSystemPrompt: string): Promise<string> {
         const cleanedUserPrompt = userSystemPrompt.trim();
 
         if (
             this.cachedUserSystemPrompt === cleanedUserPrompt &&
             this.cachedWrappedSystemPrompt !== undefined &&
             this.cachedToolsCount === this.agentConfig.tools.length &&
-            this.cachedSubagentsCount === (this.agentConfig.subagents?.length ?? 0)
+            this.cachedSubagentsCount === (this.agentConfig.subagents?.length ?? 0) &&
+            this.cachedWrappedPromptPromise !== undefined
         ) {
-            return this.cachedWrappedSystemPrompt;
+            return this.cachedWrappedPromptPromise;
         }
 
-        const maxRecalls = this.getMaximumReasoningRecalls();
-        const recallBoundary = `You can request at most ${maxRecalls} internal self-recalls in this run.`;
+        this.cachedUserSystemPrompt = cleanedUserPrompt;
+        this.cachedToolsCount = this.agentConfig.tools.length;
+        this.cachedSubagentsCount = this.agentConfig.subagents?.length ?? 0;
 
-        let baseSystemPrompt = REACT_SYSTEM_PROMPT;
+        this.cachedWrappedPromptPromise = (async () => {
+            const maxRecalls = this.getMaximumReasoningRecalls();
+            const recallBoundary = `You can request at most ${maxRecalls} internal self-recalls in this run.`;
 
-        if (this.agentSkillsInterface) {
-            baseSystemPrompt += `\n\n## Explore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
-            baseSystemPrompt += `\n\n## Execute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
+            let baseSystemPrompt = REACT_SYSTEM_PROMPT;
 
-            if (this.agentSkillsInterface.config.dynamicSkillCreation || this.agentSkillsInterface.config.dynamicSkillRelocation || this.agentSkillsInterface.config.dynamicSkillRemoval) {
-                baseSystemPrompt += `\n\n## Create and manage skills as needed according to this specification:\n${this.agentSkillsInterface.createSkillsManagementPrompt()}`;
+            if (this.agentSkillsInterface) {
+                baseSystemPrompt += `\n\n## Explore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
+                baseSystemPrompt += `\n\n## Execute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
+
+                if (this.agentSkillsInterface.config.dynamicSkillCreation || this.agentSkillsInterface.config.dynamicSkillRelocation || this.agentSkillsInterface.config.dynamicSkillRemoval) {
+                    baseSystemPrompt += `\n\n## Create and manage skills as needed according to this specification:\n${this.agentSkillsInterface.createSkillsManagementPrompt()}`;
+                }
+
+                const getListOfAvaibalbeSkills = await this.agentSkillsInterface.getListOfAvailableSkillsString();
+                baseSystemPrompt += `\n\n## Available skills list:\n${getListOfAvaibalbeSkills}`;
             }
 
-            const getListOfAvaibalbeSkills = await this.agentSkillsInterface.getListOfAvailableSkillsString();
-            baseSystemPrompt += `\n\n## Available skills list:\n${getListOfAvaibalbeSkills}`;
-        }
+            if (this.agentMemoryInterface) {
+                if (this.agentMemoryInterface instanceof Array) {
+                    const memorySystemsList = await Promise.all(
+                        this.agentMemoryInterface.map(async (memoryInstance, index) => {
+                            await this.runPlugins("memory", {
+                                nodeType: "main",
+                                nodeName: "main_node",
+                                memoryInstance,
+                                memoryPosition: index
+                            });
 
-        if (this.agentMemoryInterface) {
-            if (this.agentMemoryInterface instanceof Array) {
-                const memorySystemsList = await Promise.all(
-                    this.agentMemoryInterface.map(async memoryInstance => {
-                        const conclusion = await memoryInstance.getMemoryConclusionFile();
-                        const hasToRemember = memoryInstance.store.config.hasToRemember;
-                        
-                        return [
-                            memoryInstance.createMemorySystemPrompt(),
-                            hasToRemember ? `**Mandatory facts to track for this system**:\n> ${hasToRemember}` : undefined,
-                            `**Consolidated Conclusion for this system**:\n${conclusion || "No prior conclusion available. Use tools to query or start a new summary."}`
-                        ].filter(Boolean).join("\n\n");
-                    })
-                );
-                
-                baseSystemPrompt += `\n\n\n\n## Memory and Recall Systems:
+                            const conclusion = await memoryInstance.getMemoryConclusionFile();
+                            const hasToRemember = memoryInstance.store.config.hasToRemember;
+                            
+                            return [
+                                memoryInstance.createMemorySystemPrompt(),
+                                hasToRemember ? `**Mandatory facts to track for this system**:\n> ${hasToRemember}` : undefined,
+                                `**Consolidated Conclusion for this system**:\n${conclusion || "No prior conclusion available. Use tools to query or start a new summary."}`
+                            ].filter(Boolean).join("\n\n");
+                        })
+                    );
+                    
+                    baseSystemPrompt += `\n\n\n\n## Memory and Recall Systems:
 You have access to multiple specialized memory systems. Each system handles a distinct domain of knowledge.
 
 ### Rules of Engagement:
@@ -1297,12 +1707,19 @@ You have access to multiple specialized memory systems. Each system handles a di
 
 ${memorySystemsList.join("\n\n---\n\n")}
 `;
-            }
-            else {
-                const memoryConclusionSystemPrompt = await this.agentMemoryInterface.getMemoryConclusionFile();
-                const hasToRemember = this.agentMemoryInterface.store.config.hasToRemember;
-                
-                baseSystemPrompt += `\n\n\n\n## Memory and Recall System:
+                }
+                else {
+                    await this.runPlugins("memory", {
+                        nodeType: "main",
+                        nodeName: "main_node",
+                        memoryInstance: this.agentMemoryInterface,
+                        memoryPosition: 0
+                    });
+
+                    const memoryConclusionSystemPrompt = await this.agentMemoryInterface.getMemoryConclusionFile();
+                    const hasToRemember = this.agentMemoryInterface.store.config?.hasToRemember;
+                    
+                    baseSystemPrompt += `\n\n\n\n## Memory and Recall System:
 ${this.agentMemoryInterface.createMemorySystemPrompt()}
 
 ${hasToRemember ? `**Mandatory facts to track**:\n> ${hasToRemember}` : ""}
@@ -1310,36 +1727,36 @@ ${hasToRemember ? `**Mandatory facts to track**:\n> ${hasToRemember}` : ""}
 ### Consolidated Conclusion:
 ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to seek knowledge."}
 `;
+                }
             }
-        }
 
-        if (this.agentConfig.hitl) {
-            baseSystemPrompt += `\n\nQuestioning of user. Use questioning tools accroding to this specification to ask user about whatever:\n${this.agentConfig.hitl.questionHITLPrompt}`;
-        }
-
-        if (this.agentConfig.subagents?.length) {
-            baseSystemPrompt += "\n\n## Subagents available:\n";
-            baseSystemPrompt += "You can delegate tasks to specialized subagents. To call a subagent, reply ONLY with:\n";
-            baseSystemPrompt += `  [[RAVEN_CALL_SUBAGENT]] <Role> | <Detailed instruction for the subagent>\n`;
-            baseSystemPrompt += "Available subagents:\n";
-            for (const agent of this.agentConfig.subagents) {
-                baseSystemPrompt += `- Role: "${agent.role}", Description: "${agent.roleDescription}"\n`;
+            if (this.agentConfig.hitl) {
+                baseSystemPrompt += `\n\nQuestioning of user. Use questioning tools accroding to this specification to ask user about whatever:\n${this.agentConfig.hitl.questionHITLPrompt}`;
             }
-        }
 
-        let result;
-        if (!cleanedUserPrompt.length) {
-            result = `${baseSystemPrompt}\n${recallBoundary}`;
-        } else {
-            result = `${baseSystemPrompt}\n${recallBoundary}\n\nUser system prompt:\n${cleanedUserPrompt}`;
-        }
+            if (this.agentConfig.subagents?.length) {
+                baseSystemPrompt += "\n\n## Subagents available:\n";
+                baseSystemPrompt += "You can delegate tasks to specialized subagents. To call a subagent, reply ONLY with:\n";
+                baseSystemPrompt += `  [[RAVEN_CALL_SUBAGENT]] <Role> | <Detailed instruction for the subagent>\n`;
+                baseSystemPrompt += "Available subagents:\n";
+                for (const agent of this.agentConfig.subagents) {
+                    baseSystemPrompt += `- Role: "${agent.role}", Description: "${agent.roleDescription}"\n`;
+                }
+            }
 
-        this.cachedUserSystemPrompt = cleanedUserPrompt;
-        this.cachedWrappedSystemPrompt = result;
-        this.cachedToolsCount = this.agentConfig.tools.length;
-        this.cachedSubagentsCount = this.agentConfig.subagents?.length ?? 0;
+            let result;
+            if (!cleanedUserPrompt.length) {
+                result = `${baseSystemPrompt}\n${recallBoundary}`;
+            } else {
+                result = `${baseSystemPrompt}\n${recallBoundary}\n\nUser system prompt:\n${cleanedUserPrompt}`;
+            }
 
-        return result;
+            this.cachedWrappedSystemPrompt = result;
+            return result;
+        })();
+
+        this.cachedWrappedSystemPrompt = this.cachedWrappedPromptPromise as any;
+        return this.cachedWrappedPromptPromise;
     }
 
     private getMaximumReasoningRecalls(): number {
@@ -1646,27 +2063,131 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
         }
     }
 
+    private systemPromptPromise?: Promise<void>;
+
     private async ensureWrappedSystemPrompt(): Promise<void> {
-        const wrappedSystemPrompt = await this.buildWrappedSystemPrompt(this.agentConfig.systemPrompt);
+        if (!this.systemPromptPromise) {
+            this.systemPromptPromise = (async () => {
+                const wrappedSystemPrompt = await this.buildWrappedSystemPrompt(this.agentConfig.systemPrompt);
 
-        if (this.abortable.isAbortRequested()) {
-            return;
+                if (this.abortable.isAbortRequested()) {
+                    return;
+                }
+
+                const nonSystemMessages = this.agentConfig.messages.filter(message => message.type !== "system");
+
+                this.agentConfig.messages = [
+                    {
+                        type: "system",
+                        content: wrappedSystemPrompt
+                    },
+                    ...nonSystemMessages
+                ];
+            })();
         }
-
-        const nonSystemMessages = this.agentConfig.messages.filter(message => message.type !== "system");
-
-        this.agentConfig.messages = [
-            {
-                type: "system",
-                content: wrappedSystemPrompt
-            },
-            ...nonSystemMessages
-        ];
+        await this.systemPromptPromise;
     }
 
     private synchronizeModelConfig(): void {
         this.agentConfig.model.config.tools = this.agentConfig.tools;
         this.agentConfig.model.config.messages = this.agentConfig.messages;
+    }
+
+    private setupMemoryEvents(): void {
+        if (!this.agentMemoryInterface) return;
+
+        const setupMemory = (mem: MemoryInterface<any>) => {
+            mem.onAction((action, payload) => {
+                const memoryName = payload.memoryName ?? "default";
+                this.emitEvent("memory_action", action, memoryName, payload, payload.result);
+                if (action === "fetch") {
+                    this.emitEvent("memory_fetch", memoryName, payload.params, payload.result);
+                } else if (action === "save") {
+                    this.emitEvent("memory_save", memoryName, payload.record, payload.result);
+                } else if (action === "get_conclusion") {
+                    this.emitEvent("memory_get_conclusion", memoryName, payload.conclusion);
+                } else if (action === "set_conclusion") {
+                    this.emitEvent("memory_set_conclusion", memoryName, payload.content, payload.status);
+                }
+            });
+        };
+
+        if (Array.isArray(this.agentMemoryInterface)) {
+            this.agentMemoryInterface.forEach(setupMemory);
+        } else {
+            setupMemory(this.agentMemoryInterface);
+        }
+    }
+
+    private setupHITLEvents(): void {
+        const hitl = this.agentConfig.hitl;
+        if (!hitl) return;
+
+        const listenersKey = "__adk_hitl_agent_listeners";
+        if (!(hitl as any)[listenersKey]) {
+            (hitl as any)[listenersKey] = new Set<(event: string, ...args: any[]) => void>();
+        }
+        const listeners = (hitl as any)[listenersKey] as Set<(event: string, ...args: any[]) => void>;
+
+        listeners.add((event: string, ...args: any[]) => {
+            this.emitEvent(event as any, ...args);
+        });
+
+        if (!(hitl as any).__adk_hitl_wrapped) {
+            (hitl as any).__adk_hitl_wrapped = true;
+
+            const originalEmitToolUsage = hitl.emitToolUsage?.bind(hitl);
+            if (originalEmitToolUsage) {
+                hitl.emitToolUsage = async (toolName: string) => {
+                    listeners.forEach(l => l("hitl_triggered", "tool_usage", { toolName }));
+                    const res = await originalEmitToolUsage(toolName);
+                    listeners.forEach(l => {
+                        l("hitl_result", "tool_usage", { toolName }, res);
+                        l("hitl_tool_approval", toolName, res);
+                    });
+                    return res;
+                };
+            }
+
+            const originalEmitAbcQuestion = hitl.emitAbcQuestion?.bind(hitl);
+            if (originalEmitAbcQuestion) {
+                hitl.emitAbcQuestion = async (question: string, abcOptions: [string, string][]) => {
+                    listeners.forEach(l => l("hitl_triggered", "question_abc", { question, options: abcOptions }));
+                    const res = await originalEmitAbcQuestion(question, abcOptions);
+                    listeners.forEach(l => {
+                        l("hitl_result", "question_abc", { question, options: abcOptions }, res);
+                        l("hitl_question", "abc", question, res);
+                    });
+                    return res;
+                };
+            }
+
+            const originalEmitOpenQuestion = hitl.emitOpenQuestion?.bind(hitl);
+            if (originalEmitOpenQuestion) {
+                hitl.emitOpenQuestion = async (question: string) => {
+                    listeners.forEach(l => l("hitl_triggered", "question_open", { question }));
+                    const res = await originalEmitOpenQuestion(question);
+                    listeners.forEach(l => {
+                        l("hitl_result", "question_open", { question }, res);
+                        l("hitl_question", "open", question, res);
+                    });
+                    return res;
+                };
+            }
+
+            const originalEmitAcceptance = hitl.emitAcceptance?.bind(hitl);
+            if (originalEmitAcceptance) {
+                hitl.emitAcceptance = async (question: string, context?: string) => {
+                    listeners.forEach(l => l("hitl_triggered", "acceptance", { question, context }));
+                    const res = await originalEmitAcceptance(question, context);
+                    listeners.forEach(l => {
+                        l("hitl_result", "acceptance", { question, context }, res);
+                        l("hitl_acceptance", question, res);
+                    });
+                    return res;
+                };
+            }
+        }
     }
 
     private emitStreamEvent(event: ReActAgentStreamChunk): void {
@@ -1735,6 +2256,137 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
                         conclusion: eventArgs[0] as string
                     }
                 };
+            case "subagent_called":
+                return {
+                    event: "subagent_called",
+                    content: {
+                        role: eventArgs[0] as string,
+                        instruction: eventArgs[1] as string
+                    }
+                };
+            case "subagent_result":
+                return {
+                    event: "subagent_result",
+                    content: {
+                        role: eventArgs[0] as string,
+                        instruction: eventArgs[1] as string,
+                        result: eventArgs[2] as ReActAgentInvokeResult
+                    }
+                };
+            case "subagent_reasoning":
+                return {
+                    event: "subagent_reasoning",
+                    content: {
+                        role: eventArgs[0] as string,
+                        reasoning: eventArgs[1] as string
+                    }
+                };
+            case "subagent_tool_invoked":
+                return {
+                    event: "subagent_tool_invoked",
+                    content: {
+                        role: eventArgs[0] as string,
+                        toolName: eventArgs[1] as string,
+                        toolParams: eventArgs[2] as Record<string, any>
+                    }
+                };
+            case "subagent_tool_executed":
+                return {
+                    event: "subagent_tool_executed",
+                    content: {
+                        role: eventArgs[0] as string,
+                        toolName: eventArgs[1] as string,
+                        toolParams: eventArgs[2] as Record<string, any>,
+                        output: eventArgs[3] as string
+                    }
+                };
+            case "hitl_triggered":
+                return {
+                    event: "hitl_triggered",
+                    content: {
+                        type: eventArgs[0] as any,
+                        payload: eventArgs[1] as Record<string, any>
+                    }
+                };
+            case "hitl_result":
+                return {
+                    event: "hitl_result",
+                    content: {
+                        type: eventArgs[0] as any,
+                        payload: eventArgs[1] as Record<string, any>,
+                        result: eventArgs[2]
+                    }
+                };
+            case "hitl_tool_approval":
+                return {
+                    event: "hitl_tool_approval",
+                    content: {
+                        toolName: eventArgs[0] as string,
+                        allowance: eventArgs[1] as EmitToolUsageBody
+                    }
+                };
+            case "hitl_question":
+                return {
+                    event: "hitl_question",
+                    content: {
+                        questionType: eventArgs[0] as any,
+                        question: eventArgs[1] as string,
+                        answer: eventArgs[2]
+                    }
+                };
+            case "hitl_acceptance":
+                return {
+                    event: "hitl_acceptance",
+                    content: {
+                        question: eventArgs[0] as string,
+                        answer: eventArgs[1] as HITLToolAllowancePossibleAnswer
+                    }
+                };
+            case "memory_action":
+                return {
+                    event: "memory_action",
+                    content: {
+                        action: eventArgs[0] as any,
+                        memoryName: eventArgs[1] as string,
+                        details: eventArgs[2] as Record<string, any>,
+                        result: eventArgs[3]
+                    }
+                };
+            case "memory_fetch":
+                return {
+                    event: "memory_fetch",
+                    content: {
+                        memoryName: eventArgs[0] as string,
+                        params: eventArgs[1] as Record<string, any>,
+                        result: eventArgs[2]
+                    }
+                };
+            case "memory_save":
+                return {
+                    event: "memory_save",
+                    content: {
+                        memoryName: eventArgs[0] as string,
+                        record: eventArgs[1],
+                        result: eventArgs[2]
+                    }
+                };
+            case "memory_get_conclusion":
+                return {
+                    event: "memory_get_conclusion",
+                    content: {
+                        memoryName: eventArgs[0] as string,
+                        conclusion: eventArgs[1] as string
+                    }
+                };
+            case "memory_set_conclusion":
+                return {
+                    event: "memory_set_conclusion",
+                    content: {
+                        memoryName: eventArgs[0] as string,
+                        content: eventArgs[1] as string,
+                        status: eventArgs[2] as boolean
+                    }
+                };
             default:
                 return null;
         }
@@ -1785,12 +2437,22 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
         };
     }
 
+    private matchesExecutionWay(pluginWays: PluginExecutionWays | PluginExecutionWays[], targetWay: PluginExecutionWays): boolean {
+        const ways = Array.isArray(pluginWays) ? pluginWays : [pluginWays];
+        if (ways.includes(targetWay)) return true;
+        if (targetWay === "thought" && ways.includes("thoughts")) return true;
+        if (targetWay === "thoughts" && ways.includes("thought")) return true;
+        if (targetWay === "memory" && ways.includes("memory_position")) return true;
+        if (targetWay === "memory_position" && ways.includes("memory")) return true;
+        return false;
+    }
+
     /** It's responsible to run agent plugins have the specific execution way
      * 
      * TODO: Add error resistant plugin execution behaviour as default and ignoring as option
     */
     private async runPlugins(executionWay: PluginExecutionWays, executionFrom?: Omit<ExecutionFrom, "way">) {
-        const pluginsToRun = this.agentConfig.plugins?.filter(plugin => plugin.executionWay instanceof Array ? plugin.executionWay.includes(executionWay) : plugin.executionWay === executionWay);
+        const pluginsToRun = this.agentConfig.plugins?.filter(plugin => this.matchesExecutionWay(plugin.executionWay, executionWay));
         if (pluginsToRun?.length) {
             for (const plugin of pluginsToRun) {
                 if (this.abortable.isAbortRequested()) {
@@ -1800,7 +2462,7 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
                 this.emitEvent("plugin_invoking", plugin.name, executionWay);
                 
                 const executionFromObjPass: ExecutionFrom = executionFrom ? { ...executionFrom, way: executionWay } : { way: executionWay, nodeType: "aside" };
-                const runResult = await plugin.execute(executionFromObjPass, this.agentConfig, this.AgentGraph.graphState);
+                const runResult = await plugin.execute(executionFromObjPass, this.agentConfig, this.AgentGraph?.graphState ?? {});
 
                 if (this.abortable.isAbortRequested()) {
                     return;
@@ -1810,7 +2472,7 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
 
                 if (runResult.status) {
                     if (runResult.result?.agentConfig) this.agentConfig = runResult.result.agentConfig;
-                    if (runResult.result?.graphState) this.AgentGraph.graphState = runResult.result.graphState;
+                    if (runResult.result?.graphState && this.AgentGraph) this.AgentGraph.graphState = runResult.result.graphState;
                 }
             }
         }
