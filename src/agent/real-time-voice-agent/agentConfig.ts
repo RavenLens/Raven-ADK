@@ -10,6 +10,7 @@ import { AvatarOneStepPipeline, AvatarTwoStepPipeline } from "./live-avatar.pipe
 import { ParsedUrlQuery } from "node:querystring";
 import { STTModel, STTMode } from "./stt";
 import { MutliMemoryObject } from "../memory/memory";
+import { IncomingHttpHeaders } from "node:http";
 
 /**
  * Specify to teel whether describe and optionally how the Plugin Execution
@@ -18,11 +19,14 @@ import { MutliMemoryObject } from "../memory/memory";
  * @default false
 */
 export type VoiceAgentDescriptionConfig = boolean | {
-  /** Whether to describe the plugin execution */
-  describe: boolean;
   /** 
-   * Give instruction to tell voice agent how to describe the operation
-   * Usable only when was specified `describe: true`
+   * Whether to say the plugin execution
+   * Use as additional knob to disable some tool / thing execution
+  */
+  sayAloud: boolean;
+  /** 
+   * Give instruction to tell Transcriber how to tell describe before voice agent how to describe the operation
+   * Usable only when was specified `describe: true` and `communicationSpeechLevels` property matches to the config property and `agent.model.transcriber` matches to the specification level
   */
   describeVoiceInstruction?: string;
 }
@@ -30,11 +34,11 @@ export type VoiceAgentDescriptionConfig = boolean | {
 export type ConfigLessSchemaSkillsStore = Omit<SchemaSkillStore, "config">;
 export interface RealTimeVoiceAgentSkillsSchema extends ConfigLessSchemaSkillsStore {
     config: SchemaMemoryStore["config"] & {
-        /**
-         * Give description for specific action that has to be communicated
-         * @default - no action is communicated if desired specify object for specific action
-         */
-        actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaSkillsStore, VoiceAgentDescriptionConfig>>;
+      /**
+       * Give description for specific action that has to be communicated
+       * @default - no action is communicated has to be specified each action that has to be communicated
+       */
+      actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaSkillsStore, VoiceAgentDescriptionConfig>>;
     }
 }
 
@@ -209,6 +213,9 @@ export interface ExecutionRemoteMode {
   eventVerification?: false | ((auth: { [key: string]: any }, query: ParsedUrlQuery) => Promise<ExecutionRemoteModeVerificator> | ExecutionRemoteModeVerificator);
 }
 
+export type AuthPayload = { query: ParsedUrlQuery, headers: IncomingHttpHeaders; };
+type UnitDependencyWrapper<ReturnType> = (clientID: string, authPayload: AuthPayload) => ReturnType;
+
 export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealTimeVoiceAgentSkillsSchema, Memory extends RealTimeVoiceAgentSchemaMemoryStore, HITL extends HITLTransportSchema> {
   /** 
    * The environment where the agent is executing.
@@ -269,11 +276,11 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     /** Rules for your agent e.g: role playing definitions, speech tone and more */
     systemPrompt: string;
     messages: MessagesVariations[];
-    skills?: RealTimeVoiceAgentSkills;
+    skills?: UnitDependencyWrapper<RealTimeVoiceAgentSkills>;
     /** Memory version with transcription definition */
-    memory?: Memory | ({
+    memory?: UnitDependencyWrapper<Memory | ({
       memory: Memory;
-    } & MutliMemoryObject)[];
+    } & MutliMemoryObject)[]>;
     /** Tools have defined description instruction */
     tools: RealTimeVoiceAgentTool<any, any>[];
     /** 
@@ -284,7 +291,7 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     /** List with Plugins for voice agent with supperpowers */
     plugins?: RealTimeVoiceAgentPluginSpec[];
     // HITL With usage
-    hitl?: HITLLiveTimeVoiceAgent<HITL>;
+    hitl?: UnitDependencyWrapper<HITLLiveTimeVoiceAgent<HITL>>;
     /** Maximum amount of internal self-recalls without tool usage. Defaults to 3 when omitted. */
     maximumReasoningRecalls?: number;
     /** As default is `true` boolean */

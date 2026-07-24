@@ -1,8 +1,10 @@
 import { HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
-import { ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema } from "./agentConfig";
+import { AuthPayload, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, VoiceAgentDescriptionConfig } from "./agentConfig";
 import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
 import { ReActAgent } from "../ReAct.agent";
+
+type SpeechLevel = keyof Exclude<NonNullable<RealTimeVoiceAgentConfig<any, any, any>["communicationSpeechLevels"]>, string>;
 
 /** Store RTC Data Channels */
 export class ClientDataChannels {
@@ -65,7 +67,7 @@ export class RealTimeVoiceAgent<
         sessionAbortController: AbortController;
     }>();
     private internalEvents: EventEmitter = new EventEmitter();
-    private activeClients = new Map<string, { socket: any; pc: any; logicAbortController: AbortController | null }>();
+    private activeClients = new Map<string, { socket: any; pc: any; logicAbortController: AbortController | null; authParams: AuthPayload; audioSource?: any; videoSource?: any; }>();
     private serverInstance: any = null;
     
     constructor(config: RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills, Memory, HITL>) {
@@ -166,7 +168,7 @@ export class RealTimeVoiceAgent<
             this.clientsDataChannels.sendEvent(clientID, "realtime_agent.logic_start", { transcript });
 
             // Config ReAct Agent
-            // TODO: Allow to memory systems to pass the clientID to allow external user in config specify the download logic for memory, skills, subagents and so on
+            const { authParams } = this.activeClients.get(clientID)!;
             const agent = new ReActAgent({
                 model: config.agent.models.reasoning,
                 systemPrompt: `${config.agent.systemPrompt}
@@ -175,14 +177,51 @@ export class RealTimeVoiceAgent<
     - You work in the RealTimeVoice Agent pipeline where the thoughs are said aloud by another tts model, therefore you've to generate thoughts are able to be said in understandable way for human and simulatenously showing what you're doing
                 `,
                 messages: config.agent.messages,
-                skills: config.agent.skills,
-                memory: config.agent.memory,
+                skills: config.agent.skills?.(clientID, authParams),
+                memory: config.agent.memory?.(clientID, authParams),
                 tools: config.agent.tools,
                 plugins: [
                     ...config.agent.plugins ?? [],
-                    // TODO: Setup react agent plugins for: memory, tools, skills, thoughts (reasoning), HITL, subagents -> add these plugins implementations to ReAct Agent 
+                    {
+                        name: "voice_thoughts_plugin",
+                        executionWay: ["thought", "thoughts"],
+                        execute: async (from) => {
+                            if (from.thought) {
+                                void this.speak(clientID, from.thought, "thoughts", logicAbortController.signal);
+                            }
+                            return { status: true };
+                        }
+                    },
+                    {
+                        name: "voice_tools_plugin",
+                        executionWay: ["before_tool_invoked"],
+                        execute: async (from) => {
+                            if (from.toolName) {
+                                void this.speak(clientID, `I'm using ${from.toolName} tool to help you`, "tools", logicAbortController.signal);
+                            }
+                            return { status: true };
+                        }
+                    },
+                    {
+                        name: "voice_subagents_plugin",
+                        executionWay: ["subagent_invoked"],
+                        execute: async (from) => {
+                            if (from.subagentRole) {
+                                void this.speak(clientID, `I'm delegating this task to my specialist ${from.subagentRole}`, "subagents", logicAbortController.signal);
+                            }
+                            return { status: true };
+                        }
+                    },
+                    {
+                        name: "voice_memory_plugin",
+                        executionWay: ["memory"],
+                        execute: async () => {
+                            void this.speak(clientID, "Let me check my memory for a moment", "memory", logicAbortController.signal);
+                            return { status: true };
+                        }
+                    }
                 ],
-                hitl: config.agent.hitl?.hitl,
+                hitl: config.agent.hitl?.(clientID, authParams).hitl,
                 subagents: config.agent.subagents,
                 maximumReasoningRecalls: config.agent.maximumReasoningRecalls,
                 withConclusion: config.agent.withConclusion,
@@ -191,8 +230,32 @@ export class RealTimeVoiceAgent<
                 abort: logicAbortController.signal
             });
 
-            // Pipe all agent events to the client
-            agent.onAnyEvent((event, ...args) => {
+            // Pipe all agent events to the client and handle voice-feedback for non-plugin events
+            agent.onAnyEvent((event: any, ...args: any[]) => {
+                if (event === "hitl_triggered") {
+                    const [type] = args;
+                    void this.speak(clientID, `I need your assistance for ${type}.`, "hitl", logicAbortController.signal);
+                }
+                
+                if (event === "tool_invoked") {
+                    const [toolName] = args;
+
+                    const specifiedSkillsToSay = Object.entries(config.agent.skills?.(clientID, authParams)!.config!.actionsVoiceDescriptionInstruction!) as unknown as [
+                        keyof ConfigLessSchemaSkillsStore,
+                        VoiceAgentDescriptionConfig
+                    ][];
+                    const isSkillFound = specifiedSkillsToSay.find(([skillToolName, skillSpec]) => skillToolName === toolName && (skillSpec === true || (typeof skillSpec === "object" && skillSpec.sayAloud === true)));
+                    
+                    if (isSkillFound) {
+                        void this.speak(
+                            clientID,
+                            `I'm performing ${toolName} skill`,
+                            "skills",
+                            logicAbortController.signal
+                        );
+                    }
+                }
+                
                 this.clientsDataChannels.sendEvent(clientID, `agent.${event}`, args.length === 1 ? args[0] : args);
             });
 
@@ -213,11 +276,85 @@ export class RealTimeVoiceAgent<
                 result: result
             });
             
-            // TODO: Emit generated response spoken annd send to client via WebRTC Channel
-                // TODO: Handle retriving via server
-
+            // Speak result
+            const lastAiMessage = result.messages.filter(m => m.type === "ai").pop();
+            if (lastAiMessage && "content" in lastAiMessage && typeof lastAiMessage.content === "string") {
+                this.speak(clientID, lastAiMessage.content, "afterTranscript", logicAbortController.signal);
+            }
+            
             // TODO: Add the pipeline avatar model to talk when start generation
         });
+    }
+
+    private canAgentCommunicate(checkForCaseLevel: SpeechLevel) {
+        if (this.config.communicationSpeechLevels === "all") return true;
+        if (typeof this.config.communicationSpeechLevels === "object") {
+            const levels = this.config.communicationSpeechLevels as Record<string, boolean>;
+            return levels[checkForCaseLevel] === true;
+        }
+        return false;
+    }
+    
+    private async speak(clientID: string, text: string, type: SpeechLevel, abort?: AbortSignal) {
+        const client = this.activeClients.get(clientID);
+        if (!client || !client.audioSource) return;
+
+        if (!this.canAgentCommunicate(type)) return;
+
+        try {
+            // Optional transcription adjustment
+            let textToSpeak = text;
+            const transcriber = this.config.agent.models.transcriber;
+            if (transcriber) {
+                let currentTranscriber = null;
+                if (transcriber.routingStrategy === "all-through-transcriber") {
+                    currentTranscriber = transcriber;
+                } else if (transcriber.routingStrategy === "fine-grained" && (transcriber as any).transcribeFor?.[type]) {
+                    currentTranscriber = (transcriber as any).transcribeFor[type];
+                }
+
+                if (currentTranscriber) {
+                    const res = await currentTranscriber.model.invoke({
+                        messages: [
+                            { type: "system", content: `You are a professional transcriber. Your role is to produce the transcription of the specified segment. Segment type: ${type}.${currentTranscriber.systemPromptAddition ? `\n\nAdditional instructions from user:\n${currentTranscriber.systemPromptAddition}` : ""}` },
+                            { type: "user", content: text }
+                        ],
+                        abort
+                    });
+                    const aiMessage = res.answer.find((m: any) => m.type === "ai");
+                    if (aiMessage && "content" in aiMessage && typeof aiMessage.content === "string") {
+                        textToSpeak = aiMessage.content;
+                    }
+                }
+            }
+
+            // TTS
+            const ttsModel = this.config.agent.models.tts;
+            const audioBuffer = await ttsModel.tts(textToSpeak, {
+                model: (ttsModel as any).config?.model ?? "tts-1",
+                voice: "alloy" // Default voice
+            } as any);
+            
+            if (audioBuffer && audioBuffer.length > 0) {
+                // Emitting the audio via wrtc
+                client.audioSource.onData({
+                    samples: audioBuffer,
+                    sampleRate: 16000,
+                    bitsPerSample: 16,
+                    channelCount: 1
+                });
+
+                // Update avatar if available
+                if (this.config.agent.models.avatar && client.videoSource) {
+                    // Avatar updates would be triggered here
+                }
+                
+                // Notify client via data channel
+                this.clientsDataChannels.sendEvent(clientID, "realtime_agent.speech_segment", { type, text: textToSpeak });
+            }
+        } catch (err) {
+            this.devConsole(`[RealTimeVoiceAgent] Speak error for ClientID ${clientID}: ${err}`, "error");
+        }
     }
 
     /**
@@ -471,7 +608,8 @@ export class RealTimeVoiceAgent<
         const express = await import('express');
         const http = await import('node:http');
         const { Server } = await import('socket.io');
-        const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate } = await import('@roamhq/wrtc');
+        const { RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, nonstandard } = await import('@roamhq/wrtc');
+        const { RTCAudioSource, RTCVideoSource } = nonstandard;
 
         const app = express.default();
         const server = http.createServer(app);
@@ -485,7 +623,7 @@ export class RealTimeVoiceAgent<
 
         if (serverConnectionVerification) {
             io.use(async (socket, next) => {
-                const { auth, query } = socket.handshake;
+                const { auth, query, headers } = socket.handshake;
                 const verificationResult = await serverConnectionVerification(auth, query);
 
                 if (!verificationResult) {
@@ -499,12 +637,14 @@ export class RealTimeVoiceAgent<
                     socket.data.clientID = verificationResult;
                 }
 
+                socket.data.query = query;
+                socket.data.headers = headers;
                 next();
             });
         }
         
         io.on('connection', (socket) => {
-            const clientID = socket.data.clientID;
+            const { clientID, query, headers } = socket.data;
             
             // Send connection success to frontend lib
             socket.emit("connection_success", clientID);
@@ -513,10 +653,29 @@ export class RealTimeVoiceAgent<
                 iceServers: serverConfig.webRTC.iceServers
             });
 
-            // Add client to active clients
-            this.activeClients.set(clientID, { socket, pc, logicAbortController: null });
+            // Setup tracks
+            const audioSource = new RTCAudioSource();
+            const audioTrack = audioSource.createTrack();
+            pc.addTrack(audioTrack);
 
-            // 1. Handle data channel TODO: Handle messages here
+            let videoSource = null;
+            if (config.agent.models.avatar) {
+                videoSource = new RTCVideoSource();
+                const videoTrack = videoSource.createTrack();
+                pc.addTrack(videoTrack);
+            }
+
+            // Add client to active clients
+            this.activeClients.set(clientID, { 
+                socket, 
+                pc, 
+                logicAbortController: null, 
+                authParams: { query, headers },
+                audioSource: audioSource,
+                videoSource: videoSource
+            });
+
+            // 1. Handle data channel
             pc.ondatachannel = (event) => {
                 const receiveChannel = event.channel;
                 
