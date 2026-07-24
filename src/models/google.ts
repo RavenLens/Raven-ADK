@@ -375,8 +375,9 @@ export class Google implements StandardLLMShema {
         };
     }
 
-    private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>) {
+    private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>, abort?: AbortSignal) {
         for await (const event of stream) {
+            if (abort?.aborted) break;
             this.emitEvent("stream", event);
 
             if (event.candidates?.[0]?.content?.parts) {
@@ -392,8 +393,8 @@ export class Google implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] }): Promise<LLMAnswer>;
-    async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncGenerator<GenerateContentResponse>>;
+    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"]; abort?: AbortSignal }): Promise<LLMAnswer>;
+    async invoke(options: { stream: true; messages?: InvokeOptions["messages"]; abort?: AbortSignal }): Promise<AsyncGenerator<GenerateContentResponse>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncGenerator<GenerateContentResponse>> {
         if (options?.messages) {
             this.config.messages = options.messages;
@@ -424,11 +425,12 @@ export class Google implements StandardLLMShema {
                     maxOutputTokens: this.config.maxOutputTokens,
                     stopSequences: this.config.stopSequences,
                     // Specific to Google genai SDK for thinking models
-                    thinkingConfig: thinking_config as any
+                    thinkingConfig: thinking_config as any,
+                    abortSignal: options?.abort
                 }
             });
 
-            return this.streamWithEvents(stream);
+            return this.streamWithEvents(stream, options?.abort);
         }
 
         const response = await this.client.models.generateContent({
@@ -444,14 +446,15 @@ export class Google implements StandardLLMShema {
                 maxOutputTokens: this.config.maxOutputTokens,
                 stopSequences: this.config.stopSequences,
                 // Specific to Google genai SDK for thinking models
-                thinkingConfig: thinking_config as any
+                thinkingConfig: thinking_config as any,
+                abortSignal: options?.abort
             }
         });
 
         return this.parseResponseToAnswer(response);
     }
 
-    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer> {
         return invokeStructuredOutputWithRetries({
             schema,
             maxRecallTries,
@@ -463,7 +466,8 @@ export class Google implements StandardLLMShema {
             setTools: (tools) => {
                 this.config.tools = tools;
             },
-            invoke: () => this.invoke()
+            invoke: (opts) => this.invoke(opts),
+            options
         });
     }
 

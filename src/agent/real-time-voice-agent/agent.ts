@@ -65,7 +65,8 @@ export class RealTimeVoiceAgent<
         sessionAbortController: AbortController;
     }>();
     private internalEvents: EventEmitter = new EventEmitter();
-    private agent: ReActAgent<any, any, any, any>;
+    private activeClients = new Map<string, { socket: any; pc: any; logicAbortController: AbortController | null }>();
+    private serverInstance: any = null;
     
     constructor(config: RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills, Memory, HITL>) {
         this.config = {
@@ -74,34 +75,6 @@ export class RealTimeVoiceAgent<
             communicationSpeechLevels: config.communicationSpeechLevels ?? "all"
         };
 
-        // Configure ReAct Agent
-        /* TODO: Apply Transcriber System prompt addition from `model.transcriber` model */
-        this.agent = new ReActAgent({
-            model: config.agent.models.reasoning,
-            systemPrompt: `${config.agent.systemPrompt}
-
-## Thoughs generation rule
-- You work in the RealTimeVoice Agent pipeline where the thoughs are said aloud by another tts model, therefore you've to generate thoughts are able to be said in understandable way for human and simulatenously showing what you're doing
-            `,
-            messages: config.agent.messages,
-            skills: config.agent.skills,
-            memory: config.agent.memory,
-            tools: config.agent.tools,
-            plugins: [
-                ...config.agent.plugins ?? [],
-                // TODO: Setup react agent plugins for: memory, tools, skills, thoughts (reasoning), HITL, subagents -> add these plugins implementations to ReAct Agent 
-            ],
-            hitl: config.agent.hitl?.hitl,
-            subagents: config.agent.subagents,
-            maximumReasoningRecalls: config.agent.maximumReasoningRecalls,
-            withConclusion: config.agent.withConclusion,
-            parallelizeSubagents: config.agent.parallelizeSubagents,
-            parallelTools: config.agent.parallelTools,
-            abort: config.agent.abort
-        })
-        
-        /* TODO: Listen Agent events and send to client with `react-agent` initial prefix */
-        
         /* Listen internal logic events */
         this.internalEvents.on("interrupt-internal", (clientID: string) => {
             // TODO: Emit the interruption text event
@@ -117,37 +90,126 @@ export class RealTimeVoiceAgent<
             raw
         }: { clientID: string; transcript: string; isFinal: boolean; raw: any; }) => {
             // Emit event
-            this.clientsDataChannels.sendEvent(clientID, "stt-transcript-interim", { transcript, isFinal });
+            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.stt-transcript-interim", { transcript, isFinal });
             
             // TODO: Generate the content right now as speculative decoding mechanism -> model generates thoughts base on the specified text by asking questions - Least-To-Most Technique -> then attach this to the full transcript prompt
             // TODO: generate speculative events before and after
         });
         
         // It's the final trasncript arrived from the message
+        // From this place agent begins execution
         this.internalEvents.on("stt-transcript-final", async ({ clientID, transcript, audioBuffer }: { clientID: string; transcript: string; audioBuffer: Buffer }) => {
             // Emit Client Text Event
-            this.clientsDataChannels.sendEvent(clientID, "stt-transcript-final", { transcript });
+            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.stt-transcript-final", { transcript });
             
-            // TODO: Optionally allow the transcript to go through transcriber - add options to config, emit such event before and after, trigger transcriber model when specifiwd (transcriber before and after has to be specified)
-            
-            // Emit generation text event -> Retrive on frontend
-            this.clientsDataChannels.sendEvent(clientID, "realtime_agent_logic_start", { transcript });
+            // Abort previous turn if running
+            const client = this.activeClients.get(clientID);
+            if (client?.logicAbortController) {
+                client.logicAbortController.abort();
+            }
 
-            // TODO: Emit generation begin voice communication over webrtc channel
+            const logicAbortController = new AbortController();
+            if (client) {
+                client.logicAbortController = logicAbortController;
+            }
+
+            // Optionally allow the transcript to go through transcriber
+            const _improveTranscriptWithTranscriber = await (async () => {
+                const transcriber = this.config.agent.models.transcriber;
+                let currentTranscriber = null;
+    
+                if (transcriber) {
+                    // Adds the spec regard the Transcriber Strategy
+                    if (transcriber.routingStrategy === "all-through-transcriber") {
+                        currentTranscriber = {
+                            model: transcriber.model,
+                            systemPromptAddition: transcriber.systemPromptAddition
+                        };
+                    } else if (transcriber.routingStrategy === "fine-grained" && transcriber.transcribeFor["after-full-stt-transcript"]) {
+                        currentTranscriber = transcriber.transcribeFor["after-full-stt-transcript"];
+                    }
+    
+                    // Produces the transcript with events
+                    if (currentTranscriber) {
+                        if (logicAbortController.signal.aborted) return;
+                        this.clientsDataChannels.sendEvent(clientID, "realtime_agent.transcriber_start", { originalTranscript: transcript });
+                        
+                        const transcriberResult = await currentTranscriber.model.invoke({
+                            messages: [
+                                {
+                                    type: "system",
+                                    content: `You are a professional transcriber. Your role is to produce the transcription of the specified transcript.${currentTranscriber.systemPromptAddition ? `\n\nAdditional instructions from user:\n${currentTranscriber.systemPromptAddition}` : ""}`
+                                },
+                                {
+                                    type: "user",
+                                    content: `Transcript: ${transcript}`
+                                }
+                            ],
+                            abort: logicAbortController.signal
+                        });
+    
+                        if (logicAbortController.signal.aborted) return;
+
+                        const aiMessage = transcriberResult.answer.find(m => m.type === "ai");
+                        if (aiMessage && "content" in aiMessage && typeof aiMessage.content === "string") {
+                            transcript = aiMessage.content;
+                        }
+    
+                        this.clientsDataChannels.sendEvent(clientID, "realtime_agent.transcriber_finish", { transcribedTranscript: transcript });
+                    }
+                }
+            })()
             
-            const result = await this.agent.invoke({
+            if (logicAbortController.signal.aborted) return;
+
+            // Emit generation text event -> Retrive on frontend
+            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.logic_start", { transcript });
+
+            // Config ReAct Agent
+            // TODO: Allow to memory systems to pass the clientID to allow external user in config specify the download logic for memory, skills, subagents and so on
+            const agent = new ReActAgent({
+                model: config.agent.models.reasoning,
+                systemPrompt: `${config.agent.systemPrompt}
+
+    ## Thoughs generation rule
+    - You work in the RealTimeVoice Agent pipeline where the thoughs are said aloud by another tts model, therefore you've to generate thoughts are able to be said in understandable way for human and simulatenously showing what you're doing
+                `,
+                messages: config.agent.messages,
+                skills: config.agent.skills,
+                memory: config.agent.memory,
+                tools: config.agent.tools,
+                plugins: [
+                    ...config.agent.plugins ?? [],
+                    // TODO: Setup react agent plugins for: memory, tools, skills, thoughts (reasoning), HITL, subagents -> add these plugins implementations to ReAct Agent 
+                ],
+                hitl: config.agent.hitl?.hitl,
+                subagents: config.agent.subagents,
+                maximumReasoningRecalls: config.agent.maximumReasoningRecalls,
+                withConclusion: config.agent.withConclusion,
+                parallelizeSubagents: config.agent.parallelizeSubagents,
+                parallelTools: config.agent.parallelTools,
+                abort: logicAbortController.signal
+            });
+
+            // Pipe all agent events to the client
+            agent.onAnyEvent((event, ...args) => {
+                this.clientsDataChannels.sendEvent(clientID, `agent.${event}`, args.length === 1 ? args[0] : args);
+            });
+
+            // Call agent
+            const result = await agent.invoke({
                 messages: [
-                    ...this.agent.messages,
                     {
                         type: "user",
                         content: transcript
                     }
-                ]
+                ],
+                abort: logicAbortController.signal
             });
 
 
             // Emit generated response text event
-            this.clientsDataChannels.sendEvent(clientID, "realtime_agent_logic_finish", {
+            this.clientsDataChannels.sendEvent(clientID, "realtime_agent.logic_finish", {
                 result: result
             });
             
@@ -417,6 +479,7 @@ export class RealTimeVoiceAgent<
             server,
             serverConfig.socketIo.serverOptions ?? { cors: { origin: '*' } }
         );
+        this.serverInstance = server;
 
         app.use(express.static('public'));
 
@@ -450,6 +513,9 @@ export class RealTimeVoiceAgent<
                 iceServers: serverConfig.webRTC.iceServers
             });
 
+            // Add client to active clients
+            this.activeClients.set(clientID, { socket, pc, logicAbortController: null });
+
             // 1. Handle data channel TODO: Handle messages here
             pc.ondatachannel = (event) => {
                 const receiveChannel = event.channel;
@@ -482,7 +548,11 @@ export class RealTimeVoiceAgent<
                             }
                         }
                         else if (eventType === "abort") {
-                            /* TODO: Handle abort */
+                            const client = this.activeClients.get(clientID);
+                            if (client?.logicAbortController) {
+                                client.logicAbortController.abort();
+                                this.devConsole(`[RealTimeVoiceAgent] Aborted agent action for ClientID: ${clientID}`, "log");
+                            }
                         }
                     }
                     catch(err) {
@@ -592,7 +662,13 @@ export class RealTimeVoiceAgent<
                 this.clientAudioStreams.delete(clientID);
                 this.speekingUsers.delete(clientID);
                 this.usersTrackID.delete(clientID);
-                // TODO: Handle agent abort
+                
+                const client = this.activeClients.get(clientID);
+                if (client?.logicAbortController) {
+                    client.logicAbortController.abort();
+                }
+                this.activeClients.delete(clientID);
+
                 pc.close();
             });
         });
@@ -611,5 +687,39 @@ export class RealTimeVoiceAgent<
             // TODO:
         }
         else throw(`"${(config.executionMode as any).mode}" don't exist in register of possible execution modes for RealTimeAgent`);
+    }
+
+    /** 
+     * Use this method to cancel all listening and to abort the pending agents
+    */
+    public async abort() {
+        this.devConsole("[RealTimeVoiceAgent] Global Abort initiated. Closing all connections.", "warn");
+        
+        for (const [clientID, client] of this.activeClients.entries()) {
+            this.devConsole(`[RealTimeVoiceAgent] Aborting and closing connection for ClientID: ${clientID}`, "log");
+            
+            // Abort running agent for this client
+            if (client.logicAbortController) {
+                client.logicAbortController.abort();
+            }
+
+            // Emit abort to client
+            this.clientsDataChannels.sendEvent(clientID, "abort", { reason: "Global abort triggered" });
+
+            // Close connection
+            client.pc.close();
+            client.socket.disconnect();
+        }
+
+        this.activeClients.clear();
+
+        if (this.serverInstance) {
+            return new Promise<void>((resolve) => {
+                this.serverInstance.close(() => {
+                    this.devConsole("[RealTimeVoiceAgent] Server shut down successfully.", "log");
+                    resolve();
+                });
+            });
+        }
     }
 }

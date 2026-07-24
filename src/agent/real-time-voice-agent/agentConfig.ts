@@ -160,8 +160,12 @@ export interface TranscriberByPassConversation {
  */
 export interface TranscriberSpecific {
   routingStrategy: "fine-grained";
-  transcribeFor: Partial<Record<"conversation" | "stt-transcript" | "thoughts" | "tools" | "memory" | "skills", {
-    /** Optional `systemPromptAddition` */
+  transcribeFor: Partial<Record<"conversation" | "after-full-stt-transcript" | "thoughts" | "tools" | "memory" | "skills", {
+    model: AgentModel;
+    /**
+     * Optional `systemPromptAddition`
+     * This system prompt is passed to the above `model`
+    */
     systemPromptAddition?: string;
   }>>;
 }
@@ -217,6 +221,7 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
    * @default "all"
   */
   communicationSpeechLevels?: {
+    afterTranscript: boolean;
     thoughts: boolean;
     tools: boolean;
     skills: boolean;
@@ -288,8 +293,6 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     parallelizeSubagents?: boolean;
     /** As default is `false` boolean */
     parallelTools?: boolean;
-    /** Use aside of VAD detection while answering in order to stop processing and flush buffers/further processing for current models */
-    abort: AbortSignal;
     /** Configure how the agent handles user barge-in (interruption) */
     interruption?: {
       /** 'hard-stop' halts immediately, 'flush-buffers' allows clean audio queue clearing */

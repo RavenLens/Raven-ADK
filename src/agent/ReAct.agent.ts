@@ -337,6 +337,7 @@ export type ReActAgentStreamChunk = {
 }[keyof ReActAgentStreamEventMap];
 
 type ReActAgentStreamListener = (event: ReActAgentStreamChunk) => void;
+type ReActAgentAnyEventListener = (eventName: keyof ReActAgentEvents, ...args: any[]) => void | Promise<void>;
 type AbortableOperationResult<Result> = Result | typeof ABORTED_OPERATION;
 
 const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
@@ -528,6 +529,7 @@ export class ReActAgent
     private readonly abortable: ReActAgentAbortable;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
+    private AnyEventListeners: Set<ReActAgentAnyEventListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
     agentMemoryInterface: MemoryInterface<Memory> | MemoryInterface<Memory>[] | undefined = undefined;
@@ -726,6 +728,7 @@ export class ReActAgent
                 // Invoke model
                 const modelInvokeResult = await this.abortable.runAbortable(() => this.agentConfig.model.invoke({
                     messages: this.agentConfig.messages,
+                    abort: this.agentConfig.abort,
                     ...state.modelOptions
                 }));
 
@@ -1968,7 +1971,8 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
             ];
 
             const conclusionResultExecution = await this.abortable.runAbortable(() => this.agentConfig.model.invoke({
-                messages: this.agentConfig.model.config.messages
+                messages: this.agentConfig.model.config.messages,
+                abort: this.agentConfig.abort
             }));
 
             if (conclusionResultExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
@@ -2034,7 +2038,9 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
                 }
             ];
 
-            const structuredResultExecution = await this.abortable.runAbortable(() => this.agentConfig.model.invokeStructuredOutput(zodSchema, retriesCount));
+            const structuredResultExecution = await this.abortable.runAbortable(() => this.agentConfig.model.invokeStructuredOutput(zodSchema, retriesCount, {
+                abort: this.agentConfig.abort
+            }));
 
             if (structuredResultExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
                 return;
@@ -2405,6 +2411,11 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
         return this;
     }
 
+    onAnyEvent(eventListener: ReActAgentAnyEventListener): this {
+        this.AnyEventListeners.add(eventListener);
+        return this;
+    }
+
     protected emitEvent<EventName extends keyof ReActAgentEvents>(
         eventName: EventName,
         ...eventArgs: Parameters<ReActAgentEvents[EventName]>
@@ -2415,6 +2426,13 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
         if (streamEvent) {
             this.emitStreamEvent(streamEvent);
         }
+
+        // Emit any event
+        this.AnyEventListeners.forEach((listener) => {
+            void Promise.resolve(listener(eventName, ...eventArgs)).catch((error) => {
+                console.warn(`Any event listener failed for event "${String(eventName)}".`, error);
+            });
+        });
 
         const eventListener = this.EventsListeners[eventName];
 

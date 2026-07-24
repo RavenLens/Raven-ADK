@@ -478,8 +478,9 @@ export class OpenAI implements StandardLLMShema {
         };
     }
 
-    private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>) {
+    private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>, abort?: AbortSignal) {
         for await (const event of stream) {
+            if (abort?.aborted) break;
             this.emitEvent("stream", event);
 
             const eventAny = event as any;
@@ -492,8 +493,8 @@ export class OpenAI implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] }): Promise<LLMAnswer>;
-    async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncIterable<ResponsesAPI.ResponseStreamEvent>>;
+    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"]; abort?: AbortSignal }): Promise<LLMAnswer>;
+    async invoke(options: { stream: true; messages?: InvokeOptions["messages"]; abort?: AbortSignal }): Promise<AsyncIterable<ResponsesAPI.ResponseStreamEvent>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<ResponsesAPI.ResponseStreamEvent>> {
         if (options?.messages) {
             this.config.messages = options.messages;
@@ -511,7 +512,7 @@ export class OpenAI implements StandardLLMShema {
                     model: this.config.model,
                     prompt: this.prepareCompletionInput(),
                     stream: false
-                });
+                }, { signal: options?.abort });
                 return this.parseCompletionResponseToAnswer(response);
             }
 
@@ -521,8 +522,8 @@ export class OpenAI implements StandardLLMShema {
                 messages: this.prepareChatInput(),
                 tools: chatTools.length > 0 ? chatTools : undefined,
                 stream: false,
-                reasoning_effort: options?.reasoning?.effort ?? undefined
-            } as any);
+                reasoning_effort: options?.reasoning?.effort ?? undefined,
+            }, { signal: options?.abort });
 
             return this.parseChatResponseToAnswer(response);
         }
@@ -535,9 +536,9 @@ export class OpenAI implements StandardLLMShema {
                 stream: true
             };
 
-            const stream = await this.openai.responses.create(streamPayload);
+            const stream = await this.openai.responses.create(streamPayload, { signal: options?.abort });
 
-            return this.streamWithEvents(stream);
+            return this.streamWithEvents(stream, options?.abort);
         }
 
         const responsePayload: ResponsesAPI.ResponseCreateParamsNonStreaming = {
@@ -545,11 +546,11 @@ export class OpenAI implements StandardLLMShema {
             stream: false
         };
 
-        const response = await this.openai.responses.create(responsePayload);
+        const response = await this.openai.responses.create(responsePayload, { signal: options?.abort });
         return this.parseResponseToAnswer(response);
     }
 
-    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer> {
         return invokeStructuredOutputWithRetries({
             schema,
             maxRecallTries,
@@ -561,7 +562,8 @@ export class OpenAI implements StandardLLMShema {
             setTools: (tools) => {
                 this.config.tools = tools;
             },
-            invoke: () => this.invoke()
+            invoke: (opts) => this.invoke(opts),
+            options
         });
     }
 

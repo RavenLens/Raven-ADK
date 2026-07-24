@@ -132,7 +132,8 @@ export async function invokeStructuredOutputWithRetries<TTools>(params: {
     getTools: () => TTools;
     setMessages: (messages: MessagesVariations[] | undefined) => void;
     setTools: (tools: TTools) => void;
-    invoke: () => Promise<LLMAnswer>;
+    invoke: (options?: InvokeOptions) => Promise<LLMAnswer>;
+    options?: InvokeOptions;
 }): Promise<LLMAnswer> {
     const originalMessages = params.messages;
     const originalTools = params.getTools();
@@ -151,7 +152,7 @@ export async function invokeStructuredOutputWithRetries<TTools>(params: {
             params.setTools([] as unknown as TTools);
 
             try {
-                const answer = await params.invoke();
+                const answer = await params.invoke(params.options);
                 const aiMessage = extractStructuredOutputAIMessage(answer);
                 const structuredOutput = parseStructuredOutputContent(aiMessage.content ?? "", params.schema);
 

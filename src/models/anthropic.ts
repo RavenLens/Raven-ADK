@@ -237,8 +237,9 @@ export class Anthropic implements StandardLLMShema {
         });
     }
     
-    private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>) {
+    private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>, abort?: AbortSignal) {
         for await (const event of stream) {
+            if (abort?.aborted) break;
             this.emitEvent("stream", event);
 
             if (event.type === "content_block_delta" && event.delta.type === "thinking_delta") {
@@ -333,8 +334,8 @@ export class Anthropic implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] } | undefined): Promise<LLMAnswer>;
-    async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>>;
+    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"]; abort?: AbortSignal } | undefined): Promise<LLMAnswer>;
+    async invoke(options: { stream: true; messages?: InvokeOptions["messages"]; abort?: AbortSignal }): Promise<AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>> {
         if (options?.messages) {
             this.config.messages = options.messages;
@@ -355,16 +356,16 @@ export class Anthropic implements StandardLLMShema {
         }
         
         if (options?.stream) {
-            const streamCompletion = this.anthropic.messages.stream(config);
-            return this.streamWithEvents(streamCompletion);
+            const streamCompletion = this.anthropic.messages.stream(config, { signal: options?.abort });
+            return this.streamWithEvents(streamCompletion, options?.abort);
         } else {
             // Execute llm
-            const completion = await this.anthropic.messages.create(config);
+            const completion = await this.anthropic.messages.create(config, { signal: options?.abort });
             return this.prepareSyncAnswer(completion);
         }
     }
 
-    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer> {
         return invokeStructuredOutputWithRetries({
             schema,
             maxRecallTries,
@@ -376,7 +377,8 @@ export class Anthropic implements StandardLLMShema {
             setTools: (tools) => {
                 this.config.tools = tools;
             },
-            invoke: () => this.invoke()
+            invoke: (opts) => this.invoke(opts),
+            options
         });
     }
 

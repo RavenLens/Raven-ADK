@@ -29,6 +29,7 @@ export interface LLMAnswer {
 
 export interface InvokeOptions {
     stream?: boolean;
+    abort?: AbortSignal;
     /** Model will override his messages called in initialization with the specified here messages */
     messages?: MessagesVariations[];
     /** Model will override his tools called in initialization with the specified here tools */
@@ -55,8 +56,8 @@ export interface StandardLLMShema {
     typeAPI: "model";
     apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
     config: LLMConfig;
-    invoke(): Promise<LLMAnswer>;
-    invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer>;
+    invoke(options?: InvokeOptions): Promise<LLMAnswer>;
+    invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer>;
     tts(text: string, options?: any): Promise<Buffer | undefined>;
     stt(speechFile: File, options?: any): Promise<string>;
 }

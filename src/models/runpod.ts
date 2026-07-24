@@ -424,13 +424,16 @@ export class RunPod implements StandardLLMShema {
 		const request = await this.endpoint.run(payload, this.config.requestTimeout);
 
 		for await (const chunk of this.endpoint.stream(request.id, this.config.streamTimeout)) {
+			if (options?.abort?.aborted) {
+				break;
+			}
 			yield chunk;
 		}
 	}
 
 	async invoke(): Promise<LLMAnswer>;
-	async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] }): Promise<LLMAnswer>;
-	async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncIterable<unknown>>;
+	async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"]; abort?: AbortSignal }): Promise<LLMAnswer>;
+	async invoke(options: { stream: true; messages?: InvokeOptions["messages"]; abort?: AbortSignal }): Promise<AsyncIterable<unknown>>;
 	async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<unknown>> {
 		if (options?.messages) {
 			this.config.messages = options.messages;
@@ -445,10 +448,14 @@ export class RunPod implements StandardLLMShema {
 		};
 		const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
 
+		if (options?.abort?.aborted) {
+			throw new Error("AbortError");
+		}
+
 		return this.parseResponseToAnswer(response);
 	}
 
-	async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+	async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer> {
 		return invokeStructuredOutputWithRetries({
 			schema,
 			maxRecallTries,
@@ -460,7 +467,8 @@ export class RunPod implements StandardLLMShema {
 			setTools: (tools) => {
 				this.config.tools = tools;
 			},
-			invoke: () => this.invoke()
+			invoke: (opts) => this.invoke(opts),
+			options
 		});
 	}
 
