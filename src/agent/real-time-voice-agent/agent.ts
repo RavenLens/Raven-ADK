@@ -1,16 +1,33 @@
 import { HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
-import { AuthPayload, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, VoiceAgentDescriptionConfig } from "./agentConfig";
+import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, VoiceAgentDescriptionConfig } from "./agentConfig";
 import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
-import { ReActAgent } from "../ReAct.agent";
+import { ReActAgent, ReActAgentEvents } from "../ReAct.agent";
+import { Constructor } from "mqtt";
 
 /**
  * @param result - isn't included in `CommunicationSpeechLevelsDetails` to don't introduce the breaking feature
 */
 type SpeechLevel = keyof Exclude<NonNullable<RealTimeVoiceAgentConfig<any, any, any>["communicationSpeechLevels"]>, string> | "result";
 
+/** Events for the **RealTimeVoiceAgent** */
+export interface RealTimeVoiceAgentEvents {
+    "stt-transcript-interim": (data: { clientID: string; transcript: string; isFinal: boolean; raw: any }) => void | Promise<void>;
+    "stt-transcript-final": (data: { clientID: string; transcript: string; audioBuffer: Buffer }) => void | Promise<void>;
+    "logic_start": (data: { clientID: string; transcript: string }) => void | Promise<void>;
+    "logic_finish": (data: { clientID: string; result: any }) => void | Promise<void>;
+    "speech_segment": (data: { clientID: string; type: SpeechLevel; text: string }) => void | Promise<void>;
+    "interrupt": (data: { clientID: string }) => void | Promise<void>;
+    "speech_start": (data: { clientID: string; timestamp: number }) => void | Promise<void>;
+    "speech_end": (data: { clientID: string; timestamp: number }) => void | Promise<void>;
+    "speak_before_start": (data: { clientID: string }) => void | Promise<void>;
+    "speak_before_end": (data: { clientID: string }) => void | Promise<void>;
+    "speak_before_error": (data: { clientID: string; error: any | null }) => void | Promise<void>;
+    "abort": (data: { clientID: string; reason: string }) => void | Promise<void>;
+}
+
 /** Store RTC Data Channels */
-export class ClientDataChannels {
+export class WebRTCClientDataChannels {
     private channels = new Map<string, { [channelName: string]: RTCDataChannel; }>();
 
     /**
@@ -68,8 +85,8 @@ export class RealTimeVoiceAgent<
     /**
      * Store RTCData channels
     */
-    clientsDataChannels: ClientDataChannels = new ClientDataChannels();
-    speekingUsers = new Map<string, number>();
+    clientsDataChannels: WebRTCClientDataChannels = new WebRTCClientDataChannels();
+    speakingUsers = new Map<string, number>();
     clientAudioStreams = new Map<string, MediaStream>();
     // Unblocking audio processing queues and STT stream sessions per client
     private activeSpeechSessions = new Map<string, {
@@ -83,6 +100,16 @@ export class RealTimeVoiceAgent<
     private internalEvents: EventEmitter = new EventEmitter();
     private activeClients = new Map<string, { socket: any; pc: any; logicAbortController: AbortController | null; authParams: AuthPayload; audioSource?: any; videoSource?: any; }>();
     private serverInstance: any = null;
+
+    // Event Listeners
+    /**
+     * Listens local Events for the **ReActAgent** serves as internal logic
+    */
+    private LogicEventsListeners: Record<string, Array<(...args: any[]) => void | Promise<void>>> = {};
+    /**
+     * Listens locall events for **RealTimeVoiceAgent**
+     */
+    private RealTimeVoiceAgentEventsListeners: Record<string, Array<(...args: any[]) => void | Promise<void>>> = {};
     
     constructor(config: RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills, Memory, HITL>) {
         this.config = {
@@ -93,7 +120,8 @@ export class RealTimeVoiceAgent<
 
         /* Listen internal logic events */
         this.internalEvents.on("interrupt-internal", (clientID: string) => {
-            // TODO: Emit the interruption text event
+            // Emit the interruption status to the client
+            this.emitRealTimeVoiceAgentEvent(clientID, "interrupt", [{ clientID }]);
 
             // TODO: Emit the interruption voice sound when configured on ReAct agent, when agent was talking
             // TODO: Flush the all generated content
@@ -179,7 +207,7 @@ export class RealTimeVoiceAgent<
             if (logicAbortController.signal.aborted) return;
 
             // Emit generation text event -> Retrive on frontend
-            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.logic_start", { transcript });
+            this.emitRealTimeVoiceAgentEvent(clientID, "logic_start", [{ clientID, transcript }]);
 
             // Config ReAct Agent
             const { authParams } = this.activeClients.get(clientID)!;
@@ -270,12 +298,47 @@ export class RealTimeVoiceAgent<
                     }
                 }
                 
-                this.clientsDataChannels.emitEvent(clientID, `agent.${event}`, args.length === 1 ? args[0] : args);
+                // Emits local and remote events
+                this.emitLogicEvent(clientID, event, args.length === 1 ? args[0] : args);
             });
 
             // TODO: Register listening for plugin execution by: config.agent.plugins and tell when it's possible
 
-            // TODO: Optionally before agent run run the speech voice when was configured
+            // Emit the tts speech when user configured it at the beginning
+            await (async () => {
+                const speechConfig = this.config?.beforeLogicProcessing;
+                const canCommunicate = this.config.communicationSpeechLevels === "all" || this.config.communicationSpeechLevels?.beforeLogicProcessing === true;
+
+                if (typeof speechConfig === "object" && canCommunicate) {
+                    const { nature, toSay } = speechConfig;
+                    
+                    const runSpeechWorkflow = async () => {
+                        try {
+                            this.emitRealTimeVoiceAgentEvent(clientID, "speak_before_start", [{ clientID }]);
+                            
+                            const whatToSay = typeof toSay === "string" ? toSay : await toSay(transcript);
+                            
+                            await this.speak(
+                                clientID,
+                                whatToSay, 
+                                "beforeLogicProcessing",
+                                logicAbortController.signal
+                            );
+                            
+                            this.emitRealTimeVoiceAgentEvent(clientID, "speak_before_end", [{ clientID }]);
+                        } catch (err) {
+                            this.emitRealTimeVoiceAgentEvent(clientID, "speak_before_error", [{ clientID, error: err }]);
+                            this.devConsole(`Cannot say before model execution: ${err}`, "error");
+                        }
+                    };
+
+                    if (nature === "blocking") {
+                        await runSpeechWorkflow();
+                    } else {
+                        void runSpeechWorkflow();
+                    }
+                }
+            })();
             
             // Call agent
             const result = await agent.invoke({
@@ -290,9 +353,7 @@ export class RealTimeVoiceAgent<
 
 
             // Emit generated response text event
-            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.logic_finish", {
-                result: result
-            });
+            this.emitRealTimeVoiceAgentEvent(clientID, "logic_finish", [{ clientID, result: result }]);
             
             // Speak result
             const lastAiMessage = result.messages.filter(m => m.type === "ai").pop();
@@ -326,6 +387,9 @@ export class RealTimeVoiceAgent<
 
         if (type !== "result" && !this.canAgentCommunicate(type)) return;
 
+        // Emit speech event
+        this.emitRealTimeVoiceAgentEvent(clientID, "speech_start", [{ clientID, timestamp: Date.now() }]);
+        
         try {
             // Optional transcription adjustment
             let textToSpeak = text;
@@ -375,11 +439,14 @@ export class RealTimeVoiceAgent<
                 }
                 
                 // Notify client via data channel
-                this.clientsDataChannels.emitEvent(clientID, "realtime_agent.speech_segment", { type, text: textToSpeak });
+                this.emitRealTimeVoiceAgentEvent(clientID, "speech_segment", [{ clientID, type, text: textToSpeak }])
             }
         } catch (err) {
             this.devConsole(`[RealTimeVoiceAgent] Speak error for ClientID ${clientID}: ${err}`, "error");
         }
+        
+        // Emit speech event end
+        this.emitRealTimeVoiceAgentEvent(clientID, "speech_end", [{ clientID, timestamp: Date.now() }]);
     }
 
     /**
@@ -409,7 +476,7 @@ export class RealTimeVoiceAgent<
 
     /** Called when client VAD signals speech start over RTCDataChannel */
     private onSpeechStart(clientID: string, timestamp: number) {
-        this.speekingUsers.set(clientID, timestamp);
+        this.speakingUsers.set(clientID, timestamp);
         this.devConsole(`[RealTimeVoiceAgent] User started speaking (ClientID: ${clientID}, Timestamp: ${timestamp})`, "log");
         
         // Interrupt ongoing background/synthesis actions when user starts talking
@@ -494,8 +561,8 @@ export class RealTimeVoiceAgent<
             sessionAbortController: AbortController;
         }
     ) {
-        const sttModel = this.config.agent.models.stt;
-        const sttMode = this.config.agent.models.sttMode ?? "volatile";
+        const sttModel = this.config.agent.models.stt.model;
+        const sttMode = this.config.agent.models.stt.sttMode ?? "volatile";
 
         if (!sttModel) {
             this.devConsole(`[RealTimeVoiceAgent] No STT model specified in configuration`, "warn");
@@ -556,9 +623,70 @@ export class RealTimeVoiceAgent<
         }
     }
 
+    /**
+     * Emits the local Events for ReActAgent logic and for RealTimeVoiceAgent
+     */
+    private emitLogicEvent<EventName extends keyof ReActAgentEvents>(
+        clientID: string,
+        event: EventName,
+        data?: Parameters<ReActAgentEvents[EventName]>
+    ) {
+        const listeners = this.LogicEventsListeners[event];
+        if (listeners) {
+            listeners.forEach(listener => listener(...(data || [])));
+        }
+
+        // Emit event via the network to the customer
+        this.clientsDataChannels.emitEvent(clientID, `logic.${event}`, data);
+    }
+
+    private emitRealTimeVoiceAgentEvent<EventName extends keyof RealTimeVoiceAgentEvents>(
+        clientID: string,
+        event: EventName,
+        data?: Parameters<RealTimeVoiceAgentEvents[EventName]>
+    ) {
+        const listeners = this.RealTimeVoiceAgentEventsListeners[event];
+        if (listeners) {
+            listeners.forEach(listener => listener(...(data || [])));
+        }
+
+        // Emit event via the network to the customer
+        this.clientsDataChannels.emitEvent(clientID, `realtime_agent.${event}`, data);
+    }
+
+    /**
+     * Listens local Events for **RealTimeVoiceAgent**
+    */
+    public onRealTimeVoiceAgentEvents<EventName extends keyof RealTimeVoiceAgentEvents>(
+        eventName: EventName,
+        eventListener: RealTimeVoiceAgentEvents[EventName]
+    ) {
+        if (!this.RealTimeVoiceAgentEventsListeners[eventName]) {
+            this.RealTimeVoiceAgentEventsListeners[eventName] = [];
+        }
+
+        this.RealTimeVoiceAgentEventsListeners[eventName].push(eventListener as (...args: any[]) => void | Promise<void>);
+        return this;
+    }
+    
+    /**
+     * Listen local Events for the **ReActAgent** serves as internal logic
+    */
+    public onLogicEvent<EventName extends keyof ReActAgentEvents>(
+        eventName: EventName,
+        eventListener: ReActAgentEvents[EventName]
+    ) {
+        if (!this.LogicEventsListeners[eventName]) {
+            this.LogicEventsListeners[eventName] = [];
+        }
+
+        this.LogicEventsListeners[eventName].push(eventListener as (...args: any[]) => void | Promise<void>);
+        return this;
+    }
+
     /** Called when client VAD signals speech end over RTCDataChannel */
     private async onSpeechEnd(clientID: string, timestamp: number) {
-        this.speekingUsers.delete(clientID);
+        this.speakingUsers.delete(clientID);
         this.devConsole(`[RealTimeVoiceAgent] User stopped speaking (ClientID: ${clientID}, Timestamp: ${timestamp})`, "log");
         
         const session = this.activeSpeechSessions.get(clientID);
@@ -568,7 +696,7 @@ export class RealTimeVoiceAgent<
             session.chunkResolvers.forEach((resolve) => resolve());
             session.chunkResolvers = [];
 
-            const sttModel = this.config.agent.models.stt;
+            const sttModel = this.config.agent.models.stt.model;
             let finalTranscript = "";
 
             if (session.audioBuffers.length > 0 && sttModel) {
@@ -784,7 +912,7 @@ export class RealTimeVoiceAgent<
                     const cleanupTrack = (reason: string) => {
                         this.devConsole(`[RealTimeVoiceAgent] Audio track ${reason} for ClientID: ${clientID}`, "log");
                         this.clientAudioStreams.delete(clientID);
-                        this.speekingUsers.delete(clientID);
+                        this.speakingUsers.delete(clientID);
                         this.usersTrackID.delete(clientID);
                     };
 
@@ -844,7 +972,7 @@ export class RealTimeVoiceAgent<
 
             socket.on('disconnect', () => {
                 this.clientAudioStreams.delete(clientID);
-                this.speekingUsers.delete(clientID);
+                this.speakingUsers.delete(clientID);
                 this.usersTrackID.delete(clientID);
                 
                 const client = this.activeClients.get(clientID);
@@ -888,7 +1016,7 @@ export class RealTimeVoiceAgent<
             }
 
             // Emit abort to client
-            this.clientsDataChannels.emitEvent(clientID, "abort", { reason: "Global abort triggered" });
+            this.emitRealTimeVoiceAgentEvent(clientID, "abort", [{ clientID, reason: "Global abort triggered" }]);
 
             // Close connection
             client.pc.close();

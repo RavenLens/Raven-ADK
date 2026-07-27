@@ -478,7 +478,7 @@ Works for the `LB` adapter
 
 ## Agent
 ### Drawning Agent Behaviour
-[Excalidraw overview](https://excalidraw.com/#json=ws7vMGjHKGEC_kRO3yN8r,B9lyLFoei40dWP3FJPKhBA)
+[Excalidraw overview](https://excalidraw.com/#json=Pl4zZZ_TYd18uByExo3vi,UShVva1JEiKjtotk_U6pwg)
 
 ### Step-by-Step Description
 1. **User Ingest:** The user initiates an audio stream (via continuous stream or push-to-talk - you decide when)

@@ -220,6 +220,7 @@ type UnitDependencyWrapper<ReturnType> = (clientID: string, authPayload: AuthPay
  * @param result - isn't specified to don't disable the RealtimeLiveAgentFunction 
  */
 export interface CommunicationSpeechLevelsDetails {
+  beforeLogicProcessing: boolean;
   afterFullSTTTranscript: boolean;
   thoughts: boolean;
   tools: boolean;
@@ -236,6 +237,17 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
    * - 'local': Running directly on the user's device. It doesn't spawn server (Edge AI)
    */
   executionMode: ExecutionRemoteMode | ExecutionLocalMode;
+  /** Decide what to say before the logic processing - ignored for "all" */
+  beforeLogicProcessing?: {
+    /**
+     * Describes what to say
+    */
+    toSay: string | ((transcript: string) => string | Promise<string>);
+    /**
+     * Add option to specify whether has it to be blocking or asynchronous - non-blocking logic
+    */
+    nature: "blocking" | "non-blocking";
+  };
   /**
    * Describe what you want to have communicated by 'tts' model and correlated "avatar" model/pipeline
    * @default "all"
@@ -247,25 +259,27 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
      * Config for the VAD (Voice-Activation-Detection) is used on frontend
      * Provides fine-grained finetunning for the server and required informations for telementry and logs
     */
-    vad?: {
-      model: "silero" | "deepgram" | "native";
-      chunkSizeMs: number; // e.g., 20 or 30
-      threshold: number;   // Sensitivity 0-1
-      silenceTimeout: number; // For turn detection
-      /** Determine whether to rely on silence timeout or semantic reasoning for turn detection */
-      endpointingMode?: "threshold" | "semantic";
-    };
+    // vad?: {
+    //   model: "silero" | "deepgram" | "native";
+    //   chunkSizeMs: number; // e.g., 20 or 30
+    //   threshold: number;   // Sensitivity 0-1
+    //   silenceTimeout: number; // For turn detection
+    //   /** Determine whether to rely on silence timeout or semantic reasoning for turn detection */
+    //   endpointingMode?: "threshold" | "semantic";
+    // };
     /** List with models fanned in RealTime communication */
     models: {
       /** Model that converts speech-to-text (either standard AgentModel or specialized STTModel instance) */
-      stt: AgentModel | STTModel;
-      /**
-       * Speech-to-text execution mode.
-       * - 'volatile': processes audio subchunks in real time on the fly as speech flows.
-       * - 'interim': processes the full audio buffer after user speech concludes.
-       * @default "volatile"
-       */
-      sttMode?: STTMode;
+      stt: {
+        model: AgentModel | STTModel;
+        /**
+         * Speech-to-text execution mode.
+         * - 'volatile': processes audio subchunks in real time on the fly as speech flows.
+         * - 'interim': processes the full audio buffer after user speech concludes.
+         * @default "volatile"
+         */
+        sttMode?: STTMode;
+      };
       /** Main Reasoning model */
       reasoning: AgentModel;
       /** 
