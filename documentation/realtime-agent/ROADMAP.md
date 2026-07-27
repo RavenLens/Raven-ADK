@@ -5,16 +5,12 @@
                 - Describe in documentation that first speech generation from agent can flush the initial conversation from WebRTC channel - it could be separate channel but this may be overhelming for the client
                 - Add the static or dynamic specification by processing with some llm where the tts model will be called from
         - Add to agent documentation - that it can be used to say like **Siri** Hi how can I help you today or process the transcript and generate the request
-    - Add Speech models to flush the speech was before it started
     - Prepare specialistic `TTS` class of models
         - Prepare the interface in `base.ts` with the specification
         - Allow the model to get the custom parameters preset like the voice or according to the specific model
         - Add to config the specifiation of the model
         - Add to the documentation how to use some model like this
-    - ReAct Agent events should be listenable for the instance at the backend
-        - Allow ReAct agent to listen multiple events - implement in the emitEvent, onAnyEvent and onEvent logic will trigger for each listener instead only for one
-        - Make the `onLogicEvent` at the `RealTimeVoiceAgent` with JSDoc description for what it does
-    - RealTimeVoiceAgent plugins
+    - RealTimeVoiceAgent plugins 
         - Plugins have to be configured to be spoken **before** or **after** the execution - add this to the logic of these plugins the specific wrapper
             - Add wrapper
             - Add configuration options **before** and **after**

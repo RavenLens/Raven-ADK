@@ -10,6 +10,52 @@ It's agent to communicate via voice and optionally live avatar the speech with y
 
 ## Backend
 
+## Configuration
+- Configure
+
+### Speak Before Reasoning
+
+Use `beforeLogicProcessing` to have the voice agent acknowledge a completed user utterance before its reasoning agent starts. This works well for a Siri-style response such as "Hi, how can I help you today?" or "Let me look into that for you."
+
+```typescript
+const voiceAgent = new RealTimeVoiceAgent({
+    // Other configuration omitted
+    beforeLogicProcessing: {
+        toSay: "Hi, how can I help you today?",
+        nature: "blocking"
+    },
+    agent: {
+        // Models and agent configuration omitted
+    }
+});
+```
+
+The configured phrase is spoken for every final transcript. It is a per-turn acknowledgement, not a one-time greeting when the client connects.
+
+For a request-aware acknowledgement, provide a function. It receives the final speech-to-text transcript and can return a string or a promise for one:
+
+```typescript
+{
+    beforeLogicProcessing: {
+        toSay: async (transcript) => {
+            const request = transcript.trim();
+    
+            if (/^(hi|hello)\b/i.test(request)) {
+                return "Hi, how can I help you today?";
+            }
+    
+            return `I heard: ${request}. Let me work on that.`;
+        },
+        nature: "non-blocking"
+    },
+    // ... Rest of params
+}
+```
+
+Set `nature` to `"blocking"` when the agent must wait until the acknowledgement finishes before it starts reasoning. Set it to `"non-blocking"` to speak while reasoning begins in parallel.
+
+`toSay` only controls the spoken acknowledgement. It does not replace the transcript sent to the reasoning model. Configure `agent.models.transcriber` for `after-full-stt-transcript` when the final transcript itself must be normalized or rewritten before the request reaches the reasoning agent.
+
 ### Questions:
 #### How to configure speech for specific executable element?
 1. General Setup - Setup with agent config what have to be told
