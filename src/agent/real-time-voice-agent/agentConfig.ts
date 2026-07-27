@@ -273,6 +273,16 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
       stt: {
         model: AgentModel | STTModel;
         /**
+         * Describes how the next models will process data in respect to the prior
+         * Possible apporaches:
+         * - blocking - speech is queued and starts after the current speech finishes
+         * - flush - cancels the current and queued speech, then starts the newest speech
+         *   The client receives `realtime_agent.speech_interrupted` so it can clear locally buffered audio.
+         * 
+         * @default {"blocking"} - speech of one is blocked till next will start
+         */
+        speechApproach: "blocking" | "flush";
+        /**
          * Speech-to-text execution mode.
          * - 'volatile': processes audio subchunks in real time on the fly as speech flows.
          * - 'interim': processes the full audio buffer after user speech concludes.

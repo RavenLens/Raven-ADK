@@ -12,12 +12,13 @@ type SpeechLevel = keyof Exclude<NonNullable<RealTimeVoiceAgentConfig<any, any, 
 
 /** Events for the **RealTimeVoiceAgent** */
 export interface RealTimeVoiceAgentEvents {
-    "stt-transcript-interim": (data: { clientID: string; transcript: string; isFinal: boolean; raw: any }) => void | Promise<void>;
-    "stt-transcript-final": (data: { clientID: string; transcript: string; audioBuffer: Buffer }) => void | Promise<void>;
+    "stt_transcript_interim": (data: { clientID: string; transcript: string; isFinal: boolean; raw: any }) => void | Promise<void>;
+    "stt_transcript_final": (data: { clientID: string; transcript: string; audioBuffer: Buffer }) => void | Promise<void>;
     "logic_start": (data: { clientID: string; transcript: string }) => void | Promise<void>;
     "logic_finish": (data: { clientID: string; result: any }) => void | Promise<void>;
     "speech_segment": (data: { clientID: string; type: SpeechLevel; text: string }) => void | Promise<void>;
     "interrupt": (data: { clientID: string }) => void | Promise<void>;
+    "speech_interrupted": (data: { clientID: string; reason: "flush" | "user" }) => void | Promise<void>;
     "speech_start": (data: { clientID: string; timestamp: number }) => void | Promise<void>;
     "speech_end": (data: { clientID: string; timestamp: number }) => void | Promise<void>;
     "speak_before_start": (data: { clientID: string }) => void | Promise<void>;
@@ -97,6 +98,11 @@ export class RealTimeVoiceAgent<
         isSpeaking: boolean;
         sessionAbortController: AbortController;
     }>();
+    private outputSpeechQueues = new Map<string, {
+        queue: Array<{ text: string; type: SpeechLevel; abort?: AbortSignal; resolve: () => void }>;
+        currentAbortController: AbortController | null;
+        isProcessing: boolean;
+    }>();
     private internalEvents: EventEmitter = new EventEmitter();
     private activeClients = new Map<string, { socket: any; pc: any; logicAbortController: AbortController | null; authParams: AuthPayload; audioSource?: any; videoSource?: any; }>();
     private serverInstance: any = null;
@@ -120,21 +126,18 @@ export class RealTimeVoiceAgent<
 
         /* Listen internal logic events */
         this.internalEvents.on("interrupt-internal", (clientID: string) => {
-            // Emit the interruption status to the client
-            this.emitRealTimeVoiceAgentEvent(clientID, "interrupt", [{ clientID }]);
-
-            // TODO: Emit the interruption voice sound when configured on ReAct agent, when agent was talking
-            // TODO: Flush the all generated content
+            this.flushSpeakQueue(clientID, "user");
+            this.emitSpeechQueueEvent(clientID, "interrupt", [{ clientID }]);
         });
         
-        this.internalEvents.on("stt-transcript-interim", ({
+        this.internalEvents.on("stt_transcript_interim", ({
             clientID,
             transcript,
             isFinal,
             raw
         }: { clientID: string; transcript: string; isFinal: boolean; raw: any; }) => {
             // Emit event
-            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.stt-transcript-interim", { transcript, isFinal });
+            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.stt_transcript_interim", { transcript, isFinal });
             
             // TODO: Generate the content right now as speculative decoding mechanism -> model generates thoughts base on the specified text by asking questions - Least-To-Most Technique -> then attach this to the full transcript prompt
             // TODO: generate speculative events before and after
@@ -142,9 +145,9 @@ export class RealTimeVoiceAgent<
         
         // It's the final trasncript arrived from the message
         // From this place agent begins execution
-        this.internalEvents.on("stt-transcript-final", async ({ clientID, transcript, audioBuffer }: { clientID: string; transcript: string; audioBuffer: Buffer }) => {
+        this.internalEvents.on("stt_transcript_final", async ({ clientID, transcript, audioBuffer }: { clientID: string; transcript: string; audioBuffer: Buffer }) => {
             // Emit Client Text Event
-            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.stt-transcript-final", { transcript });
+            this.clientsDataChannels.emitEvent(clientID, "realtime_agent.stt_transcript_final", { transcript });
             
             // Abort previous turn if running
             const client = this.activeClients.get(clientID);
@@ -387,8 +390,116 @@ export class RealTimeVoiceAgent<
 
         if (type !== "result" && !this.canAgentCommunicate(type)) return;
 
-        // Emit speech event
-        this.emitRealTimeVoiceAgentEvent(clientID, "speech_start", [{ clientID, timestamp: Date.now() }]);
+        let state = this.outputSpeechQueues.get(clientID);
+        if (!state) {
+            state = { queue: [], currentAbortController: null, isProcessing: false };
+            this.outputSpeechQueues.set(clientID, state);
+        }
+
+        const speechApproach = this.config.agent.models.stt.speechApproach ?? "blocking";
+        if (speechApproach === "flush") {
+            this.flushSpeakQueue(clientID, "flush");
+        }
+
+        const completion = new Promise<void>((resolve) => {
+            state.queue.push({ text, type, abort, resolve });
+        });
+
+        // Start processing if not already
+        if (!state.isProcessing) {
+            this.processSpeakQueue(clientID).catch(err => {
+                this.devConsole(`[RealTimeVoiceAgent] Error in processSpeakQueue for ${clientID}: ${err}`, "error");
+            });
+        }
+
+        await completion;
+    }
+
+    private flushSpeakQueue(clientID: string, reason: "flush" | "user") {
+        const state = this.outputSpeechQueues.get(clientID);
+        if (!state) return;
+
+        const hadPendingSpeech = state.currentAbortController !== null || state.queue.length > 0;
+        state.currentAbortController?.abort();
+        state.queue.splice(0).forEach((item) => item.resolve());
+
+        if (hadPendingSpeech) {
+            this.emitSpeechQueueEvent(clientID, "speech_interrupted", [{ clientID, reason }]);
+        }
+    }
+
+    private disposeSpeakQueue(clientID: string) {
+        const state = this.outputSpeechQueues.get(clientID);
+        if (!state) return;
+
+        state.currentAbortController?.abort();
+        state.queue.splice(0).forEach((item) => item.resolve());
+        this.outputSpeechQueues.delete(clientID);
+    }
+
+    private emitSpeechQueueEvent<EventName extends "interrupt" | "speech_interrupted" | "speech_start" | "speech_segment" | "speech_end">(
+        clientID: string,
+        event: EventName,
+        data: Parameters<RealTimeVoiceAgentEvents[EventName]>
+    ) {
+        try {
+            this.emitRealTimeVoiceAgentEvent(clientID, event, data);
+        } catch (err) {
+            this.devConsole(`[RealTimeVoiceAgent] Unable to emit ${event} for ClientID ${clientID}: ${err}`, "warn");
+        }
+    }
+
+    private async processSpeakQueue(clientID: string) {
+        const state = this.outputSpeechQueues.get(clientID);
+        if (!state) return;
+
+        state.isProcessing = true;
+
+        try {
+            while (state.queue.length > 0) {
+                const item = state.queue.shift()!;
+                
+                // Create controller for this specific task
+                const executionAbortController = new AbortController();
+                state.currentAbortController = executionAbortController;
+
+                // Sync with parent logic abort signal if provided
+                const abortHandler = () => executionAbortController.abort();
+                if (item.abort) {
+                    if (item.abort.aborted) {
+                        state.currentAbortController = null;
+                        item.resolve();
+                        continue;
+                    }
+                    item.abort.addEventListener("abort", abortHandler);
+                }
+
+                try {
+                    await this.executeSpeak(clientID, item.text, item.type, executionAbortController.signal);
+                } catch (err) {
+                    this.devConsole(`[RealTimeVoiceAgent] Queue item failed for ClientID ${clientID}: ${err}`, "error");
+                } finally {
+                    if (item.abort) {
+                        item.abort.removeEventListener("abort", abortHandler);
+                    }
+                    state.currentAbortController = null;
+                    item.resolve();
+                }
+            }
+        } finally {
+            state.isProcessing = false;
+            if (state.queue.length === 0 && this.outputSpeechQueues.get(clientID) === state) {
+                this.outputSpeechQueues.delete(clientID);
+            }
+        }
+    }
+
+    private async executeSpeak(clientID: string, text: string, type: SpeechLevel, abort: AbortSignal) {
+        const client = this.activeClients.get(clientID);
+        if (!client || !client.audioSource) return;
+
+        // Emit speech start event
+        this.emitSpeechQueueEvent(clientID, "speech_start", [{ clientID, timestamp: Date.now() }]);
         
         try {
             // Optional transcription adjustment
@@ -403,13 +514,18 @@ export class RealTimeVoiceAgent<
                 }
 
                 if (currentTranscriber) {
-                    const res = await currentTranscriber.model.invoke({
-                        messages: [
-                            { type: "system", content: `You are a professional transcriber. Your role is to produce the transcription of the specified segment. Segment type: ${type}.${currentTranscriber.systemPromptAddition ? `\n\nAdditional instructions from user:\n${currentTranscriber.systemPromptAddition}` : ""}` },
-                            { type: "user", content: text }
-                        ],
+                    const res = await this.waitForSpeechOperation<any>(
+                        currentTranscriber.model.invoke({
+                            messages: [
+                                { type: "system", content: `You are a professional transcriber. Your role is to produce the transcription of the specified segment. Segment type: ${type}.${currentTranscriber.systemPromptAddition ? `\n\nAdditional instructions from user:\n${currentTranscriber.systemPromptAddition}` : ""}` },
+                                { type: "user", content: text }
+                            ],
+                            abort
+                        }),
                         abort
-                    });
+                    );
+                    if (!res) return;
+
                     const aiMessage = res.answer.find((m: any) => m.type === "ai");
                     if (aiMessage && "content" in aiMessage && typeof aiMessage.content === "string") {
                         textToSpeak = aiMessage.content;
@@ -417,36 +533,98 @@ export class RealTimeVoiceAgent<
                 }
             }
 
+            if (abort.aborted) return;
+
             // TTS
             const ttsModel = this.config.agent.models.tts;
-            const audioBuffer = await ttsModel.tts(textToSpeak, { // TODO: Prepare better model then
-                model: (ttsModel as any).config?.model ?? "tts-1",
-                voice: "alloy" // Default voice // TODO: Configure voice
-            } as any);
+            const audioBuffer = await this.waitForSpeechOperation(
+                ttsModel.tts(textToSpeak, {
+                    model: (ttsModel as any).config?.model ?? "tts-1",
+                    voice: "alloy"
+                } as any),
+                abort
+            );
             
+            if (abort.aborted) return;
+
             if (audioBuffer && audioBuffer.length > 0) {
-                // Emitting the audio via wrtc
-                client.audioSource.onData({
-                    samples: audioBuffer,
-                    sampleRate: 16000,
-                    bitsPerSample: 16,
-                    channelCount: 1
-                });
+                const sampleRate = 16000;
+                const bytesPerSample = 2;
+                const frameDurationMs = 20;
+                const frameSize = sampleRate * bytesPerSample * frameDurationMs / 1000;
+
+                this.emitSpeechQueueEvent(clientID, "speech_segment", [{ clientID, type, text: textToSpeak }]);
+
+                for (let offset = 0; offset < audioBuffer.length && !abort.aborted; offset += frameSize) {
+                    const samples = audioBuffer.subarray(offset, offset + frameSize);
+                    client.audioSource.onData({
+                        samples,
+                        sampleRate,
+                        bitsPerSample: 16,
+                        channelCount: 1
+                    });
+
+                    if (offset + frameSize < audioBuffer.length) {
+                        await this.waitForSpeechFrame(frameDurationMs, abort);
+                    }
+                }
 
                 // Update avatar if available
                 if (this.config.agent.models.avatar && client.videoSource) {
-                    // Avatar updates would be triggered here
+                    // TODO: Avatar logic integration
                 }
-                
-                // Notify client via data channel
-                this.emitRealTimeVoiceAgentEvent(clientID, "speech_segment", [{ clientID, type, text: textToSpeak }])
             }
-        } catch (err) {
-            this.devConsole(`[RealTimeVoiceAgent] Speak error for ClientID ${clientID}: ${err}`, "error");
+        } catch (err: any) {
+            if (err.name !== "AbortError") {
+                this.devConsole(`[RealTimeVoiceAgent] executeSpeak error for ClientID ${clientID}: ${err}`, "error");
+            }
+        } finally {
+            // Emit speech end event
+            this.emitSpeechQueueEvent(clientID, "speech_end", [{ clientID, timestamp: Date.now() }]);
         }
-        
-        // Emit speech event end
-        this.emitRealTimeVoiceAgentEvent(clientID, "speech_end", [{ clientID, timestamp: Date.now() }]);
+    }
+
+    private waitForSpeechFrame(durationMs: number, abort: AbortSignal): Promise<void> {
+        if (abort.aborted) return Promise.resolve();
+
+        return new Promise((resolve) => {
+            const timeout = setTimeout(finish, durationMs);
+            const abortHandler = () => {
+                clearTimeout(timeout);
+                finish();
+            };
+
+            function finish() {
+                abort.removeEventListener("abort", abortHandler);
+                resolve();
+            }
+
+            abort.addEventListener("abort", abortHandler, { once: true });
+        });
+    }
+
+    private waitForSpeechOperation<Result>(operation: Promise<Result>, abort: AbortSignal): Promise<Result | undefined> {
+        if (abort.aborted) return Promise.resolve(undefined);
+
+        return new Promise((resolve, reject) => {
+            let settled = false;
+            const finish = (result: Result | undefined) => {
+                if (settled) return;
+                settled = true;
+                abort.removeEventListener("abort", abortHandler);
+                resolve(result);
+            };
+            const fail = (error: unknown) => {
+                if (settled) return;
+                settled = true;
+                abort.removeEventListener("abort", abortHandler);
+                reject(error);
+            };
+            const abortHandler = () => finish(undefined);
+
+            abort.addEventListener("abort", abortHandler, { once: true });
+            operation.then(finish, fail);
+        });
     }
 
     /**
@@ -609,7 +787,7 @@ export class RealTimeVoiceAgent<
             for await (const transcriptResponse of volatileSTT) {
                 if (session.sessionAbortController.signal.aborted) break;
                 
-                this.internalEvents.emit("stt-transcript-interim", {
+                this.internalEvents.emit("stt_transcript_interim", {
                     clientID,
                     transcript: transcriptResponse.text,
                     isFinal: transcriptResponse.isFinal,
@@ -721,14 +899,14 @@ export class RealTimeVoiceAgent<
                 }
 
                 if (!session.sessionAbortController.signal.aborted) {
-                    this.internalEvents.emit("stt-transcript-final", {
+                    this.internalEvents.emit("stt_transcript_final", {
                         clientID,
                         transcript: finalTranscript,
                         audioBuffer: fullAudioBuffer
                     });
                 }
             } else if (!session.sessionAbortController.signal.aborted) {
-                this.internalEvents.emit("stt-transcript-final", {
+                this.internalEvents.emit("stt_transcript_final", {
                     clientID,
                     transcript: "",
                     audioBuffer: Buffer.alloc(0)
@@ -974,6 +1152,7 @@ export class RealTimeVoiceAgent<
                 this.clientAudioStreams.delete(clientID);
                 this.speakingUsers.delete(clientID);
                 this.usersTrackID.delete(clientID);
+                this.disposeSpeakQueue(clientID);
                 
                 const client = this.activeClients.get(clientID);
                 if (client?.logicAbortController) {
@@ -1014,6 +1193,8 @@ export class RealTimeVoiceAgent<
             if (client.logicAbortController) {
                 client.logicAbortController.abort();
             }
+
+            this.disposeSpeakQueue(clientID);
 
             // Emit abort to client
             this.emitRealTimeVoiceAgentEvent(clientID, "abort", [{ clientID, reason: "Global abort triggered" }]);

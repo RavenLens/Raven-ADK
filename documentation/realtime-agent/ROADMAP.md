@@ -1,5 +1,5 @@
 1. Accomplish the periodical strict logic flags
-    - Configure speech at the begining
+    - Configure speech at the begining (done)
         - Add to config `communicationSpeechLevels` the `beforeLogicProcessing`
             - Add option to specify whether has it to be blocking or asynchronous - non-blocking logic
                 - Describe in documentation that first speech generation from agent can flush the initial conversation from WebRTC channel - it could be separate channel but this may be overhelming for the client
