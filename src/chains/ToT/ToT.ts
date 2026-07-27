@@ -82,7 +82,7 @@ export const DEFAULT_THOUGHTS_DEPTH = 10;
 
 export class TreeOfThoughts {
     /** Events list */
-    private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private EventsListeners: Record<string, Array<(...args: any[]) => void | Promise<void>>> = {};
     config: TreeOfThoughtsConfig;
     /** List with nodes */
     nodes: [OptionNode, ThoughtNode[]][] = [];
@@ -98,18 +98,16 @@ export class TreeOfThoughts {
         eventName: EventName,
         ...eventArgs: Parameters<TreeOfThoughtsEvents[EventName]>
     ) {
-        const eventListener = this.EventsListeners[eventName];
+        const eventListeners = this.EventsListeners[eventName];
 
-        if (!eventListener) {
-            return;
-        }
-
-        const listener = eventListener as unknown as TreeOfThoughtsEvents[EventName];
-
-        try {
-            await Promise.resolve((listener as any)(...eventArgs));
-        } catch (error) {
-            console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
+        if (eventListeners) {
+            for (const listener of eventListeners) {
+                try {
+                    await Promise.resolve((listener as any)(...eventArgs));
+                } catch (error) {
+                    console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
+                }
+            }
         }
     }
 
@@ -117,12 +115,11 @@ export class TreeOfThoughts {
         eventName: EventName,
         eventListener: TreeOfThoughtsEvents[EventName]
     ): this {
-        if (this.EventsListeners[eventName]) {
-            console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
-            return this;
+        if (!this.EventsListeners[eventName]) {
+            this.EventsListeners[eventName] = [];
         }
 
-        this.EventsListeners[eventName] = eventListener;
+        this.EventsListeners[eventName].push(eventListener as (...args: any[]) => void | Promise<void>);
         return this;
     }
 

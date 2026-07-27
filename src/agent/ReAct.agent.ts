@@ -146,7 +146,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     abort?: AbortSignal;
 }
 
-interface ReActAgentEvents extends SkillEvents {
+export interface ReActAgentEvents extends SkillEvents {
     llm_result: (result: LLMAnswer) => void | Promise<void>;
     tool_invoked: (toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
     tool_executed: (toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
@@ -527,7 +527,7 @@ export class ReActAgent
 > {
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private readonly abortable: ReActAgentAbortable;
-    private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private EventsListeners: Record<string, Array<(...args: any[]) => void | Promise<void>>> = {};
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     private AnyEventListeners: Set<ReActAgentAnyEventListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
@@ -2402,12 +2402,11 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
         eventName: EventName,
         eventListener: ReActAgentEvents[EventName]
     ): this {
-        if (this.EventsListeners[eventName]) {
-            console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
-            return this;
+        if (!this.EventsListeners[eventName]) {
+            this.EventsListeners[eventName] = [];
         }
 
-        this.EventsListeners[eventName] = eventListener;
+        this.EventsListeners[eventName].push(eventListener as (...args: any[]) => void | Promise<void>);
         return this;
     }
 
@@ -2434,17 +2433,15 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
             });
         });
 
-        const eventListener = this.EventsListeners[eventName];
+        const eventListeners = this.EventsListeners[eventName];
 
-        if (!eventListener) {
-            return;
+        if (eventListeners) {
+            eventListeners.forEach((listener) => {
+                void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
+                    console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
+                });
+            });
         }
-
-        const listener = eventListener as unknown as ReActAgentEvents[EventName];
-
-        void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
-            console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
-        });
     }
 
     calculateUsedTokens(llmAnswer: LLMAnswer) {

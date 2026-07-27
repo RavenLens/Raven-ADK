@@ -33,7 +33,7 @@ export class Graph<GraphState extends Record<string, any>> {
     private EdgeSyncWatermarks: Record<string, number>[] = [];
     private NodeCompletionCounts: Record<string, number> = {};
     private HasReachedEnd = false;
-    private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private EventsListeners: Record<string, Array<(...args: any[]) => void | Promise<void>>> = {};
     graphState: GraphState;
     
     constructor(graphState: GraphState) {
@@ -231,27 +231,24 @@ export class Graph<GraphState extends Record<string, any>> {
     }
 
     onEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, eventListener: GraphEvents<GraphState>[EventName]): this {
-        if (this.EventsListeners[eventName]) {
-            console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
-            return this;
+        if (!this.EventsListeners[eventName]) {
+            this.EventsListeners[eventName] = [];
         }
 
-        this.EventsListeners[eventName] = eventListener;
+        this.EventsListeners[eventName].push(eventListener as (...args: any[]) => void | Promise<void>);
         return this;
     }
 
     protected emitEvent<EventName extends keyof GraphEvents<GraphState>>(eventName: EventName, ...eventArgs: Parameters<GraphEvents<GraphState>[EventName]>) {
-        const eventListener = this.EventsListeners[eventName];
+        const eventListeners = this.EventsListeners[eventName];
 
-        if (!eventListener) {
-            return;
+        if (eventListeners) {
+            eventListeners.forEach((listener) => {
+                void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
+                    console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
+                });
+            });
         }
-
-        const listener = eventListener as unknown as GraphEvents<GraphState>[EventName];
-
-        void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
-            console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
-        });
     }
 
     async start(): Promise<void> {
