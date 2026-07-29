@@ -11,6 +11,7 @@ import { ParsedUrlQuery } from "node:querystring";
 import { STTModel, STTMode } from "./stt";
 import { MutliMemoryObject } from "../memory/memory";
 import { IncomingHttpHeaders } from "node:http";
+import { SpeechLevel } from "./agent";
 
 /**
  * Specify to teel whether describe and optionally how the Plugin Execution
@@ -26,7 +27,7 @@ export type VoiceAgentDescriptionConfig = boolean | {
   sayAloud: boolean;
   /** 
    * Give instruction to tell Transcriber how to tell describe before voice agent how to describe the operation
-   * Usable only when was specified `describe: true` and `communicationSpeechLevels` property matches to the config property and `agent.model.transcriber` matches to the specification level
+   * Usable only when was specified `describe: true` and `communicationSpeechLevels` property matches to the config property and `agent.model.transcriber` matches to the specification level and when transcriber model is specified
   */
   describeVoiceInstruction?: string;
 }
@@ -42,6 +43,9 @@ export interface RealTimeVoiceAgentSkillsSchema extends ConfigLessSchemaSkillsSt
     }
 }
 
+export type SpeakPositionRecordKeys = "speakBefore" | "speakAfter";
+export type SpeakBeforeAfter = Partial<Record<SpeakPositionRecordKeys, VoiceAgentDescriptionConfig>>;
+
 export type ConfigLessSchemaMemoryStore = Omit<SchemaMemoryStore, "config">;
 export interface RealTimeVoiceAgentSchemaMemoryStore extends ConfigLessSchemaMemoryStore {
     config: SchemaMemoryStore["config"] & {
@@ -49,7 +53,7 @@ export interface RealTimeVoiceAgentSchemaMemoryStore extends ConfigLessSchemaMem
        * Give description for specific action that has to be communicated
        * @default - no action is communicated if desired specify object for specific action
        */
-      actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaMemoryStore, VoiceAgentDescriptionConfig>>;
+      actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaMemoryStore, SpeakBeforeAfter>>;
     }
 }
 
@@ -156,14 +160,20 @@ export interface RealTimeVoiceAgentServerConfig {
   };
 }
 
+/**
+ * @param args - are the arguments from the tool was called e.g: toolName or other argument types for non-tool call
+ * @param describeVoiceInstruction - the instruction specified in config given along the `type` param
+ */
+type TranscriberFunction = ((toSayText: string, type: SpeechLevel, args?: any[], describeVoiceInstruction?: string) => string | Promise<string>);
 /** Transcriber can get static instrucion or the function generates instruction base on `toSayText` param */
-type TranscriberSystemPromptAddition = string | ((toSayText: string) => string | Promise<string>);
+type TranscriberSystemPromptAddition = string | TranscriberFunction;
 
 export interface TranscriberModelPromptAddition {
   model: AgentModel;
   /**
    * Optional `systemPromptAddition`
    * Instruction for transcriber how to define for tts model what to say
+   * Transcribe instruction are prepared base on this option and the `describeVoiceInstruction` passed from the invoke place
   */
   systemPromptAddition?: TranscriberSystemPromptAddition;
 }

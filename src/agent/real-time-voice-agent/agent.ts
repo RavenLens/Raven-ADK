@@ -1,5 +1,5 @@
 import { HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
-import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, TranscriberModelPromptAddition, VoiceAgentDescriptionConfig } from "./agentConfig";
+import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, SpeakBeforeAfter, SpeakPositionRecordKeys, TranscriberModelPromptAddition, VoiceAgentDescriptionConfig } from "./agentConfig";
 import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
 import { ReActAgent, ReActAgentEvents, ReActAgentPluginSpec } from "../ReAct.agent";
@@ -8,7 +8,7 @@ import { Constructor } from "mqtt";
 /**
  * @param result - isn't included in `CommunicationSpeechLevelsDetails` to don't introduce the breaking feature
 */
-type SpeechLevel = keyof Exclude<NonNullable<RealTimeVoiceAgentConfig<any, any, any>["communicationSpeechLevels"]>, string> | "result";
+export type SpeechLevel = keyof Exclude<NonNullable<RealTimeVoiceAgentConfig<any, any, any>["communicationSpeechLevels"]>, string> | "result";
 
 /** Events for the **RealTimeVoiceAgent** */
 export interface RealTimeVoiceAgentEvents {
@@ -99,7 +99,7 @@ export class RealTimeVoiceAgent<
         sessionAbortController: AbortController;
     }>();
     private outputSpeechQueues = new Map<string, {
-        queue: Array<{ text: string; type: SpeechLevel; abort?: AbortSignal; resolve: () => void }>;
+        queue: Array<{ text: string; type: SpeechLevel; abort?: AbortSignal; args?: any[]; describeVoiceInstruction?: string; resolve: () => void }>;
         currentAbortController: AbortController | null;
         isProcessing: boolean;
     }>();
@@ -327,31 +327,49 @@ export class RealTimeVoiceAgent<
             });
 
             // Pipe all agent events to the client and handle voice-feedback for non-plugin events
-            agent.onAnyEvent((event: any, ...args: any[]) => {
+            agent.onAnyEvent((event, ...args) => {
                 if (event === "hitl_triggered") {
                     const [type] = args;
                     void this.speak(clientID, `I need your assistance for ${type}.`, "hitl", logicAbortController.signal);
                 }
-                
-                if (event === "tool_invoked") {
+
+                /** Check is skill called and execute speech for skill */
+                const skillToolCallUnified = (actionType: SpeakPositionRecordKeys) => {
                     const [toolName] = args;
 
                     const specifiedSkillsToSay = Object.entries(config.agent.skills?.(clientID, authParams)!.config!.actionsVoiceDescriptionInstruction!) as unknown as [
                         keyof ConfigLessSchemaSkillsStore,
-                        VoiceAgentDescriptionConfig
+                        SpeakBeforeAfter
                     ][];
-                    const isSkillFound = specifiedSkillsToSay.find(([skillToolName, skillSpec]) => skillToolName === toolName && (skillSpec === true || (typeof skillSpec === "object" && skillSpec.sayAloud === true)));
+                    const isSkillFound = specifiedSkillsToSay.find(([skillToolName, skillSpec]) => skillToolName === toolName && (skillSpec[actionType] === true || (typeof skillSpec[actionType] === "object" && skillSpec[actionType].sayAloud)));
                     
                     if (isSkillFound) {
+                        const speakType = isSkillFound[1][actionType];
+
+                        // Adds speak type
+                        args.push({ speakType: speakType });
+                        
                         void this.speak(
                             clientID,
-                            `I'm performing ${toolName} skill`,
+                            actionType === "speakAfter" ? `I performed ${toolName} skill` : `I'm performing ${toolName} skill`, 
                             "skills",
-                            logicAbortController.signal
+                            logicAbortController.signal,
+                            args,
+                            typeof speakType === "object" ? speakType.describeVoiceInstruction : undefined
                         );
                     }
                 }
                 
+                // Before tool call
+                if (event === "tool_invoked") {
+                    skillToolCallUnified("speakBefore");
+                }
+                
+                // After tool call
+                if (event === "tool_executed") {
+                    skillToolCallUnified("speakAfter");
+                }
+
                 // Emits local and remote events
                 this.emitLogicEvent(clientID, event, args.length === 1 ? args[0] : args);
             });
@@ -436,7 +454,7 @@ export class RealTimeVoiceAgent<
         TODO: Base on the config decide what to say and whether to user transcriber -> take the instruction for the specific unit
         TODO: Emit events via client data channel: transcriber start, transcriber end, tts_start, tts_end - unify with simple function when it's possible
     */
-    private async speak(clientID: string, text: string, type: SpeechLevel, abort?: AbortSignal) {
+    private async speak(clientID: string, text: string, type: SpeechLevel, abort?: AbortSignal, args?: any[], describeVoiceInstruction?: string) {
         const client = this.activeClients.get(clientID);
         if (!client || !client.audioSource) return;
 
@@ -454,7 +472,7 @@ export class RealTimeVoiceAgent<
         }
 
         const completion = new Promise<void>((resolve) => {
-            state.queue.push({ text, type, abort, resolve });
+            state.queue.push({ text, type, describeVoiceInstruction, args, abort, resolve });
         });
 
         // Start processing if not already
@@ -527,7 +545,7 @@ export class RealTimeVoiceAgent<
                 }
 
                 try {
-                    await this.executeSpeak(clientID, item.text, item.type, executionAbortController.signal);
+                    await this.executeSpeak(clientID, item.text, item.type, executionAbortController.signal, item.args, item.describeVoiceInstruction);
                 } catch (err) {
                     this.devConsole(`[RealTimeVoiceAgent] Queue item failed for ClientID ${clientID}: ${err}`, "error");
                 } finally {
@@ -546,7 +564,16 @@ export class RealTimeVoiceAgent<
         }
     }
 
-    private async executeSpeak(clientID: string, text: string, type: SpeechLevel, abort: AbortSignal) {
+    /**
+     * 
+     * @param clientID 
+     * @param text 
+     * @param type 
+     * @param abort 
+     * @param describeVoiceInstruction - instruction from the invoked unit to be passed only when entry was specified
+     * @returns 
+     */
+    private async executeSpeak(clientID: string, text: string, type: SpeechLevel, abort: AbortSignal,args?: any[], describeVoiceInstruction?: string) {
         const client = this.activeClients.get(clientID);
         if (!client || !client.audioSource) return;
 
@@ -570,7 +597,7 @@ export class RealTimeVoiceAgent<
                     const systemPromptAddition = await (async () => {
                         if (typeof currentTranscriber.systemPromptAddition === "string") return currentTranscriber.systemPromptAddition;
                         if (typeof currentTranscriber.systemPromptAddition === "function") {
-                            const prepTranscription = await currentTranscriber.systemPromptAddition(textToSpeak);
+                            const prepTranscription = await currentTranscriber.systemPromptAddition(textToSpeak, type, args, describeVoiceInstruction);
                             return prepTranscription;
                         }
 
@@ -580,7 +607,7 @@ export class RealTimeVoiceAgent<
                     const res = await this.waitForSpeechOperation<any>(
                         currentTranscriber.model.invoke({
                             messages: [
-                                { type: "system", content: `You are a professional transcriber. Your role is to produce the transcription of the specified segment. Segment type: ${type}.${systemPromptAddition ? `\n\nAdditional instructions from user:\n${systemPromptAddition}` : ""}` },
+                                { type: "system", content: `You are a professional transcriber. Your role is to produce the transcription of the specified segment. Segment type: ${type}.${systemPromptAddition || describeVoiceInstruction ? `\n\n\nAdditional instructions from user:\n${((systemPromptAddition ? (`- ${systemPromptAddition}\n`) : "") + (describeVoiceInstruction ? `- ${describeVoiceInstruction}` : ""))}` : ""}` },
                                 { type: "user", content: text }
                             ],
                             abort

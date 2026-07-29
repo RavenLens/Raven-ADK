@@ -2,6 +2,7 @@
 <!-- TODO: Mention the transcriber model strategies and it's behaviour  -->
 <!-- TODO: Mention the RealTime Agent hosts the socket.io server for ice handshake and is peer with RealTimeAgent communication -->
 <!-- TODO: Mention the elements from agent config and specification elements in user affordable form -->
+<!-- TODO: Mention that `describeVoiceInstruction` and `systemPromptAddition` is pasted next to each another to transcriber - and that both are independent perhaps should be conflictless to don't confuse transcriber model - both are available in transcription only -->
 
 # RealTimeVoice Agent
 It's agent to communicate via voice and optionally live avatar the speech with you
