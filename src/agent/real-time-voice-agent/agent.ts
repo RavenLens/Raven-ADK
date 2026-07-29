@@ -1,5 +1,5 @@
 import { HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
-import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, VoiceAgentDescriptionConfig } from "./agentConfig";
+import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, TranscriberModelPromptAddition, VoiceAgentDescriptionConfig } from "./agentConfig";
 import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
 import { ReActAgent, ReActAgentEvents, ReActAgentPluginSpec } from "../ReAct.agent";
@@ -65,7 +65,7 @@ export class WebRTCClientDataChannels {
      * @param mode 
      * @param body 
      */
-    emitTranscriptionEvent(clientID: string, mode: "start" | "end", body: { place: Exclude<SpeechLevel, "result">; transcript: string; body?: Record<string, any>; }) {
+    emitTranscriptionEvent(clientID: string, mode: "start" | "end", body: { place: Exclude<SpeechLevel, "result"> | "afterFullSTTTranscript"; transcript: string; body?: Record<string, any>; }) {
         const eventName = mode === "start" ? "realtime_agent.transcriber_start" : "realtime_agent.transcriber_finish";
         this.emitEvent(clientID, eventName, body);
     }
@@ -261,7 +261,7 @@ export class RealTimeVoiceAgent<
                         return result;
                     },
                 } as ReActAgentPluginSpec;
-            })
+            });
             
             // Config ReAct Agent
             const { authParams } = this.activeClients.get(clientID)!;
@@ -558,7 +558,7 @@ export class RealTimeVoiceAgent<
             let textToSpeak = text;
             const transcriber = this.config.agent.models.transcriber;
             if (transcriber) {
-                let currentTranscriber = null;
+                let currentTranscriber: TranscriberModelPromptAddition | null = null;
                 if (transcriber.routingStrategy === "all-through-transcriber") {
                     currentTranscriber = transcriber;
                 } else if (transcriber.routingStrategy === "fine-grained" && (transcriber as any).transcribeFor?.[type]) {
@@ -566,10 +566,21 @@ export class RealTimeVoiceAgent<
                 }
 
                 if (currentTranscriber) {
+                    /** Get the transcription instruction base on new type */
+                    const systemPromptAddition = await (async () => {
+                        if (typeof currentTranscriber.systemPromptAddition === "string") return currentTranscriber.systemPromptAddition;
+                        if (typeof currentTranscriber.systemPromptAddition === "function") {
+                            const prepTranscription = await currentTranscriber.systemPromptAddition(textToSpeak);
+                            return prepTranscription;
+                        }
+
+                        return;
+                    })();
+                    
                     const res = await this.waitForSpeechOperation<any>(
                         currentTranscriber.model.invoke({
                             messages: [
-                                { type: "system", content: `You are a professional transcriber. Your role is to produce the transcription of the specified segment. Segment type: ${type}.${currentTranscriber.systemPromptAddition ? `\n\nAdditional instructions from user:\n${currentTranscriber.systemPromptAddition}` : ""}` },
+                                { type: "system", content: `You are a professional transcriber. Your role is to produce the transcription of the specified segment. Segment type: ${type}.${systemPromptAddition ? `\n\nAdditional instructions from user:\n${systemPromptAddition}` : ""}` },
                                 { type: "user", content: text }
                             ],
                             abort

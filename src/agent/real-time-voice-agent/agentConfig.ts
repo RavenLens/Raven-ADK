@@ -156,39 +156,38 @@ export interface RealTimeVoiceAgentServerConfig {
   };
 }
 
+/** Transcriber can get static instrucion or the function generates instruction base on `toSayText` param */
+type TranscriberSystemPromptAddition = string | ((toSayText: string) => string | Promise<string>);
+
+export interface TranscriberModelPromptAddition {
+  model: AgentModel;
+  /**
+   * Optional `systemPromptAddition`
+   * Instruction for transcriber how to define for tts model what to say
+  */
+  systemPromptAddition?: TranscriberSystemPromptAddition;
+}
+
 /**
  * Each step will go through transcriber
 */
-export interface TranscriberAllThrough {
+export interface TranscriberAllThrough extends TranscriberModelPromptAddition {
   routingStrategy: "all-through-transcriber";
-  model: AgentModel;
-  /** Optional `systemPromptAddition` */
-  systemPromptAddition?: string;
 }
 
 /**
  * Reasoning and conversation is ommited in description
 */
-export interface TranscriberByPassConversation {
+export interface TranscriberByPassConversation extends TranscriberModelPromptAddition {
   routingStrategy: "bypass-conversation";
-  model: AgentModel;
-  /** Optional `systemPromptAddition` */
-  systemPromptAddition?: string;
 }
 
 /**
  * Allow the specific transcriber model with specific system prompt to be used 
  */
-export interface TranscriberSpecific {
+export interface TranscriberFineGrained {
   routingStrategy: "fine-grained";
-  transcribeFor: Partial<Record<"conversation" | "after-full-stt-transcript" | "thoughts" | "tools" | "memory" | "skills" | "hitl", {
-    model: AgentModel;
-    /**
-     * Optional `systemPromptAddition`
-     * This system prompt is passed to the above `model`
-    */
-    systemPromptAddition?: string;
-  }>>;
+  transcribeFor: Partial<Record<"conversation" | "after-full-stt-transcript" | "thoughts" | "tools" | "memory" | "skills" | "hitl", TranscriberModelPromptAddition>>;
 }
 
 export interface EventsCommunicationCarrier {
@@ -238,7 +237,6 @@ type UnitDependencyWrapper<ReturnType> = (clientID: string, authPayload: AuthPay
  */
 export interface CommunicationSpeechLevelsDetails {
   beforeLogicProcessing: boolean;
-  afterFullSTTTranscript: boolean;
   plugins: boolean;
   thoughts: boolean;
   tools: boolean;
@@ -315,7 +313,7 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
        * If not specified the transcriber is bypassed totally and only segements are ready to be transcribed are used
        * WARNING: Lack of transcriber will cause the Skills, Tools, Memory and some reasoning to be not flowing or be not adjusted decently to the RealTimeAgent Conditions
       */
-      transcriber?: TranscriberByPassConversation | TranscriberAllThrough | TranscriberSpecific;
+      transcriber?: TranscriberByPassConversation | TranscriberAllThrough | TranscriberFineGrained;
       /** Model that converts text-to-speech */
       tts: AgentModel;
       avatar?: AvatarOneStepPipeline | AvatarTwoStepPipeline;
