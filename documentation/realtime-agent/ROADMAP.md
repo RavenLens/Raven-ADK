@@ -13,10 +13,8 @@
                     - Add to JSDoc and to the Documentation that HITL will talk only when has specified to talk
                 - `toolsUsage.describeVoiceInstruction` - add the `beforeInstructions` and `afterInstruction` with the string says what to describe before and after tool execution
             - Add the logic of hitl talking
-        - Plugins communication call
-            - Add the logic
         - Extend subagent capabilities
-            - tool - tool name can be called
+            - tool - tool name can be spoken
     - Add the blocking behaviour for speech
         - Add specification whether the speech has to block the events loop of Reasonig Enging - currently the one speech can block other but not the engined
             - add to the config

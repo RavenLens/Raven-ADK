@@ -1,8 +1,8 @@
 import { HITLTransportSchema } from "../tools/hitl/hitlToolSchema";
-import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, SpeakBeforeAfter, SpeakPositionRecordKeys, TranscriberModelPromptAddition, VoiceAgentDescriptionConfig } from "./agentConfig";
+import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaMemoryStore, ConfigLessSchemaSkillsStore, ExecutionRemoteMode, RealTimeVoiceAgentConfig, RealTimeVoiceAgentSchemaMemoryStore, RealTimeVoiceAgentSkillsSchema, SpeakBeforeAfter, SpeakPositionRecordKeys, TranscriberModelPromptAddition, VoiceAgentDescriptionConfig } from "./agentConfig";
 import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
-import { ReActAgent, ReActAgentEvents, ReActAgentPluginSpec } from "../ReAct.agent";
+import { ReActAgent, ReActAgentEvents } from "../ReAct.agent";
 import { Constructor } from "mqtt";
 
 /**
@@ -214,59 +214,9 @@ export class RealTimeVoiceAgent<
             // Emit generation text event -> Retrive on frontend
             this.emitRealTimeVoiceAgentEvent(clientID, "logic_start", [{ clientID, transcript }]);
 
-            // Prepare user plugins to be spoken before or after in the specific plugin
-            const userVoiceAgentPluginsPrepared = config.agent.plugins?.map(plugin => {
-                return {
-                    ...plugin,
-                    // Wrapper atop of original plugin
-                    execute: async (...executeArgs) => {
-                        const isSpeechAllowedForPlugins = this.config.communicationSpeechLevels && (this.config.communicationSpeechLevels === "all" || this.config.communicationSpeechLevels.plugins === true);
-                        
-                        // Speak before plugin execution
-                        if (plugin.describeVoiceAgentConfig?.speakBefore && isSpeechAllowedForPlugins) {
-                            const { speakBefore } = plugin.describeVoiceAgentConfig;
-
-                            if (typeof speakBefore === "string") {
-                                void this.speak(clientID, speakBefore, "plugins", logicAbortController.signal);
-                            }
-                            else if (typeof speakBefore === "function") {
-                                const toSay = await speakBefore(executeArgs);
-                                void this.speak(clientID, toSay, "plugins", logicAbortController.signal);
-                            }
-                            else if (typeof speakBefore === "object" && speakBefore.sayAloud && speakBefore.describeVoiceInstruction) {
-                                void this.speak(clientID, speakBefore.describeVoiceInstruction, "plugins", logicAbortController.signal);
-                            }
-                            else console.error(`Speak after plugin: "${plugin.name}" has unsupported type "${typeof speakBefore}" for "speakBefore" speech option`)
-                        }
-
-                        // Run user specified logic
-                        const result = await plugin.execute(...executeArgs);
-
-                        // Speak after plugin execution
-                        if (plugin.describeVoiceAgentConfig?.speakAfter && isSpeechAllowedForPlugins) {
-                            const { speakAfter } = plugin.describeVoiceAgentConfig;
-
-                            if (typeof speakAfter === "string") {
-                                void this.speak(clientID, speakAfter, "plugins", logicAbortController.signal);
-                            }
-                            else if (typeof speakAfter === "function") {
-                                const toSay = await speakAfter(executeArgs, result);
-                                void this.speak(clientID, toSay, "plugins", logicAbortController.signal);
-                            }
-                            else if (typeof speakAfter === "object" && speakAfter.sayAloud && speakAfter.describeVoiceInstruction) {
-                                void this.speak(clientID, speakAfter.describeVoiceInstruction, "plugins", logicAbortController.signal);
-                            }
-                            else console.error(`Speak after plugin: "${plugin.name}" has unsupported type "${typeof speakAfter}" for "speakAfter" speech option`)
-                        }
-                        
-                        // 
-                        return result;
-                    },
-                } as ReActAgentPluginSpec;
-            });
-            
             // Config ReAct Agent
             const { authParams } = this.activeClients.get(clientID)!;
+            const memory = config.agent.memory?.(clientID, authParams);
             const agent = new ReActAgent({
                 model: config.agent.models.reasoning,
                 systemPrompt: `${config.agent.systemPrompt}
@@ -276,30 +226,9 @@ export class RealTimeVoiceAgent<
                 `,
                 messages: config.agent.messages,
                 skills: config.agent.skills?.(clientID, authParams),
-                memory: config.agent.memory?.(clientID, authParams),
+                memory,
                 tools: config.agent.tools,
-                plugins: [
-                    ...userVoiceAgentPluginsPrepared ?? [],
-                    // TODO: Use events instead of plugins
-                    {
-                        name: "voice_thoughts_plugin",
-                        executionWay: ["thought", "thoughts"],
-                        execute: async (from) => {
-                            if (from.thought) {
-                                void this.speak(clientID, from.thought, "thoughts", logicAbortController.signal);
-                            }
-                            return { status: true };
-                        }
-                    },
-                    {
-                        name: "voice_memory_plugin",
-                        executionWay: ["memory"],
-                        execute: async () => {
-                            void this.speak(clientID, "Let me check my memory for a moment", "memory", logicAbortController.signal);
-                            return { status: true };
-                        }
-                    }
-                ],
+                plugins: this.config.agent.plugins,
                 hitl: config.agent.hitl?.(clientID, authParams).hitl,
                 subagents: config.agent.subagents,
                 maximumReasoningRecalls: config.agent.maximumReasoningRecalls,
@@ -317,7 +246,10 @@ export class RealTimeVoiceAgent<
                 }
 
                 if (event === "reasoning") {
-
+                    const [thought] = args as Parameters<ReActAgentEvents["reasoning"]>;
+                    if (thought) {
+                        void this.speak(clientID, thought, "thoughts", logicAbortController.signal);
+                    }
                 }
 
                 /**
@@ -418,13 +350,89 @@ export class RealTimeVoiceAgent<
                     const toolExecuted = await toolUnified(event, isSkillTool);
                 }
 
-                // TODO: Register listening for plugin execution by: config.agent.plugins and tell when it's possible
-                if (event === "plugin_invoking") {
-                    
+                const pluginUnified = async (event: "plugin_invoking" | "plugin_result") => {
+                    const [pluginName, executionWay] = args as Parameters<ReActAgentEvents["plugin_invoking"]>;
+                    const pluginOutput = event === "plugin_result"
+                        ? (args as Parameters<ReActAgentEvents["plugin_result"]>)[2]
+                        : undefined;
+                    const plugin = this.config.agent.plugins?.find(({ name }) => name === pluginName);
+                    const speakPosition: SpeakPositionRecordKeys = event === "plugin_result" ? "speakAfter" : "speakBefore";
+                    const voiceConfig = plugin?.describeVoiceInstruction?.[speakPosition];
+                    const canPluginBeTold = voiceConfig !== false
+                        && (typeof voiceConfig !== "object" || voiceConfig.sayAloud !== false);
+
+                    if (!plugin || !canPluginBeTold) return false;
+
+                    const configuredInstruction = typeof voiceConfig === "object"
+                        ? voiceConfig.defaultInstruction
+                        : undefined;
+                    const instruction = typeof configuredInstruction === "function"
+                        ? await configuredInstruction(pluginName, executionWay, pluginOutput)
+                        : configuredInstruction;
+                    const defaultInstruction = event === "plugin_invoking"
+                        ? `I'm using ${pluginName} plugin to help you`
+                        : `I've executed ${pluginName} plugin and successfully retrieved output`;
+
+                    void this.speak(
+                        clientID,
+                        instruction ?? defaultInstruction,
+                        "plugins",
+                        logicAbortController.signal,
+                        args,
+                        typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
+                    );
+
+                    return true;
+                };
+
+                if (event === "plugin_invoking" || event === "plugin_result") {
+                    await pluginUnified(event);
                 }
 
-                if (event === "plugin_result") {
+                const memoryActionToConfigKey: Record<Parameters<ReActAgentEvents["memory_action"]>[0], keyof ConfigLessSchemaMemoryStore> = {
+                    fetch: "fetchMemory",
+                    save: "saveMemory",
+                    get_conclusion: "fetchMemoryConclusionFile",
+                    set_conclusion: "writeMemoryConclusionFile"
+                };
+                const memoryUnified = async () => {
+                    const [action, memoryName, details, result] = args as Parameters<ReActAgentEvents["memory_action"]>;
+                    const memoryStore = Array.isArray(memory)
+                        ? memory.find(({ name }) => name === memoryName)?.memory
+                        : memory;
+                    const voiceConfig = memoryStore?.config.actionsVoiceDescriptionInstruction?.[memoryActionToConfigKey[action]]?.speakAfter;
+                    const canMemoryBeTold = voiceConfig !== false
+                        && (typeof voiceConfig !== "object" || voiceConfig.sayAloud !== false);
 
+                    if (voiceConfig === undefined || !canMemoryBeTold) return false;
+
+                    const configuredInstruction = typeof voiceConfig === "object"
+                        ? voiceConfig.defaultInstruction
+                        : undefined;
+                    const instruction = typeof configuredInstruction === "function"
+                        ? await configuredInstruction(memoryName, action, details, result)
+                        : configuredInstruction;
+                    const defaultInstruction = {
+                        fetch: `I've checked ${memoryName} memory`,
+                        save: `I've saved information to ${memoryName} memory`,
+                        get_conclusion: `I've checked the ${memoryName} memory summary`,
+                        set_conclusion: `I've updated the ${memoryName} memory summary`
+                    }[action];
+
+                    void this.speak(
+                        clientID,
+                        instruction ?? defaultInstruction,
+                        "memory",
+                        logicAbortController.signal,
+                        args,
+                        typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
+                    );
+
+                    return true;
+                };
+
+                if (event === "memory_action") {
+                    await memoryUnified();
                 }
                 
                 // Subagents

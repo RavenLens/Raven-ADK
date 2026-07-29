@@ -2,7 +2,7 @@ import { Tool, ToolConfig, ToolLogic } from "../tools";
 import { ServerOptions } from "socket.io";
 import z from "zod/v4";
 import { HITLConfigSchema, HITLTransportSchema, ToolUsageConfObject } from "../tools/hitl/hitlToolSchema";
-import { AgentModel, ReActAgentInvokeResult, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
+import { AgentModel, ReActAgentEvents, ReActAgentInvokeResult, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
 import { SchemaSkillStore } from "../skills/stores/schema";
 import { SchemaMemoryStore } from "../memory/stores/schema";
@@ -50,13 +50,17 @@ export type SpeakPositionRecordKeys = "speakBefore" | "speakAfter";
 export type SpeakBeforeAfter<ConfigExtenstion extends Record<string, any> = {}> = Partial<Record<SpeakPositionRecordKeys, VoiceAgentDescriptionConfig & ConfigExtenstion>>;
 
 export type ConfigLessSchemaMemoryStore = Omit<SchemaMemoryStore, "config">;
+type SpeakBeforeAfterWithMemoryDescription = SpeakBeforeAfter<{
+  /** The result is available only for `speakAfter`. */
+  defaultInstruction?: string | ((memoryName: string, action: Parameters<ReActAgentEvents["memory_action"]>[0], details: Record<string, any>, result?: any) => Promise<string> | string);
+}>;
 export interface RealTimeVoiceAgentSchemaMemoryStore extends ConfigLessSchemaMemoryStore {
     config: SchemaMemoryStore["config"] & {
       /**
        * Give description for specific action that has to be communicated
        * @default - no action is communicated if desired specify object for specific action
        */
-      actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaMemoryStore, SpeakBeforeAfter>>;
+      actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaMemoryStore, SpeakBeforeAfterWithMemoryDescription>>;
     }
 }
 
@@ -107,11 +111,18 @@ export class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSche
   }
 }
 
+type SpeakBeforeAfterWithPluginDescription = SpeakBeforeAfter<{
+  /**
+   * Specify what the agent should say before or after the plugin execution.
+   *
+   * The result is available only for `speakAfter`.
+  */
+  defaultInstruction?: string | ((pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], pluginOutput?: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => Promise<string> | string);
+}>;
+
 export interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
-  /** Speech is execute once agent use this plugin */
-  describeVoiceAgentConfig?: SpeakBeforeAfter<{ 
-    defaultInstruction: string | ((executeArgs: Parameters<ReActAgentPluginSpec["execute"]>) => Promise<string> | string);
-  }>;
+  /** Optionally describe the plugin execution before or after it runs. */
+  describeVoiceInstruction?: SpeakBeforeAfterWithPluginDescription;
 }
 
 export interface HITLLiveTimeVoiceAgent<HITL extends HITLTransportSchema> extends Omit<HITLConfigSchema, "toolsUsage"> {
@@ -122,7 +133,12 @@ export interface HITLLiveTimeVoiceAgent<HITL extends HITLTransportSchema> extend
     [toolName: string]: {
       config: ToolUsageConfObject | true;
       /** Give instruction in what fashio should the tts model communicate tool usage */
-      describeVoiceInstruction: string;
+      describeVoiceInstruction: SpeakBeforeAfter<{
+        /**
+         * Specify how agent has to Verbally with Voice (Aloud) describe the subagent call or result
+        */
+        defaultInstruction?: string | ((subAgentRole: string, subagentInstruction: string, result?: ReActAgentInvokeResult) => Promise<string> | string);
+      }>;
     };
   };
   /** (Optional) Question Types Voice Description Instruction 
