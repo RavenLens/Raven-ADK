@@ -86,7 +86,24 @@ export class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSche
 
 export interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
   /** Speech is execute once agent use this plugin */
-  describeVoiceAgentConfig?: VoiceAgentDescriptionConfig
+  describeVoiceAgentConfig?: {
+    /**
+     * Setup to define whether to say something before this plugin execution</br>
+     * Parameters:
+     * * string - to say in static form what to say
+     * * function - to determine what to say base on specified `executeArgs` or  result of plugin execution `executionResult`
+     * * object - to determine what to say as object
+    */
+    speakBefore?: string | ((executeArgs: Parameters<ReActAgentPluginSpec["execute"]>) => Promise<string> | string) | VoiceAgentDescriptionConfig;
+    /**
+     * Setup to define whether to say something before this plugin execution<\br>
+     * Parameters:
+     * * string - to say in static form what to say
+     * * function - to determine what to say base on specified `executeArgs` or  result of plugin execution `executionResult`
+     * * object - to determine what to say as object
+    */
+    speakAfter?: string | ((executeArgs: Parameters<ReActAgentPluginSpec["execute"]>, executionResult: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => Promise<string> | string) | VoiceAgentDescriptionConfig;
+  };
 }
 
 export interface HITLLiveTimeVoiceAgent<HITL extends HITLTransportSchema> extends Omit<HITLConfigSchema, "toolsUsage"> {
@@ -222,6 +239,7 @@ type UnitDependencyWrapper<ReturnType> = (clientID: string, authPayload: AuthPay
 export interface CommunicationSpeechLevelsDetails {
   beforeLogicProcessing: boolean;
   afterFullSTTTranscript: boolean;
+  plugins: boolean;
   thoughts: boolean;
   tools: boolean;
   skills: boolean;
