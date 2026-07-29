@@ -138,24 +138,32 @@ export interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
 export interface HITLLiveTimeVoiceAgent<HITL extends HITLTransportSchema> extends Omit<HITLConfigSchema, "toolsUsage"> {
   /** HITL Configuration is used to setup the hitl execution */
   hitl: HITL;
-  /** (Optional) Add tools and describe how should RealTime-Voice-Agent Communicate its usage */
+  /** (Optional) Add tools and describe how should RealTime-Voice-Agent Communicate its usage 
+   * 
+   * NOTE: In terms of `describeVoiceInstruction`, do not specify the `sayAloud` property; once a tool is defined in here, it is intended to be communicated. 
+   * By default, tools not specified in this property are not communicated.
+  */
   toolsUsage?: {
     [toolName: string]: {
       config: ToolUsageConfObject | true;
-      /** Give instruction in what fashio should the tts model communicate tool usage */
+      /** Give instruction in what fashion should the tts model communicate tool usage */
       describeVoiceInstruction: SpeakBeforeAfter<{
         /**
-         * Specify how agent has to Verbally with Voice (Aloud) describe the subagent call or result
+         * Specify how the agent should verbally describe the tool call or result.
         */
-        defaultInstruction?: string | ((subAgentRole: string, subagentInstruction: string, result?: ReActAgentInvokeResult) => Promise<string> | string);
+        defaultInstruction?: string | ((toolName: string, toolParams: Record<string, any>, result?: any) => Promise<string> | string);
       }>;
     };
   };
   /** (Optional) Question Types Voice Description Instruction 
-   * Describe what adgen should say when using these objects
+   * Describe what agent should say when has used a user questioning via HITL tools
   */
-  actionsDescribeVoiceInstruction?: Partial<Record<keyof NonNullable<Pick<HITLTransportSchema, "emitAbcQuestion" | "emitOpenQuestion" | "emitToolUsage" | "emitAcceptance">>, string>>;
+  actionsDescribeVoiceInstruction?: Partial<Record<keyof NonNullable<Pick<HITLTransportSchema, "emitAbcQuestion" | "emitOpenQuestion" | "emitToolUsage" | "emitAcceptance">>, SpeakBeforeAfter<{
+    defaultInstruction?: string | ((payload: any, result?: any) => Promise<string> | string);
+  }>>>;
 }
+
+
 
 export interface RealTimeVoiceAgentServerConfig {
   socketIo: {

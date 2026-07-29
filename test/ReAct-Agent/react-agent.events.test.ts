@@ -256,9 +256,10 @@ describe("ReActAgent events", () => {
 
             await agent.invoke();
 
-            expect(hitlTriggeredEvents.some(e => e.type === "tool_usage" && e.payload.toolName === "protected_tool")).toBe(true);
-            expect(hitlResultEvents.some(e => e.type === "tool_usage" && e.payload.toolName === "protected_tool")).toBe(true);
+            expect(hitlTriggeredEvents.some(e => e.type === "tool_usage" && e.payload.toolName === "protected_tool" && e.payload.toolArguments)).toBe(true);
+            expect(hitlResultEvents.some(e => e.type === "tool_usage" && e.payload.toolName === "protected_tool" && e.payload.toolArguments)).toBe(true);
             expect(hitlToolApprovalEvents).toHaveLength(1);
+            expect(mockHitlTransport.emitToolUsage).toHaveBeenCalledWith("protected_tool", expect.any(Object));
             expect(hitlToolApprovalEvents[0]).toEqual({
                 toolName: "protected_tool",
                 allowance: { answer: "allow", reason: "user_answer" }

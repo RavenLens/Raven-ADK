@@ -51,7 +51,7 @@ export interface HITLTransportSchema {
 
     emitAbcQuestion?: (question: string, abcOptions: [string, string][]) => Promise<[string, string]>;
     emitOpenQuestion?: (question: string) => Promise<string>;
-    emitToolUsage: (toolName: string) => Promise<EmitToolUsageBody>;
+    emitToolUsage: (toolName: string, toolArguments?: Record<string, any>) => Promise<EmitToolUsageBody>;
     emitAcceptance?: (question: string, context?: string) => Promise<HITLToolAllowancePossibleAnswer>;
     
     /** Describe how to use HITL Questioning tools */

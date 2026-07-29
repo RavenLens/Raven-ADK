@@ -158,7 +158,7 @@ export class HITLSocketIo implements HITLTransportSchema {
         });
     }
 
-    emitToolUsage(toolName: string) {
+    emitToolUsage(toolName: string, toolArguments?: Record<string, any>) {
         return new Promise<EmitToolUsageBody>((res, rej) => {
             let isAnswer = false;
             
@@ -170,6 +170,7 @@ export class HITLSocketIo implements HITLTransportSchema {
             this.connectionSocket.emit(
                 "toolsUsage" as HITLEvents,
                 toolName,
+                toolArguments,
                 (allowanceAnswer: HITLToolAllowancePossibleAnswer) => {
                     if (!isAnswer) {
                         isAnswer = true;
