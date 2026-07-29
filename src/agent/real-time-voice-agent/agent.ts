@@ -280,22 +280,13 @@ export class RealTimeVoiceAgent<
                 tools: config.agent.tools,
                 plugins: [
                     ...userVoiceAgentPluginsPrepared ?? [],
+                    // TODO: Use events instead of plugins
                     {
                         name: "voice_thoughts_plugin",
                         executionWay: ["thought", "thoughts"],
                         execute: async (from) => {
                             if (from.thought) {
                                 void this.speak(clientID, from.thought, "thoughts", logicAbortController.signal);
-                            }
-                            return { status: true };
-                        }
-                    },
-                    {
-                        name: "voice_tools_plugin",
-                        executionWay: ["before_tool_invoked"],
-                        execute: async (from) => {
-                            if (from.toolName) {
-                                void this.speak(clientID, `I'm using ${from.toolName} tool to help you`, "tools", logicAbortController.signal);
                             }
                             return { status: true };
                         }
@@ -329,13 +320,16 @@ export class RealTimeVoiceAgent<
             });
 
             // Pipe all agent events to the client and handle voice-feedback for non-plugin events
-            agent.onAnyEvent((event, ...args) => {
+            agent.onAnyEvent(async (event, ...args) => {
                 if (event === "hitl_triggered") {
                     const [type] = args;
                     void this.speak(clientID, `I need your assistance for ${type}.`, "hitl", logicAbortController.signal);
                 }
 
-                /** Check is skill called and execute speech for skill */
+                /**
+                 * Check is skill called and execute speech for skill
+                 * @returns {boolean} - the skill detection state
+                */
                 const skillToolCallUnified = (actionType: SpeakPositionRecordKeys) => {
                     const [toolName] = args;
 
@@ -359,25 +353,90 @@ export class RealTimeVoiceAgent<
                             args,
                             typeof speakType === "object" ? speakType.describeVoiceInstruction : undefined
                         );
+
+                        return true;
                     }
+
+                    return false;
+                }
+
+                /**
+                 * Execute tool when tool isn't `isSkillTool`
+                 * @param event - where was called
+                 * @param isSkillTool - state whether was detected skill tool
+                 * @returns {boolean} - represents whether logic was successfully passed
+                 */
+                const toolUnified = async <Event extends keyof Pick<ReActAgentEvents, "tool_invoked" | "tool_executed">>(event: Event, isSkillTool: boolean) => {
+                    // Skill tool gets other handler
+                    if (isSkillTool) return false;
+                    
+                    const [toolName, toolParams, toolOutput] = args as Parameters<ReActAgentEvents[Event]>;
+                    const toolFound = this.config.agent.tools.find(tool => tool.toolConfig.toolName === toolName);
+
+                    const afterOrBeforeKey: SpeakPositionRecordKeys = event === "tool_executed" ? "speakAfter" : "speakBefore";
+                    const canToolBeTold = (!toolFound?.describeVoiceInstruction || !toolFound.describeVoiceInstruction[afterOrBeforeKey]) || (typeof toolFound.describeVoiceInstruction[afterOrBeforeKey] === "object" && toolFound.describeVoiceInstruction[afterOrBeforeKey].sayAloud === true);
+                    
+                    if (toolFound && canToolBeTold) {
+                        const userConfigInstruction = async () => {
+                            const def = toolFound.describeVoiceInstruction?.[afterOrBeforeKey]?.defaultInstruction;
+
+                            if (typeof def === "function") {
+                                return await def(toolName, toolParams, toolOutput);
+                            } else if (typeof def === "string" && def.length) {
+                                return def;
+                            }
+
+                            return;
+                        };
+                        const defaultInstruction = () => {
+                            if (event === "tool_invoked") {
+                                return `I'm using ${toolName} tool to help you`;
+                            }
+
+                            // TODO: In feature the tool result can be potentially transcribed and used to translate here -> user has to specify this in configuration object and tool call is got as the name
+                            return `I've executed ${toolName} and successfully retrived output`;
+                        }
+                        
+                        void this.speak(
+                            clientID,
+                            (await userConfigInstruction()) ?? defaultInstruction(),
+                            "tools",
+                            logicAbortController.signal,
+                            args,
+                            typeof toolFound.describeVoiceInstruction?.[afterOrBeforeKey] === "object" ? toolFound.describeVoiceInstruction[afterOrBeforeKey].describeVoiceInstruction : undefined
+                        );
+
+                        return true;
+                    }
+
+                    return false;
                 }
                 
                 // Before tool call
                 if (event === "tool_invoked") {
-                    skillToolCallUnified("speakBefore");
+                    const isSkillTool = skillToolCallUnified("speakBefore");
+                    const toolExecuted = await toolUnified(event, isSkillTool);
                 }
                 
                 // After tool call
                 if (event === "tool_executed") {
-                    skillToolCallUnified("speakAfter");
+                    const isSkillTool = skillToolCallUnified("speakAfter");
+                    const toolExecuted = await toolUnified(event, isSkillTool);
                 }
 
+                // TODO: Register listening for plugin execution by: config.agent.plugins and tell when it's possible
+                /* if (event === "plugin_invoking") {
+
+                }
+
+                if (event === "plugin_result") {
+
+                } */
+                
                 // Emits local and remote events
                 this.emitLogicEvent(clientID, event, args.length === 1 ? args[0] : args);
             });
-
-            // TODO: Register listening for plugin execution by: config.agent.plugins and tell when it's possible
-
+            
             // Emit the tts speech when user configured it at the beginning
             await (async () => {
                 const speechConfig = this.config?.beforeLogicProcessing;
@@ -453,8 +512,6 @@ export class RealTimeVoiceAgent<
     
     /*
         TODO: Consider whether the logic of `speak` all executions should be blocking or non-blocking for logic execution - add this as option to `RealTimeVoiceAgentConfig`
-        TODO: Base on the config decide what to say and whether to user transcriber -> take the instruction for the specific unit
-        TODO: Emit events via client data channel: transcriber start, transcriber end, tts_start, tts_end - unify with simple function when it's possible
     */
     private async speak(clientID: string, text: string, type: SpeechLevel, abort?: AbortSignal, args?: any[], describeVoiceInstruction?: string) {
         const client = this.activeClients.get(clientID);

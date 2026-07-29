@@ -5,12 +5,7 @@
         - Add to config the specifiation of the model
         - Add to the documentation how to use some model like this
     - In `canAgentCommunicate` and for `speak` methods
-        - Skills - each skill object carries the `actionsVoiceDescriptionInstruction` and has to be checked whether `sayAloud` is off while 
-            - after and before `tools` execution cannot be spoken or has to be prepared with given instruction to `speak` method
-        - Memory - each memory tool has to be executed in this fashion additionally
-        - Tools - add the speech options
-            - Add the instruction whether to tell after tool execution and before tool execution
-                - Add to config options `before` and `after` as optional
+        <!-- TODO: Add after establishement of rigid Mem0, MemRL and MemP systems --> - Memory - each memory tool has to be executed in this fashion additionally 
         - Subagent
             - Add option to configure the description of subagent for `before` and after
             - Add the logic
@@ -22,6 +17,14 @@
                 - `toolsUsage.describeVoiceInstruction` - add the `beforeInstructions` and `afterInstruction` with the string says what to describe before and after tool execution
             - Add the logic of hitl talking
     - Add the blocking behaviour for speech
+        - Add specification whether the speech has to block the events loop of Reasonig Enging - currently the one speech can block other but not the engined
+            - add to the config
+        - `deny-current` add option
+            - Add to config
+            - Add to logic
+            - current option is deny and only the prior is executed
+            - Add to logic
+        ---
         - Add the configuration option can specify the speech behaviour and how to deal with speech when other is still talking
             - How to deal with other is still talking can be - set of behaviours to deal with the other agent is talking to don't cause streaming overlapping sounds: queue, stop-previous, deny-current
                 - Add this to the config object

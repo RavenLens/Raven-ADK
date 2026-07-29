@@ -44,7 +44,7 @@ export interface RealTimeVoiceAgentSkillsSchema extends ConfigLessSchemaSkillsSt
 }
 
 export type SpeakPositionRecordKeys = "speakBefore" | "speakAfter";
-export type SpeakBeforeAfter = Partial<Record<SpeakPositionRecordKeys, VoiceAgentDescriptionConfig>>;
+export type SpeakBeforeAfter<ConfigExtenstion extends Record<string, any> = {}> = Partial<Record<SpeakPositionRecordKeys, VoiceAgentDescriptionConfig & ConfigExtenstion>>;
 
 export type ConfigLessSchemaMemoryStore = Omit<SchemaMemoryStore, "config">;
 export interface RealTimeVoiceAgentSchemaMemoryStore extends ConfigLessSchemaMemoryStore {
@@ -62,12 +62,21 @@ export interface RealTimeVoiceSubAgent extends SubAgent {
      * Whether to describe agent execution and if desired how
      * @default false
     */
-    describeVoiceInstruction?: VoiceAgentDescriptionConfig;
+    describeVoiceInstruction?: SpeakBeforeAfter;
 }
 
 
+type SpeakBeforeAfterForTool = SpeakBeforeAfter<{ 
+  /**
+   * When not specified the default tool speech instruction is going to be leveraged
+   * * Use function to specify the dynamic description e.g: base on tool agent given args
+   * * Use string to specify static description e.g: for specified tool
+   * @params toolOutput - it's available only for `speakAfter` option
+  */
+  defaultInstruction: string | ((toolName: string, toolArgs: Record<string, any>, toolOutput?: string) => Promise<string> | string);
+}>;
 export class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> extends Tool<ToolArgs, ToolOutputSchema> {
-  describeVoiceInstruction?: VoiceAgentDescriptionConfig;
+  describeVoiceInstruction?: SpeakBeforeAfterForTool;
   
   /** 
    * @param describeVoiceInstruction - Optionally describe the execution the agent. When no specified an agent doesn't describe this tool call
@@ -75,16 +84,10 @@ export class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSche
   constructor(
     toolLogic: ToolLogic<ToolArgs>,
     toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>,
-    describeVoiceInstruction?: VoiceAgentDescriptionConfig
+    describeVoiceInstruction?: SpeakBeforeAfterForTool
   ) {
     super(toolLogic, toolConfig);
     this.describeVoiceInstruction = describeVoiceInstruction;
-
-    // TODO: Moficiations -> have to take place to allow the agent to tell that tool is executing
-    if (this.describeVoiceInstruction) {
-        // ... Modified the .invoke method to emit the description of exectuion and stream to the tts specified model
-        
-    }
   }
 }
 
