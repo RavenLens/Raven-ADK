@@ -25,6 +25,8 @@ export interface RealTimeVoiceAgentEvents {
     "speak_before_end": (data: { clientID: string }) => void | Promise<void>;
     "speak_before_error": (data: { clientID: string; error: any | null }) => void | Promise<void>;
     "abort": (data: { clientID: string; reason: string }) => void | Promise<void>;
+    "transcriber_start": (data: { clientID: string; toSpeakBeforeTranscription: string }) => void | Promise<void>;
+    "transcriber_end": (data: { clientID: string; readyTranscription: string }) => void | Promise<void>;
 }
 
 /** Store RTC Data Channels */
@@ -593,6 +595,8 @@ export class RealTimeVoiceAgent<
                 }
 
                 if (currentTranscriber) {
+                    this.emitRealTimeVoiceAgentEvent(clientID, "transcriber_start", [{ clientID, toSpeakBeforeTranscription: text }]);
+                    
                     /** Get the transcription instruction base on new type */
                     const systemPromptAddition = await (async () => {
                         if (typeof currentTranscriber.systemPromptAddition === "string") return currentTranscriber.systemPromptAddition;
@@ -620,6 +624,8 @@ export class RealTimeVoiceAgent<
                     if (aiMessage && "content" in aiMessage && typeof aiMessage.content === "string") {
                         textToSpeak = aiMessage.content;
                     }
+
+                    this.emitRealTimeVoiceAgentEvent(clientID, "transcriber_end", [{ clientID, readyTranscription: textToSpeak }]);
                 }
             }
 
