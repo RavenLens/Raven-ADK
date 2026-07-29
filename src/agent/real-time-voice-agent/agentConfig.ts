@@ -2,7 +2,7 @@ import { Tool, ToolConfig, ToolLogic } from "../tools";
 import { ServerOptions } from "socket.io";
 import z from "zod/v4";
 import { HITLConfigSchema, HITLTransportSchema, ToolUsageConfObject } from "../tools/hitl/hitlToolSchema";
-import { AgentModel, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
+import { AgentModel, ReActAgentInvokeResult, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
 import { SchemaSkillStore } from "../skills/stores/schema";
 import { SchemaMemoryStore } from "../memory/stores/schema";
@@ -23,11 +23,14 @@ export type VoiceAgentDescriptionConfig = boolean | {
   /** 
    * Whether to say the plugin execution
    * Use as additional knob to disable some tool / thing execution
+   * Setup as `false` to stop talking
+   * @default {undefined} - it always will be told in default
   */
-  sayAloud: boolean;
+  sayAloud?: boolean;
   /** 
-   * Give instruction to tell Transcriber how to tell describe before voice agent how to describe the operation
-   * Usable only when was specified `describe: true` and `communicationSpeechLevels` property matches to the config property and `agent.model.transcriber` matches to the specification level and when transcriber model is specified
+   * Give instruction to `agent.models.transcriber` regard how to describe the operation
+   * 
+   * Usable only when `sayLoud` isn't `false` and `communicationSpeechLevels` property matches to the specification level and when `agent.models.transcriber` is specified and with level has in space this action
   */
   describeVoiceInstruction?: string;
 }
@@ -62,55 +65,53 @@ export interface RealTimeVoiceSubAgent extends SubAgent {
      * Whether to describe agent execution and if desired how
      * @default false
     */
-    describeVoiceInstruction?: SpeakBeforeAfter;
+    describeVoiceInstruction?: SpeakBeforeAfter<{
+      /**
+       * Specify how agent has to Verbally with Voice (Aloud) describe the subagent call or result
+      */
+      defaultInstruction?: string | ((subAgentRole: string, subagentInstruction: string, result?: ReActAgentInvokeResult) => Promise<string> | string);
+    }>;
 }
 
-
-type SpeakBeforeAfterForTool = SpeakBeforeAfter<{ 
+type SpeakBeforeAfterWithToolDescription = SpeakBeforeAfter<{ 
   /**
-   * When not specified the default tool speech instruction is going to be leveraged
+   * Specify how agent has to Verbally with Voice (Aloud) describe the tool call or its result
+   * 
+   * Behaviour:
+   * * Result of function execution or string is passed to transcriber when is enabled that processes it with `describeVoiceInstruction`
+   * * When transcriber for this operation is disabled then the this raw result is spoken by `tts` model
+   * * Determine toolt result by fact `toolOutput` property is specified
+   * 
+   * When not specified the RavenADK default tool speech instruction is going to be leveraged
    * * Use function to specify the dynamic description e.g: base on tool agent given args
    * * Use string to specify static description e.g: for specified tool
-   * @params toolOutput - it's available only for `speakAfter` option
+   * @params toolOutput - it's available only for `speakAfter` option - where tool result is available
   */
-  defaultInstruction: string | ((toolName: string, toolArgs: Record<string, any>, toolOutput?: string) => Promise<string> | string);
+  defaultInstruction?: string | ((toolName: string, toolArgs: Record<string, any>, toolOutput?: string) => Promise<string> | string);
 }>;
 export class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> extends Tool<ToolArgs, ToolOutputSchema> {
-  describeVoiceInstruction?: SpeakBeforeAfterForTool;
+  describeVoiceInstruction?: SpeakBeforeAfterWithToolDescription;
   
   /** 
    * @param describeVoiceInstruction - Optionally describe the execution the agent. When no specified an agent doesn't describe this tool call
   */
   constructor(
     toolLogic: ToolLogic<ToolArgs>,
-    toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>,
-    describeVoiceInstruction?: SpeakBeforeAfterForTool
+    toolConfig: ToolConfig<ToolArgs, ToolOutputSchema> & SpeakBeforeAfterWithToolDescription,
+    describeVoiceInstruction?: SpeakBeforeAfterWithToolDescription
   ) {
     super(toolLogic, toolConfig);
-    this.describeVoiceInstruction = describeVoiceInstruction;
+
+    const { speakAfter, speakBefore } = toolConfig;
+    this.describeVoiceInstruction = speakAfter || speakBefore ? { speakAfter, speakBefore } : describeVoiceInstruction;
   }
 }
 
 export interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
   /** Speech is execute once agent use this plugin */
-  describeVoiceAgentConfig?: {
-    /**
-     * Setup to define whether to say something before this plugin execution</br>
-     * Parameters:
-     * * string - to say in static form what to say
-     * * function - to determine what to say base on specified `executeArgs` or  result of plugin execution `executionResult`
-     * * object - to determine what to say as object
-    */
-    speakBefore?: string | ((executeArgs: Parameters<ReActAgentPluginSpec["execute"]>) => Promise<string> | string) | VoiceAgentDescriptionConfig;
-    /**
-     * Setup to define whether to say something before this plugin execution<\br>
-     * Parameters:
-     * * string - to say in static form what to say
-     * * function - to determine what to say base on specified `executeArgs` or  result of plugin execution `executionResult`
-     * * object - to determine what to say as object
-    */
-    speakAfter?: string | ((executeArgs: Parameters<ReActAgentPluginSpec["execute"]>, executionResult: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => Promise<string> | string) | VoiceAgentDescriptionConfig;
-  };
+  describeVoiceAgentConfig?: SpeakBeforeAfter<{ 
+    defaultInstruction: string | ((executeArgs: Parameters<ReActAgentPluginSpec["execute"]>) => Promise<string> | string);
+  }>;
 }
 
 export interface HITLLiveTimeVoiceAgent<HITL extends HITLTransportSchema> extends Omit<HITLConfigSchema, "toolsUsage"> {

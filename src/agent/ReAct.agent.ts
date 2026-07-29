@@ -185,7 +185,7 @@ export interface ReActAgentEvents extends SkillEvents {
     memory_set_conclusion: (memoryName: string, content: string, status: boolean) => void | Promise<void>;
 }
 
-interface ReActAgentInvokeResult {
+export interface ReActAgentInvokeResult {
     messages: MessagesVariations[];
     state: AgentMessagesGraphState;
 }

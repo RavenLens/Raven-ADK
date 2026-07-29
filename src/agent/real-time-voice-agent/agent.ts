@@ -292,16 +292,6 @@ export class RealTimeVoiceAgent<
                         }
                     },
                     {
-                        name: "voice_subagents_plugin",
-                        executionWay: ["subagent_invoked"],
-                        execute: async (from) => {
-                            if (from.subagentRole) {
-                                void this.speak(clientID, `I'm delegating this task to my specialist ${from.subagentRole}`, "subagents", logicAbortController.signal);
-                            }
-                            return { status: true };
-                        }
-                    },
-                    {
                         name: "voice_memory_plugin",
                         executionWay: ["memory"],
                         execute: async () => {
@@ -324,6 +314,10 @@ export class RealTimeVoiceAgent<
                 if (event === "hitl_triggered") {
                     const [type] = args;
                     void this.speak(clientID, `I need your assistance for ${type}.`, "hitl", logicAbortController.signal);
+                }
+
+                if (event === "reasoning") {
+
                 }
 
                 /**
@@ -364,7 +358,7 @@ export class RealTimeVoiceAgent<
                  * Execute tool when tool isn't `isSkillTool`
                  * @param event - where was called
                  * @param isSkillTool - state whether was detected skill tool
-                 * @returns {boolean} - represents whether logic was successfully passed
+                 * @returns represents whether logic was successfully passed
                  */
                 const toolUnified = async <Event extends keyof Pick<ReActAgentEvents, "tool_invoked" | "tool_executed">>(event: Event, isSkillTool: boolean) => {
                     // Skill tool gets other handler
@@ -374,7 +368,7 @@ export class RealTimeVoiceAgent<
                     const toolFound = this.config.agent.tools.find(tool => tool.toolConfig.toolName === toolName);
 
                     const afterOrBeforeKey: SpeakPositionRecordKeys = event === "tool_executed" ? "speakAfter" : "speakBefore";
-                    const canToolBeTold = (!toolFound?.describeVoiceInstruction || !toolFound.describeVoiceInstruction[afterOrBeforeKey]) || (typeof toolFound.describeVoiceInstruction[afterOrBeforeKey] === "object" && toolFound.describeVoiceInstruction[afterOrBeforeKey].sayAloud === true);
+                    const canToolBeTold = (!toolFound?.describeVoiceInstruction || !toolFound.describeVoiceInstruction[afterOrBeforeKey]) || (typeof toolFound.describeVoiceInstruction[afterOrBeforeKey] === "object" && (toolFound.describeVoiceInstruction[afterOrBeforeKey].sayAloud === true || toolFound.describeVoiceInstruction[afterOrBeforeKey].sayAloud === undefined));
                     
                     if (toolFound && canToolBeTold) {
                         const userConfigInstruction = async () => {
@@ -425,13 +419,51 @@ export class RealTimeVoiceAgent<
                 }
 
                 // TODO: Register listening for plugin execution by: config.agent.plugins and tell when it's possible
-                /* if (event === "plugin_invoking") {
-
+                if (event === "plugin_invoking") {
+                    
                 }
 
                 if (event === "plugin_result") {
 
-                } */
+                }
+                
+                // Subagents
+                const subagentUnified = async (event: "subagent_called" | "subagent_result") => {
+                    const [subAgentRole, subagentInstruction] = args as Parameters<ReActAgentEvents["subagent_called"]>;
+                    const result = event === "subagent_result"
+                        ? (args as Parameters<ReActAgentEvents["subagent_result"]>)[2]
+                        : undefined;
+                    const subagent = this.config.agent.subagents?.find(({ role }) => role === subAgentRole);
+                    const speakPosition: SpeakPositionRecordKeys = event === "subagent_result" ? "speakAfter" : "speakBefore";
+                    const voiceConfig = subagent?.describeVoiceInstruction?.[speakPosition];
+                    const canSubagentBeTold = voiceConfig !== false
+                        && (typeof voiceConfig !== "object" || voiceConfig.sayAloud !== false);
+
+                    if (!subagent || !canSubagentBeTold) return false;
+
+                    const configuredInstruction = voiceConfig?.defaultInstruction;
+                    const instruction = typeof configuredInstruction === "function"
+                        ? await configuredInstruction(subAgentRole, subagentInstruction, result)
+                        : configuredInstruction;
+                    const defaultInstruction = event === "subagent_called"
+                        ? `I'm delegating this task to my specialist ${subAgentRole}`
+                        : `I've received the result from my specialist ${subAgentRole}`;
+
+                    void this.speak(
+                        clientID,
+                        instruction ?? defaultInstruction,
+                        "subagents",
+                        logicAbortController.signal,
+                        args,
+                        typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
+                    );
+
+                    return true;
+                };
+
+                if (event === "subagent_called" || event === "subagent_result") {
+                    await subagentUnified(event);
+                }
                 
                 // Emits local and remote events
                 this.emitLogicEvent(clientID, event, args.length === 1 ? args[0] : args);
