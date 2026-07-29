@@ -239,18 +239,6 @@ export class RealTimeVoiceAgent<
 
             // Pipe all agent events to the client and handle voice-feedback for non-plugin events
             agent.onAnyEvent(async (event, ...args) => {
-                if (event === "hitl_triggered") {
-                    const [type] = args;
-                    void this.speak(clientID, `I need your assistance for ${type}.`, "hitl", logicAbortController.signal);
-                }
-
-                if (event === "reasoning") {
-                    const [thought] = args as Parameters<ReActAgentEvents["reasoning"]>;
-                    if (thought) {
-                        void this.speak(clientID, thought, "thoughts", logicAbortController.signal);
-                    }
-                }
-
                 /**
                  * Check is skill called and execute speech for skill
                  * @returns {boolean} - the skill detection state
@@ -349,6 +337,102 @@ export class RealTimeVoiceAgent<
                     const toolExecuted = await toolUnified(event, isSkillTool);
                 }
 
+                if (event === "reasoning") {
+                    const [thought] = args as Parameters<ReActAgentEvents["reasoning"]>;
+                    if (thought) {
+                        void this.speak(clientID, thought, "thoughts", logicAbortController.signal);
+                    }
+                }
+
+                // HITL
+                const hitlUnified = async (event: "hitl_triggered" | "hitl_result") => {
+                    const [type, payload] = args as Parameters<ReActAgentEvents["hitl_triggered"]>;
+                    const result = event === "hitl_result"
+                        ? (args as Parameters<ReActAgentEvents["hitl_result"]>)[2]
+                        : undefined;
+
+                    const hitlConfig = this.config.agent.hitl?.(clientID, authParams);
+                    if (!hitlConfig) return false;
+
+                    const mapping = {
+                        tool_usage: "emitToolUsage",
+                        question_abc: "emitAbcQuestion",
+                        question_open: "emitOpenQuestion",
+                        acceptance: "emitAcceptance"
+                    } as const;
+
+                    const hitlKey = mapping[type];
+                    const speakPosition: SpeakPositionRecordKeys = event === "hitl_result" ? "speakAfter" : "speakBefore";
+
+                    if (type === "tool_usage") {
+                        const toolName = payload.toolName;
+                        const toolUsage = hitlConfig.toolsUsage?.[toolName];
+                        if (!toolUsage) return false;
+
+                        const voiceConfig = toolUsage.describeVoiceInstruction?.[speakPosition];
+                        if (!voiceConfig) return false;
+
+                        const configuredInstruction = typeof voiceConfig === "object"
+                            ? voiceConfig.defaultInstruction
+                            : undefined;
+
+                        const instruction = typeof configuredInstruction === "function"
+                            ? await (configuredInstruction as any)(toolName, payload.toolArguments, result)
+                            : configuredInstruction;
+
+                        const defaultInstruction = event === "hitl_triggered"
+                            ? `I need your approval to use the ${toolName} tool`
+                            : `I've received your decision regarding the ${toolName} tool`;
+
+                        void this.speak(
+                            clientID,
+                            instruction ?? defaultInstruction,
+                            "hitl",
+                            logicAbortController.signal,
+                            args,
+                            (typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined) ??
+                            (typeof hitlConfig.actionsDescribeVoiceInstruction?.emitToolUsage?.[speakPosition] === "object"
+                                ? hitlConfig.actionsDescribeVoiceInstruction.emitToolUsage[speakPosition].describeVoiceInstruction
+                                : undefined)
+                        );
+
+                        return true;
+                    }
+                    else if (hitlKey) {
+                        const voiceConfig = hitlConfig.actionsDescribeVoiceInstruction?.[hitlKey]?.[speakPosition];
+                        if (!voiceConfig) return false;
+
+                        const configuredInstruction = typeof voiceConfig === "object"
+                            ? voiceConfig.defaultInstruction
+                            : undefined;
+
+                        const instruction = typeof configuredInstruction === "function"
+                            ? await (configuredInstruction as any)(payload, result)
+                            : configuredInstruction;
+
+                        const defaultInstruction = event === "hitl_triggered"
+                            ? `I need your assistance with a ${type.replace('_', ' ')}`
+                            : `Received your response for ${type.replace('_', ' ')}`;
+
+                        void this.speak(
+                            clientID,
+                            instruction ?? defaultInstruction,
+                            "hitl",
+                            logicAbortController.signal,
+                            args,
+                            (typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined)
+                        );
+
+                        return true;
+                    }
+
+                    return false;
+                };
+
+                if (event === "hitl_triggered" || event === "hitl_result") {
+                    await hitlUnified(event);
+                }
+
                 const pluginUnified = async (event: "plugin_invoking" | "plugin_result") => {
                     const [pluginName, executionWay] = args as Parameters<ReActAgentEvents["plugin_invoking"]>;
                     const pluginOutput = event === "plugin_result"
@@ -388,6 +472,8 @@ export class RealTimeVoiceAgent<
                     await pluginUnified(event);
                 }
 
+                // Memory
+                // TODO: Adjust once the memory MemRL, Mem0, MemP and Custom classes arrive
                 const memoryActionToConfigKey: Record<Parameters<ReActAgentEvents["memory_action"]>[0], keyof ConfigLessSchemaMemoryStore> = {
                     fetch: "fetchMemory",
                     save: "saveMemory",
@@ -513,7 +599,7 @@ export class RealTimeVoiceAgent<
                     await subagentToolUnified(event);
                 }
 
-                event === "tool_invoked"
+                // 
                 
                 // Emits local and remote events
                 this.emitLogicEvent(clientID, event, args.length === 1 ? args[0] : args);

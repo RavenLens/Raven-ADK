@@ -170,11 +170,20 @@ export interface ReActAgentEvents extends SkillEvents {
     subagent_tool_invoked: (role: string, toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
     subagent_tool_executed: (role: string, toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
 
-    /** HITL events */
+    /**
+     * |-------------|
+     * | HITL events |
+     * |-------------|
+    */
+    /** Triggered at the begining where HITL was called */
     hitl_triggered: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>) => void | Promise<void>;
+    /** Triggered once result was retrived from client */
     hitl_result: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>, result: any) => void | Promise<void>;
+    /** Triggered once result was retrived from client */
     hitl_tool_approval: (toolName: string, allowance: EmitToolUsageBody) => void | Promise<void>;
+    /** Triggered once result was retrived from client */
     hitl_question: (questionType: "abc" | "open", question: string, answer: any) => void | Promise<void>;
+    /** Triggered once result was retrived from client */
     hitl_acceptance: (question: string, answer: HITLToolAllowancePossibleAnswer) => void | Promise<void>;
 
     /** Memory events */
@@ -1182,15 +1191,16 @@ export class ReActAgent
 
                                 return {
                                     toolName,
-                                    callIndex
+                                    callIndex,
+                                    toolArguments: toolCall.arguments ?? {}
                                 };
                             })
-                            .filter((approvalTarget): approvalTarget is { toolName: string; callIndex: number } => !!approvalTarget);
+                            .filter((approvalTarget): approvalTarget is { toolName: string; callIndex: number; toolArguments: Record<string, any> } => !!approvalTarget);
 
                         const approvalsExecution = await this.abortable.runAbortable(() => Promise.all(
-                            toolsRequiringApproval.map(async ({ toolName, callIndex }) => {
+                            toolsRequiringApproval.map(async ({ toolName, callIndex, toolArguments }) => {
                                 try {
-                                    const allowance = await hitlTransport.emitToolUsage(toolName);
+                                    const allowance = await hitlTransport.emitToolUsage(toolName, toolArguments);
 
                                     return {
                                         callIndex,
@@ -2144,11 +2154,11 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
 
             const originalEmitToolUsage = hitl.emitToolUsage?.bind(hitl);
             if (originalEmitToolUsage) {
-                hitl.emitToolUsage = async (toolName: string) => {
-                    listeners.forEach(l => l("hitl_triggered", "tool_usage", { toolName }));
-                    const res = await originalEmitToolUsage(toolName);
+                hitl.emitToolUsage = async (toolName: string, toolArguments?: Record<string, any>) => {
+                    listeners.forEach(l => l("hitl_triggered", "tool_usage", { toolName, toolArguments }));
+                    const res = await originalEmitToolUsage(toolName, toolArguments);
                     listeners.forEach(l => {
-                        l("hitl_result", "tool_usage", { toolName }, res);
+                        l("hitl_result", "tool_usage", { toolName, toolArguments }, res);
                         l("hitl_tool_approval", toolName, res);
                     });
                     return res;
