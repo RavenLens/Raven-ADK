@@ -64,19 +64,6 @@ export interface RealTimeVoiceAgentSchemaMemoryStore extends ConfigLessSchemaMem
     }
 }
 
-export interface RealTimeVoiceSubAgent extends SubAgent {
-    /**
-     * Whether to describe agent execution and if desired how
-     * @default false
-    */
-    describeVoiceInstruction?: SpeakBeforeAfter<{
-      /**
-       * Specify how agent has to Verbally with Voice (Aloud) describe the subagent call or result
-      */
-      defaultInstruction?: string | ((subAgentRole: string, subagentInstruction: string, result?: ReActAgentInvokeResult) => Promise<string> | string);
-    }>;
-}
-
 type SpeakBeforeAfterWithToolDescription = SpeakBeforeAfter<{ 
   /**
    * Specify how agent has to Verbally with Voice (Aloud) describe the tool call or its result
@@ -93,6 +80,29 @@ type SpeakBeforeAfterWithToolDescription = SpeakBeforeAfter<{
   */
   defaultInstruction?: string | ((toolName: string, toolArgs: Record<string, any>, toolOutput?: string) => Promise<string> | string);
 }>;
+
+type SpeakBeforeAfterWithSubagentDescription = SpeakBeforeAfter<{
+  /** Specify how the agent should verbally describe the subagent call or result. */
+  defaultInstruction?: string | ((subAgentRole: string, subagentInstruction: string, result?: ReActAgentInvokeResult) => Promise<string> | string);
+}> & {
+  /**
+   * Configures speech for tools used by this subagent.
+   *
+   * `speakBefore` is invoked for `subagent_tool_invoked`, and `speakAfter` is
+   * invoked for `subagent_tool_executed`. Omit this property to leave the
+   * subagent's tool calls unannounced.
+   */
+  toolCalls?: SpeakBeforeAfterWithToolDescription;
+};
+
+export interface RealTimeVoiceSubAgent extends SubAgent {
+    /**
+     * Whether to describe agent execution and if desired how.
+     * @default false
+    */
+    describeVoiceInstruction?: SpeakBeforeAfterWithSubagentDescription;
+}
+
 export class RealTimeVoiceAgentTool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> extends Tool<ToolArgs, ToolOutputSchema> {
   describeVoiceInstruction?: SpeakBeforeAfterWithToolDescription;
   

@@ -3,7 +3,6 @@ import { AuthPayload, CommunicationSpeechLevelsDetails, ConfigLessSchemaMemorySt
 import { EventEmitter } from "node:events";
 import { STTModel } from "./stt";
 import { ReActAgent, ReActAgentEvents } from "../ReAct.agent";
-import { Constructor } from "mqtt";
 
 /**
  * @param result - isn't included in `CommunicationSpeechLevelsDetails` to don't introduce the breaking feature
@@ -436,7 +435,7 @@ export class RealTimeVoiceAgent<
                 }
                 
                 // Subagents
-                const subagentUnified = async (event: "subagent_called" | "subagent_result") => {
+                const subagentCallUnified = async (event: "subagent_called" | "subagent_result") => {
                     const [subAgentRole, subagentInstruction] = args as Parameters<ReActAgentEvents["subagent_called"]>;
                     const result = event === "subagent_result"
                         ? (args as Parameters<ReActAgentEvents["subagent_result"]>)[2]
@@ -470,8 +469,51 @@ export class RealTimeVoiceAgent<
                 };
 
                 if (event === "subagent_called" || event === "subagent_result") {
-                    await subagentUnified(event);
+                    await subagentCallUnified(event);
                 }
+
+                const subagentToolUnified = async (event: "subagent_tool_invoked" | "subagent_tool_executed") => {
+                    const [subAgentRole, toolName, toolParams] = args as Parameters<ReActAgentEvents["subagent_tool_invoked"]>;
+                    const toolOutput = event === "subagent_tool_executed"
+                        ? (args as Parameters<ReActAgentEvents["subagent_tool_executed"]>)[3]
+                        : undefined;
+                    const subagent = this.config.agent.subagents?.find(({ role }) => role === subAgentRole);
+                    const toolCalls = subagent?.describeVoiceInstruction?.toolCalls;
+                    const speakPosition: SpeakPositionRecordKeys = event === "subagent_tool_executed" ? "speakAfter" : "speakBefore";
+                    const voiceConfig = toolCalls?.[speakPosition];
+                    const canSubagentToolBeTold = voiceConfig !== undefined
+                        && voiceConfig !== false
+                        && (typeof voiceConfig !== "object" || voiceConfig.sayAloud !== false);
+
+                    if (!canSubagentToolBeTold) return false;
+
+                    const configuredInstruction = typeof voiceConfig === "object"
+                        ? voiceConfig.defaultInstruction
+                        : undefined;
+                    const instruction = typeof configuredInstruction === "function"
+                        ? await configuredInstruction(toolName, toolParams, toolOutput)
+                        : configuredInstruction;
+                    const defaultInstruction = event === "subagent_tool_invoked"
+                        ? `My specialist ${subAgentRole} is using ${toolName} to help with this`
+                        : `My specialist ${subAgentRole} has completed ${toolName}`;
+
+                    void this.speak(
+                        clientID,
+                        instruction ?? defaultInstruction,
+                        "subagents",
+                        logicAbortController.signal,
+                        args,
+                        typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
+                    );
+
+                    return true;
+                };
+
+                if (event === "subagent_tool_invoked" || event === "subagent_tool_executed") {
+                    await subagentToolUnified(event);
+                }
+
+                event === "tool_invoked"
                 
                 // Emits local and remote events
                 this.emitLogicEvent(clientID, event, args.length === 1 ? args[0] : args);
