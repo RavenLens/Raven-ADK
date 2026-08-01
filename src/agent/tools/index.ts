@@ -5,5 +5,4 @@ export * from "./CodeExecutionSandboxes/index.js";
 
 export * as MCP from "./mcp/index.js";
 export * as HITL from "./hitl/index.js";
-export * as HITLSocketIo from "./hitl/trasnports/SocketIoHITLTrasnport.js";
 export * as CodeSandboxes from "./CodeExecutionSandboxes/index.js";
