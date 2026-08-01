@@ -1,12 +1,9 @@
 # Memory
-Memory in RavenADK agents provide you way to remember data from interactions with user and get them recalled in next iterations what makes vivid user interactions. Such informations can be manipulated via Memory: 
-    - user name
-    - user preferrences
-    - user given task
-    - user conversation style schema - it can be 
-Finally you've full agency to decide what agent has to remember, what should so you decide the agent behaviour
+
+Memory in RavenADK agents provide you way to remember data from interactions with user and get them recalled in next iterations what makes vivid user interactions. Such informations can be manipulated via Memory: - user name - user preferrences - user given task - user conversation style schema - it can be Finally you've full agency to decide what agent has to remember, what should so you decide the agent behaviour
 
 ## Configuring memory for ReAct Agent
+
 ```typescript
     import { ReActAgent } from "@ravenlens/raven-adk/agents";
     import { tool } from "@ravenlens/raven-adk/tools";
@@ -87,37 +84,45 @@ Finally you've full agency to decide what agent has to remember, what should so 
 ```
 
 ## Controlling what agent can remember
+
 Pass tp agent config object `memory.hasToRememeber` output with output value will be string. This has to be list with specification for agent according with what has it to rememeber
 
 ## Memory model
+
 This subsection describe how the agent memory work.
 
 > RavenADK memory is graph of knowledge with mutual relations assigned as edges where nodes are the wards of knowledge e.g: user prefferences like birthday, user friends, user used programs and so on. Each information is connected to another communication with weight. RavenADK memory system base too on the weight system where the more relevant informations gets higher weight and less vibrant lower weight
 
 #### Memory details
-- Memory is fetched with these techniques:
-    - semantically (base on semantic search) or according to relevance
-    - by exploration like the tower - agent can explore the knowledge by going through it like you go from one city stree to another
-- You can disable memory if you don't want to use it
+
+* Memory is fetched with these techniques:
+  * semantically (base on semantic search) or according to relevance
+  * by exploration like the tower - agent can explore the knowledge by going through it like you go from one city stree to another
+* You can disable memory if you don't want to use it
 
 ## Memory Conclusion System
+
 The memory conclusion is a built-in system to `ReActAgent` provides a high-level awareness for the agent. Instead of always performing deep semantic searches for every turn, the agent is provided with a "conclusion" of its entire long-term memory at the start of each session.
 
-- **Awareness:** It gives the agent an immediate summary of who the user is, their core preferences, and the state of ongoing goals.
-- **Wiser Exploration:** With the conclusion in the system prompt, the agent can decide more intelligently when it needs to use `fetch_memory` to dive deeper into specific knowledge nodes.
-- **Token Efficiency & Accuracy:** By having the most relevant facts upfront in a condensed form (max 2048 words), the agent avoids redundant tool calls and reduces token usage while maintaining high accuracy in its interactions.
+* **Awareness:** It gives the agent an immediate summary of who the user is, their core preferences, and the state of ongoing goals.
+* **Wiser Exploration:** With the conclusion in the system prompt, the agent can decide more intelligently when it needs to use `fetch_memory` to dive deeper into specific knowledge nodes.
+* **Token Efficiency & Accuracy:** By having the most relevant facts upfront in a condensed form (max 2048 words), the agent avoids redundant tool calls and reduces token usage while maintaining high accuracy in its interactions.
 
 ## Advanced: Memory Conclusion Plugin
+
 To maintain the memory conclusion automatically, you should use the `MemoryConcludePlugin` via `createMemoryConclusionPlugin`. This plugin runs after each agent session and evaluates whether the new interaction contains durable information that should be integrated into the long-term conclusion.
 
 ### How it works
+
 The plugin spawns a separate internal "conclude agent" after the main agent finishes its run. This internal agent:
+
 1. Analyzes the full transcript of the interaction.
 2. Compares new findings with the existing memory conclusion.
 3. Consolidates everything into an updated summary.
 4. Updates the underlying memory store with the new conclusion if changes were made.
 
 ### Usage
+
 ```typescript
 import { createMemoryConclusionPlugin } from "@ravenlens/raven-adk/memory";
 import { openai } from "@ravenlens/raven-adk/models";
@@ -137,11 +142,13 @@ const agent = new ReActAgent({
 > Beware that usage of Plugin triggers the another LLM infference loop that produces costs and increments time occupation for task to be done. Nevertheless results of its usage are times better than without
 
 ### Built-In Stores
-- ChromaDB store: [`MemoryChromaDBStore`](../src/agent/memory/stores/chromadb.ts)
-- Disk store: [`MemoryDiskStore`](../src/agent/memory/stores/diskStore.ts)
-- MongoDB store: [`MemoryMongoDBStore`](../src/agent/memory/stores/mongodbStore.ts)
+
+* ChromaDB store: [`MemoryChromaDBStore`](https://github.com/RavenLens/Raven-ADK/blob/main/src/agent/memory/stores/chromadb.ts)
+* Disk store: [`MemoryDiskStore`](https://github.com/RavenLens/Raven-ADK/blob/main/src/agent/memory/stores/diskStore.ts)
+* MongoDB store: [`MemoryMongoDBStore`](https://github.com/RavenLens/Raven-ADK/blob/main/src/agent/memory/stores/mongodbStore.ts)
 
 ## Creating custom memory store
+
 You can build your own memory store by implementing the `SchemaMemoryStore` interface. This allows you to use any database or storage system of your choice (e.g., PostgreSQL with pgvector, Pinecone, or even a simple file-based system).
 
 ```typescript
@@ -211,9 +218,14 @@ export class MyCustomMemoryStore implements SchemaMemoryStore {
     }
 }
 ```
-    }
+
+```
 }
 ```
+
+}
+
+````
 
 To use your custom store, simply pass it to the `ReActAgent` configuration:
 
@@ -225,10 +237,11 @@ const reactAgent = new ReActAgent({
         session: "user-123"
     })
 });
-```
+````
 
 ### Built-In Skill Stores (Reference)
-- Local disk store: [`SkillDiskStore`](../src/agent/skills/stores/diskStore.ts)
-- MongoDB store: [`SkillMongoDBStore`](../src/agent/skills/stores/mongodbStore.ts)
 
-You can also build custom skill stores by implementing [`SchemaSkillStore`](../src/agent/skills/stores/schema.ts).
+* Local disk store: [`SkillDiskStore`](https://github.com/RavenLens/Raven-ADK/blob/main/src/agent/skills/stores/diskStore.ts)
+* MongoDB store: [`SkillMongoDBStore`](https://github.com/RavenLens/Raven-ADK/blob/main/src/agent/skills/stores/mongodbStore.ts)
+
+You can also build custom skill stores by implementing [`SchemaSkillStore`](https://github.com/RavenLens/Raven-ADK/blob/main/src/agent/skills/stores/schema.ts).
