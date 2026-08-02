@@ -20,6 +20,23 @@
 ## Stage 2nd - Define the logic
 - Code Memory system universal schema has to work with the custom or the specific memory system
     1. Add the code in the code files in the `memory` folder
+        ## Assumptions
+        - Invoke:
+            - before conversation start - manually
+            - before agent run
+            - before each subagent
+            - after each agent
+            - after main orchestrator call
+            - after conversation run by agent - automatically by agent e.g: Mem0 to keep memory updated
+            - after conversation - run manually
+        - Implement the universal events list for the agent
+        - Implement the schema methods to call the agent
+        - Allow to invoke multiple methods from multiple different or same memory systems automatically or separatelly
+            - Events should be listened separatelly
+        - Multiple stores have to be applied
+        - Apply the telementry for this
+
+        ## Steps:
         1. Add universal interface will be the schema base on the ReAct agent logic / Agentic logic
             - Base on the invoke places - determines where the agentic logic can be called for memory
         2. Make the implementation of the code for each memory in separate files
@@ -28,6 +45,7 @@
             1. Adjust the code of config
             2. Adjust the logic - base on the places where memory can be called
     2. Add to the documentation the spec - base on the done logic and memory config
+        - for each file as is in the **Part 2**
     3. Allow to combine multiple same memories in array
 - ReActAgent logic - Implement the logic
     - Agent has to choose the memory and use the above point schema for the memory usecase
@@ -42,6 +60,7 @@
 - Configure the general memory documentation [General Memory](./README.md)
     - Adjust the code examples base on the done logic
 - Configure each subsequent memory file
+    - Use real file schema
     - Show the correct storage and the plural implementation of the memory
     - Show the code for each document as separate
 - Configure the [Memory.md](../Memory.md) file to show the memory implementation
