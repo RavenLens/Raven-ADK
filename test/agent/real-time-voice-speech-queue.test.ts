@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { RealTimeVoiceAgent } from "../../src/agent/real-time-voice-agent/agent";
+import { SpeechApporaches } from "../../src/agent/real-time-voice-agent/agentConfig";
 
 const clientID = "speech-queue-client";
 
@@ -12,12 +13,13 @@ function createDeferred<Result>() {
     return { promise, resolve };
 }
 
-function createAgent(speechApproach: "blocking" | "flush", tts: (text: string) => Promise<Buffer | undefined>) {
+function createAgent(speechApproach: SpeechApporaches, tts: (text: string) => Promise<Buffer | undefined>, speechBlocksReasoningEngine = false) {
     const agent = new RealTimeVoiceAgent({
         executionMode: {
             mode: "local",
             textEventsCommunicationCarrier: { type: "events" }
         },
+        speechBlocksReasoningEngine,
         agent: {
             models: {
                 stt: { model: {} as any, speechApproach },
@@ -93,6 +95,29 @@ describe("RealTimeVoiceAgent speech queue", () => {
         expect((agent as any).outputSpeechQueues.has(clientID)).toBe(false);
     });
 
+    it("denies a new speech request while another is still active", async () => {
+        const slowAudio = createDeferred<Buffer>();
+        const tts = vi.fn((text: string) => text === "old" ? slowAudio.promise : Promise.resolve(Buffer.alloc(640)));
+        const { agent, audioFrames, events } = createAgent("deny-current", tts);
+
+        const oldSpeech = (agent as any).speak(clientID, "old", "result");
+        await Promise.resolve();
+
+        const newSpeech = (agent as any).speak(clientID, "new", "result");
+        await newSpeech;
+
+        slowAudio.resolve(Buffer.alloc(640));
+        await oldSpeech;
+        await Promise.resolve();
+
+        expect(tts.mock.calls.map(([text]) => text)).toEqual(["old"]);
+        expect(audioFrames).toHaveLength(1);
+        expect(events).not.toContainEqual(expect.objectContaining({
+            event: "realtime_agent.speech_interrupted"
+        }));
+        expect((agent as any).outputSpeechQueues.has(clientID)).toBe(false);
+    });
+
     it("disposes a queue without waiting for an uncooperative TTS provider", async () => {
         const slowAudio = createDeferred<Buffer>();
         const { agent, audioFrames } = createAgent("blocking", () => slowAudio.promise);
@@ -106,6 +131,44 @@ describe("RealTimeVoiceAgent speech queue", () => {
         await Promise.resolve();
 
         expect(audioFrames).toHaveLength(0);
+        expect((agent as any).outputSpeechQueues.has(clientID)).toBe(false);
+    });
+
+    it("does not block the reasoning engine by default", async () => {
+        const tts = vi.fn(async (_text: string) => Buffer.alloc(640));
+        const { agent, events } = createAgent("blocking", tts);
+
+        const speakPromise = (agent as any).speak(clientID, "hello", "thoughts");
+        expect(speakPromise).toBeInstanceOf(Promise);
+
+        const synchronousCheck = Symbol("sync");
+        const immediatelyAvailable = await Promise.race([
+            speakPromise.then(() => synchronousCheck),
+            Promise.resolve(synchronousCheck)
+        ]);
+
+        expect(immediatelyAvailable).toBe(synchronousCheck);
+        await speakPromise;
+
+        expect(events.map(({ event }) => event)).toContain("realtime_agent.speech_end");
+        expect((agent as any).outputSpeechQueues.has(clientID)).toBe(false);
+    });
+
+    it("awaits speech before continuing when speechBlocksReasoningEngine is true", async () => {
+        const audioPromise = createDeferred<Buffer>();
+        const tts = vi.fn(() => audioPromise.promise);
+        const { agent, audioFrames, events } = createAgent("blocking", tts, true);
+
+        const speakPromise = (agent as any).speak(clientID, "hello", "thoughts");
+        await Promise.resolve();
+
+        expect(audioFrames).toHaveLength(0);
+
+        audioPromise.resolve(Buffer.alloc(640));
+        await speakPromise;
+
+        expect(audioFrames).toHaveLength(1);
+        expect(events.map(({ event }) => event)).toContain("realtime_agent.speech_end");
         expect((agent as any).outputSpeechQueues.has(clientID)).toBe(false);
     });
 });

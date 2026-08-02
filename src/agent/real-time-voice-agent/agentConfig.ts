@@ -294,6 +294,7 @@ export interface CommunicationSpeechLevelsDetails {
   subagents: boolean;
 }
 
+export type SpeechApporaches = "blocking" | "flush" | "deny-current";
 export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealTimeVoiceAgentSkillsSchema, Memory extends RealTimeVoiceAgentSchemaMemoryStore, HITL extends HITLTransportSchema> {
   /** 
    * The environment where the agent is executing.
@@ -317,6 +318,14 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
    * @default "all"
   */
   communicationSpeechLevels?: CommunicationSpeechLevelsDetails | "all";
+  /**
+   * When true, speech requests from within the reasoning engine (e.g. tool descriptions,
+   * thoughts, subagent delegation) are awaited and block the ReAct event loop until they finish.
+   * When false (default), speech is queued and emitted asynchronously while the engine continues.
+   *
+   * @default false
+   */
+  speechBlocksReasoningEngine?: boolean;
   /** RealTime Agent configuration */
   agent: {
     /**
@@ -337,15 +346,17 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
       stt: {
         model: AgentModel | STTModel;
         /**
-         * Describes how the next models will process data in respect to the prior
-         * Possible apporaches:
+         * Describes how incoming speech requests interact with speech that is already playing or queued.
+         * Possible approaches:
          * - blocking - speech is queued and starts after the current speech finishes
-         * - flush - cancels the current and queued speech, then starts the newest speech
+         * - flush - cancels the current and queued speech, then starts the newest speech.
          *   The client receives `realtime_agent.speech_interrupted` so it can clear locally buffered audio.
+         * - deny-current - if another speech is already playing or queued, the new request is dropped
+         *   and only the prior speech continues.
          * 
          * @default {"blocking"} - speech of one is blocked till next will start
          */
-        speechApproach: "blocking" | "flush";
+        speechApproach: SpeechApporaches;
         /**
          * Speech-to-text execution mode.
          * - 'volatile': processes audio subchunks in real time on the fly as speech flows.

@@ -7,24 +7,19 @@
     - In `canAgentCommunicate` and for `speak` methods
         <!-- TODO: Add after establishement of rigid Mem0, MemRL and MemP systems --> - Memory - each memory tool has to be executed in this fashion additionally 
         - HITL - seems like the toughtest
+            - Merge with main and ship changes to be unified
             - Change config:
                 - `actionsDescribeVoiceInstruction`
                     - specify the what to say before and after
                     - Add to JSDoc and to the Documentation that HITL will talk only when has specified to talk
                 - `toolsUsage.describeVoiceInstruction` - add the `beforeInstructions` and `afterInstruction` with the string says what to describe before and after tool execution
             - Add the logic of hitl talking
-    - Add the blocking behaviour for speech
-        - Add specification whether the speech has to block the events loop of Reasonig Enging - currently the one speech can block other but not the engined
-            - add to the config
-        - `deny-current` add option
-            - Add to config
-            - Add to logic
-            - current option is deny and only the prior is executed
-            - Add to logic
-        ---
-        - Add the configuration option can specify the speech behaviour and how to deal with speech when other is still talking
-            - How to deal with other is still talking can be - set of behaviours to deal with the other agent is talking to don't cause streaming overlapping sounds: queue, stop-previous, deny-current
-                - Add this to the config object
+        - Adjust with the memory merged to the main
+    - Add Avatar model and sync this with speech
+        - Ask ai what can be the model providers to specific one step stage 
+        - Add support for multiple specific options like `AvatarOneStepPipeline`, `AvatarTwoStepPipeline`
+        - Add config with `speech` and interruption options
+    - Add the documentation for RealTime for RealTimeAgent base on `config`
 
         
     ### After above points accomplishement

@@ -139,9 +139,6 @@ export class RealTimeVoiceAgent<
         }: { clientID: string; transcript: string; isFinal: boolean; raw: any; }) => {
             // Emit event
             this.clientsDataChannels.emitEvent(clientID, "realtime_agent.stt_transcript_interim", { transcript, isFinal });
-            
-            // TODO: Generate the content right now as speculative decoding mechanism -> model generates thoughts base on the specified text by asking questions - Least-To-Most Technique -> then attach this to the full transcript prompt
-            // TODO: generate speculative events before and after
         });
         
         // It's the final trasncript arrived from the message
@@ -243,7 +240,7 @@ export class RealTimeVoiceAgent<
                  * Check is skill called and execute speech for skill
                  * @returns {boolean} - the skill detection state
                 */
-                const skillToolCallUnified = (actionType: SpeakPositionRecordKeys) => {
+                const skillToolCallUnified = async (actionType: SpeakPositionRecordKeys) => {
                     const [toolName] = args;
 
                     const specifiedSkillsToSay = Object.entries(config.agent.skills?.(clientID, authParams)!.config!.actionsVoiceDescriptionInstruction!) as unknown as [
@@ -258,7 +255,7 @@ export class RealTimeVoiceAgent<
                         // Adds speak type
                         args.push({ speakType: speakType });
                         
-                        void this.speak(
+                        const speakPromise = this.speak(
                             clientID,
                             actionType === "speakAfter" ? `I performed ${toolName} skill` : `I'm performing ${toolName} skill`, 
                             "skills",
@@ -266,6 +263,10 @@ export class RealTimeVoiceAgent<
                             args,
                             typeof speakType === "object" ? speakType.describeVoiceInstruction : undefined
                         );
+
+                        if (this.config.speechBlocksReasoningEngine) {
+                            await speakPromise;
+                        }
 
                         return true;
                     }
@@ -310,7 +311,7 @@ export class RealTimeVoiceAgent<
                             return `I've executed ${toolName} and successfully retrived output`;
                         }
                         
-                        void this.speak(
+                        const speakPromise = this.speak(
                             clientID,
                             (await userConfigInstruction()) ?? defaultInstruction(),
                             "tools",
@@ -318,6 +319,10 @@ export class RealTimeVoiceAgent<
                             args,
                             typeof toolFound.describeVoiceInstruction?.[afterOrBeforeKey] === "object" ? toolFound.describeVoiceInstruction[afterOrBeforeKey].describeVoiceInstruction : undefined
                         );
+
+                        if (this.config.speechBlocksReasoningEngine) {
+                            await speakPromise;
+                        }
 
                         return true;
                     }
@@ -327,20 +332,23 @@ export class RealTimeVoiceAgent<
                 
                 // Before tool call
                 if (event === "tool_invoked") {
-                    const isSkillTool = skillToolCallUnified("speakBefore");
+                    const isSkillTool = await skillToolCallUnified("speakBefore");
                     const toolExecuted = await toolUnified(event, isSkillTool);
                 }
                 
                 // After tool call
                 if (event === "tool_executed") {
-                    const isSkillTool = skillToolCallUnified("speakAfter");
+                    const isSkillTool = await skillToolCallUnified("speakAfter");
                     const toolExecuted = await toolUnified(event, isSkillTool);
                 }
 
                 if (event === "reasoning") {
                     const [thought] = args as Parameters<ReActAgentEvents["reasoning"]>;
                     if (thought) {
-                        void this.speak(clientID, thought, "thoughts", logicAbortController.signal);
+                        const speakPromise = this.speak(clientID, thought, "thoughts", logicAbortController.signal);
+                        if (this.config.speechBlocksReasoningEngine) {
+                            await speakPromise;
+                        }
                     }
                 }
 
@@ -384,7 +392,7 @@ export class RealTimeVoiceAgent<
                             ? `I need your approval to use the ${toolName} tool`
                             : `I've received your decision regarding the ${toolName} tool`;
 
-                        void this.speak(
+                        const speakPromise = this.speak(
                             clientID,
                             instruction ?? defaultInstruction,
                             "hitl",
@@ -395,6 +403,10 @@ export class RealTimeVoiceAgent<
                                 ? hitlConfig.actionsDescribeVoiceInstruction.emitToolUsage[speakPosition].describeVoiceInstruction
                                 : undefined)
                         );
+
+                        if (this.config.speechBlocksReasoningEngine) {
+                            await speakPromise;
+                        }
 
                         return true;
                     }
@@ -414,7 +426,7 @@ export class RealTimeVoiceAgent<
                             ? `I need your assistance with a ${type.replace('_', ' ')}`
                             : `Received your response for ${type.replace('_', ' ')}`;
 
-                        void this.speak(
+                        const speakPromise = this.speak(
                             clientID,
                             instruction ?? defaultInstruction,
                             "hitl",
@@ -422,6 +434,10 @@ export class RealTimeVoiceAgent<
                             args,
                             (typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined)
                         );
+
+                        if (this.config.speechBlocksReasoningEngine) {
+                            await speakPromise;
+                        }
 
                         return true;
                     }
@@ -456,7 +472,7 @@ export class RealTimeVoiceAgent<
                         ? `I'm using ${pluginName} plugin to help you`
                         : `I've executed ${pluginName} plugin and successfully retrieved output`;
 
-                    void this.speak(
+                    const speakPromise = this.speak(
                         clientID,
                         instruction ?? defaultInstruction,
                         "plugins",
@@ -464,6 +480,10 @@ export class RealTimeVoiceAgent<
                         args,
                         typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
                     );
+
+                    if (this.config.speechBlocksReasoningEngine) {
+                        await speakPromise;
+                    }
 
                     return true;
                 };
@@ -504,7 +524,7 @@ export class RealTimeVoiceAgent<
                         set_conclusion: `I've updated the ${memoryName} memory summary`
                     }[action];
 
-                    void this.speak(
+                    const speakPromise = this.speak(
                         clientID,
                         instruction ?? defaultInstruction,
                         "memory",
@@ -512,6 +532,10 @@ export class RealTimeVoiceAgent<
                         args,
                         typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
                     );
+
+                    if (this.config.speechBlocksReasoningEngine) {
+                        await speakPromise;
+                    }
 
                     return true;
                 };
@@ -542,7 +566,7 @@ export class RealTimeVoiceAgent<
                         ? `I'm delegating this task to my specialist ${subAgentRole}`
                         : `I've received the result from my specialist ${subAgentRole}`;
 
-                    void this.speak(
+                    const speakPromise = this.speak(
                         clientID,
                         instruction ?? defaultInstruction,
                         "subagents",
@@ -550,6 +574,10 @@ export class RealTimeVoiceAgent<
                         args,
                         typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
                     );
+
+                    if (this.config.speechBlocksReasoningEngine) {
+                        await speakPromise;
+                    }
 
                     return true;
                 };
@@ -583,7 +611,7 @@ export class RealTimeVoiceAgent<
                         ? `My specialist ${subAgentRole} is using ${toolName} to help with this`
                         : `My specialist ${subAgentRole} has completed ${toolName}`;
 
-                    void this.speak(
+                    const speakPromise = this.speak(
                         clientID,
                         instruction ?? defaultInstruction,
                         "subagents",
@@ -591,6 +619,10 @@ export class RealTimeVoiceAgent<
                         args,
                         typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
                     );
+
+                    if (this.config.speechBlocksReasoningEngine) {
+                        await speakPromise;
+                    }
 
                     return true;
                 };
@@ -666,9 +698,6 @@ export class RealTimeVoiceAgent<
         });
     }
 
-    /* 
-        TODO: Base on specific entry decide whether to speak: hitl, plugin, voice agent tool, subagent, memory, skills
-    */
     private canAgentCommunicate(checkForCaseLevel: Exclude<SpeechLevel, "result">) {
         if (this.config.communicationSpeechLevels === "all") return true;
         if (typeof this.config.communicationSpeechLevels === "object") {
@@ -678,9 +707,6 @@ export class RealTimeVoiceAgent<
         return false;
     }
     
-    /*
-        TODO: Consider whether the logic of `speak` all executions should be blocking or non-blocking for logic execution - add this as option to `RealTimeVoiceAgentConfig`
-    */
     private async speak(clientID: string, text: string, type: SpeechLevel, abort?: AbortSignal, args?: any[], describeVoiceInstruction?: string) {
         const client = this.activeClients.get(clientID);
         if (!client || !client.audioSource) return;
@@ -696,6 +722,10 @@ export class RealTimeVoiceAgent<
         const speechApproach = this.config.agent.models.stt.speechApproach ?? "blocking";
         if (speechApproach === "flush") {
             this.flushSpeakQueue(clientID, "flush");
+        } else if (speechApproach === "deny-current") {
+            if (state.currentAbortController !== null || state.queue.length > 0) {
+                return;
+            }
         }
 
         const completion = new Promise<void>((resolve) => {
