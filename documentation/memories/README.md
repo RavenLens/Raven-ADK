@@ -219,13 +219,13 @@ See the [extended MemRL specification](./memrl/Extanded-MemRL.md) for the full `
 ## Mem0 — Factual Memory
 
 ### Description
-Mem0 keeps an up-to-date store of facts about the user, the task, and the world. It is optimized for *factual* recall: names, preferences, constraints, and explicit statements that change over time.
+Mem0 keeps concise facts about the user, task, and world current. It extracts candidate facts from recent conversation context, retrieves similar stored facts, then reconciles them with `add`, `update`, `delete`, or `noop`.
 
 ### Requirements
-- A `SchemaMemoryStore` (ChromaDB, MongoDB, Disk, or custom).
-- A `hasToRemember` list of concrete facts to track.
-- (Recommended) `createMemoryConclusionPlugin` to keep a consolidated summary.
-- Optional graph-based representation for complex relations.
+- A `Mem0` instance with a `name` and `purpose`.
+- Either `model`, a separate `agent`, or both `factExtractor` and `updatePlanner`.
+- A `Mem0MemoryStore` for facts that must survive process restarts.
+- A semantic, BM25, or hybrid `retriever` when the lexical fallback is insufficient.
 
 ### Usecases
 - Personal assistants that remember names, birthdays, interests.
@@ -236,18 +236,19 @@ Mem0 keeps an up-to-date store of facts about the user, the task, and the world.
 
 ```typescript
 import { ReActAgent } from "@ravenlens/raven-adk/agents";
-import { MemoryMongoDBStore, createMemoryConclusionPlugin } from "@ravenlens/raven-adk/memory";
+import { Mem0 } from "@ravenlens/raven-adk/memory";
 import { OpenAI } from "@ravenlens/raven-adk/models";
 
-const factualMemory = new MemoryMongoDBStore({
-  collection: /* your MongoDB collection */,
+const factualMemory = new Mem0({
+  name: "User facts",
+  purpose: "Keep durable user preferences current.",
+  scope: "user-123",
   hasToRemember: [
     "* User name",
     "* User job title and team",
     "* Explicitly stated preferences (tone, format, channels)"
   ].join("\n"),
-  session: "user-123",
-  conclusion: { maxCharacters: 2048 }
+  model: new OpenAI({ model: "gpt-5.5-nano" })
 });
 
 const agent = new ReActAgent({
@@ -255,17 +256,11 @@ const agent = new ReActAgent({
   systemPrompt: "You are a personal assistant.",
   messages: [{ type: "user", content: "Remind me about my standup" }],
   tools: [],
-  memory: factualMemory,
-  plugins: [
-    createMemoryConclusionPlugin({
-      model: new OpenAI({ model: "gpt-5.5-nano" }),
-      systemPrompt: "Keep the user fact summary accurate and concise."
-    })
-  ]
+  memory: factualMemory
 });
 ```
 
-Mem0 can be combined with MemP to give the agent both facts and reusable workflows.
+`ReActAgent` automatically runs Mem0 retrieval before the main or a delegated agent starts and reconciliation after it completes. See the [Mem0 guide](./mem0/README.md) for custom stores, LLM update JSON, and a dedicated updater agent.
 
 ## Custom Memory
 
