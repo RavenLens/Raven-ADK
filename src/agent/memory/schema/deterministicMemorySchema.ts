@@ -3,7 +3,7 @@ import { AgentMessagesGraphState, MessagesVariations } from "../../state";
 import { ToolLogic } from "../../tools/tools";
 import { MemoryDefault } from "./default";
 
-type FunctonInstruction = {
+export type DeterministicFunctionInstruction = {
     contextAgentState: AgentMessagesGraphState & { messages: MessagesVariations[]; };
     /** 
      * List what agent wants - specified always with combined workflow
@@ -45,28 +45,22 @@ interface CombinedToolsSpec<ToolLogicArgs extends z.ZodObject> {
  * Results of call will be attached to the agent awareness
  * @param async - specify whether operation has to be asynchronous. Default: false
  */
-type MemorySchemaFunction<FetchArgs extends z.ZodObject, UpdateArgs extends z.ZodObject> = {
-    /**
-     * @param instruction 
-     * @param async - whether the function has to block the event loop - as default it's `true`
-     * @returns Result what has to be set for the function
-     */
-    deterministicFn: (instruction: FunctonInstruction, async?: boolean) => MemoryFunctionReturnType;
-    /**
-     * Specify to provide combined workflow
-     * Required for Combined workflow - where agent can specify what it needs by explicitly leveraging tools to describe what it wants 
-     * 
-     * * When specified before the `deterministicFn` call - agent will use the specified tools to fill the `deterministicFn` `instruction.agentWants`
-    */
-    tools?: {
-        fetch?: CombinedToolsSpec<FetchArgs>;
-        update?: CombinedToolsSpec<UpdateArgs>;
-    };
+type MethodsToolSchema<FetchArgs extends z.ZodObject, UpdateArgs extends z.ZodObject> = {
+    fetch?: CombinedToolsSpec<FetchArgs>;
+    update?: CombinedToolsSpec<UpdateArgs>;
 }
+
+/**
+ * @param instruction 
+ * @param async - whether the function has to block the event loop - as default it's `true`
+ * @returns Result what has to be set for the function
+ */
+type DeterministicFn = (instruction: DeterministicFunctionInstruction, async?: boolean) => MemoryFunctionReturnType;
 
 /**
  * Methods for Agent - pass only methods the memory system is about to use
  * Each hook gets its own FetchArgs/UpdateArgs generics so that tools can be typed independently.
+ * TODO: Comments of the methods have to match with the documentation done for these methods
 */
 interface MemoryAgentMethods<
     AfterConversationEndFetchArgs extends z.ZodObject = z.ZodObject,
@@ -80,11 +74,15 @@ interface MemoryAgentMethods<
     AfterSubagentRunFetchArgs extends z.ZodObject = z.ZodObject,
     AfterSubagentRunUpdateArgs extends z.ZodObject = z.ZodObject
 > {
-    afterConversationEnd?: MemorySchemaFunction<AfterConversationEndFetchArgs, AfterConversationEndUpdateArgs>;
-    beforeOrchestratorAgentRun?: MemorySchemaFunction<BeforeOrchestratorAgentRunFetchArgs, BeforeOrchestratorAgentRunUpdateArgs>;
-    afterOrchestratorAgentRun?: MemorySchemaFunction<AfterOrchestratorAgentRunFetchArgs, AfterOrchestratorAgentRunUpdateArgs>;
-    beforeSubagentRun?: MemorySchemaFunction<BeforeSubagentRunFetchArgs, BeforeSubagentRunUpdateArgs>;
-    afterSubagentRun?: MemorySchemaFunction<AfterSubagentRunFetchArgs, AfterSubagentRunUpdateArgs>;
+    afterConversationEnd?: DeterministicFn;
+    beforeOrchestratorAgentRun?: DeterministicFn;
+    afterOrchestratorAgentRun?: DeterministicFn;
+    beforeSubagentRun?: DeterministicFn;
+    afterSubagentRun?: DeterministicFn;
+}
+
+export interface DeterministicMemoryConfig extends MemoryDefault {
+    tools: Record<keyof MemoryAgentMethods, MethodsToolSchema<any, any>>;
 }
 
 /**
@@ -114,30 +112,29 @@ export interface DeterministicMemorySchema<
     BeforeSubagentRunUpdateArgs,
     AfterSubagentRunFetchArgs,
     AfterSubagentRunUpdateArgs
->, MemoryDefault {
+> {
     typeMemory: "deterministic";
-    /** Additional instruction can be passed to provide agent information about harness where it moves */
-    systemPrompt?: string;
+    config: DeterministicMemoryConfig;
     // Method for obseravability
     /** Emit memory event */
-    emitEvent(
-        eventName: keyof MemoryAgentMethods,
-        params: {
-            /** What was passed to the memory function */
-            input: FunctonInstruction;
-            /** What was return out of that memory function */
-            output: DeterministicMemoryOperationOutcome;
-        }
-    ): void | Promise<void>;
-    /** Listen the memory events */
-    onEvent(
-        /** Memory function name */
-        eventName: keyof MemoryAgentMethods,
-        params: {
-            /** What was passed to the memory function */
-            input: FunctonInstruction;
-            /** What was return out of that memory function */
-            output: DeterministicMemoryOperationOutcome;
-        }
-    ): void | Promise<void>;
+    // emitEvent(
+    //     eventName: keyof MemoryAgentMethods,
+    //     params: {
+    //         /** What was passed to the memory function */
+    //         input: DeterministicFunctionInstruction;
+    //         /** What was return out of that memory function */
+    //         output: DeterministicMemoryOperationOutcome;
+    //     }
+    // ): void | Promise<void>;
+    // /** Listen the memory events */
+    // onEvent(
+    //     /** Memory function name */
+    //     eventName: keyof MemoryAgentMethods,
+    //     params: {
+    //         /** What was passed to the memory function */
+    //         input: DeterministicFunctionInstruction;
+    //         /** What was return out of that memory function */
+    //         output: DeterministicMemoryOperationOutcome;
+    //     }
+    // ): void | Promise<void>;
 }

@@ -27,9 +27,10 @@ export interface ToolBasedMemorySchema<FetchToolArgs extends z.ZodObject, Update
         */
         update?: ToolSpec<UpdateToolArgs>;
     };
-    /** System prompt that instructs how to use the tools to effectivelly leverage the memory */
-    systemPrompt: string;
-    /** Specify plugin to update the conclude the full progress and e.g: save the conclusion file for the specified memory */
+    /** 
+     * Specify plugin to update the conclude the full progress and e.g: save the conclusion file for the specified memory
+     * Specify place where it can be leveraged
+    */
     conclusionPlugin?: ReActAgentPluginSpec;
 }
 
