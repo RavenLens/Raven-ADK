@@ -20,9 +20,52 @@ import { ToolBasedMemorySchema } from "./memory/schema/toolMemorySchema";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
-export type SubAgent = Pick<ReActAgentConfig<any, any, any>, "model" | "systemPrompt" | "tools"> & {
+export interface SubAgentDefault {
     role: string;
     roleDescription: string;
+}
+
+/**
+ * Subagent has to:
+ * 1. Call events,
+ * 2. Run plugins: before and after
+ * 3. Handle abort
+ * 4. Return used tokens
+ */
+export interface SubAgentAsFn<EventName extends keyof ReActAgentEvents> extends SubAgentDefault {
+    /**
+     * 
+     * @param state 
+     * @param utils 
+     * @returns status of agent execution
+     */
+    fn: (
+        state: AgentMessagesGraphState & {
+            /** All messages from entire stack call */
+            messages: MessagesVariations[];
+        },
+        utils?: {
+            emitEvent: (eventName: EventName, ...eventBody: Parameters<ReActAgentEvents[EventName]>) => void,
+        }
+    ) => Promise<ReActAgentInvokeResult> | ReActAgentInvokeResult;
+}
+
+const agent: SubAgentAsFn<any> = {
+    fn(state, utils) {
+        return {
+            messages: [],
+            state: {}
+        }
+    },
+    role: "",
+    roleDescription: ""
+}
+
+export type SubAgentAsSpec = Pick<ReActAgentConfig<any, any, any>, "model" | "systemPrompt" | "tools"> & SubAgentDefault;
+
+export type SubAgent = SubAgentAsSpec | SubAgentAsFn<any>;
+export function isSubAgentFn(subagentVariation: SubAgent): subagentVariation is SubAgentAsFn<any> {
+    return (subagentVariation as SubAgentAsFn<any>).fn !== undefined;
 }
 
 type ConfiguredMemory<Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>> =
@@ -74,7 +117,11 @@ export interface ExecutionFrom {
      * For subagent node the value is "subagent.role" so role name of subagent
      */
     nodeName?: string;
-    nodeModel?: AgentModel;
+    /** 
+     * Model agent is executiing
+     * - null - is setup for `subagent` that is specified as `SubAgentAsFn`
+     */
+    nodeModel?: AgentModel | null;
 }
 
 export interface ReActAgentPluginSpec {
@@ -154,8 +201,8 @@ interface ReActAgentEvents extends SkillEvents {
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
     plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => void | Promise<void>;
 }
-
 interface ReActAgentInvokeResult {
+
     messages: MessagesVariations[];
     state: AgentMessagesGraphState;
 }
@@ -659,113 +706,221 @@ export class ReActAgent
                             // Execute all subagents in parallel
                             const subagentResultsExecution = await this.abortable.runAbortable(() => Promise.all(validInstructions.map(async ({ role, instruction }) => {
                                 const agent = this.agentConfig.subagents!.find(a => a.role === role)!;
-                                
-                                const subagentInitialMsgsCount = this.agentConfig.messages.length;
+                                const subAgentAsSpecLogic = async (agent: SubAgentAsSpec) => {
+                                    // Subagent as usual logic
+                                    const subagentInitialMsgsCount = this.agentConfig.messages.length;
+    
+                                    const subagent = new ReActAgent<Skills, Memory, any, any>({
+                                        model: agent.model,
+                                        systemPrompt: agent.systemPrompt,
+                                        messages: [
+                                            ...this.agentConfig.messages,
+                                            {
+                                                type: "user",
+                                                content: `[CALLING SUBAGENT: ${agent.role}] Task: ${instruction}`
+                                            }
+                                        ],
+                                        skills: this.agentConfig.skills,
+                                        memory: this.agentConfig.memory,
+                                        hitl: this.agentConfig.hitl,
+                                        tools: [
+                                            ...this.agentConfig.tools,
+                                            ...agent.tools
+                                        ],
+                                        plugins: this.agentConfig.plugins,
+                                        subagents: this.agentConfig.subagents,
+                                        withConclusion: false,
+                                        abort: this.agentConfig.abort
+                                    });
+    
+                                    subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
+                                    subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
+                                    subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
+                                    subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
+    
+                                    const beforeSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("before_model_call", {
+                                        nodeType: "subagent",
+                                        nodeName: agent.role,
+                                        nodeModel: agent.model
+                                    }));
+    
+                                    if (beforeSubagentPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                        return {
+                                            role: agent.role,
+                                            instruction,
+                                            newMessages: [],
+                                            recall: null,
+                                            aborted: true
+                                        };
+                                    }
+    
+                                    const subagentResultExecution = await this.abortable.runAbortable(() => subagent.runGraph(undefined, undefined, "subagent"));
+    
+                                    if (subagentResultExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                        return {
+                                            role: agent.role,
+                                            instruction,
+                                            newMessages: [],
+                                            recall: null,
+                                            aborted: true
+                                        };
+                                    }
+    
+                                    const result = subagentResultExecution;
+    
+                                    if (result.state.isAborted) {
+                                        return {
+                                            role: agent.role,
+                                            instruction,
+                                            newMessages: [],
+                                            recall: null,
+                                            aborted: true
+                                        };
+                                    }
+    
+                                    this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
+    
+                                    // Detect if subagent requested an internal recall
+                                    const subagentRecall = this.parseRecallInstruction(result.messages);
+    
+                                    let messagesToMerge = result.messages;
+                                    const lastMsg = messagesToMerge.at(-1);
+                                    if (lastMsg?.type === "ai" && lastMsg.content?.trim().startsWith(RECALL_MAIN_NODE_PREFIX)) {
+                                        messagesToMerge = messagesToMerge.slice(0, -1);
+                                    }
+    
+                                    const newMessages = messagesToMerge.slice(subagentInitialMsgsCount + 1); // +1 because we added the instruction message
+    
+                                    const afterSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("after_model_call", {
+                                        nodeType: "subagent",
+                                        nodeName: agent.role,
+                                        nodeModel: agent.model
+                                    }));
+    
+                                    if (afterSubagentPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                        return {
+                                            role: agent.role,
+                                            instruction,
+                                            newMessages: [],
+                                            recall: null,
+                                            aborted: true
+                                        };
+                                    }
+    
+                                    return {
+                                        role: agent.role,
+                                        instruction,
+                                        newMessages,
+                                        recall: subagentRecall,
+                                        aborted: false
+                                    };
+                                }
+                                const subAgentAsFunction = async (agent: SubAgentAsFn<any>) => {
+                                    const subagentInitialMsgsCount = this.agentConfig.messages.length;
 
-                                const subagent = new ReActAgent<Skills, Memory, any, any>({
-                                    model: agent.model,
-                                    systemPrompt: agent.systemPrompt,
-                                    messages: [
-                                        ...this.agentConfig.messages,
-                                        {
-                                            type: "user",
-                                            content: `[CALLING SUBAGENT: ${agent.role}] Task: ${instruction}`
+                                    // Append the subagent instruction to the parent conversation so the function sees full context
+                                    this.agentConfig.messages.push({
+                                        type: "user",
+                                        content: `[CALLING SUBAGENT: ${agent.role}] Task: ${instruction}`
+                                    });
+
+                                    // Accumulate tokens reported by the function subagent via llm_result events
+                                    let functionUsedTokens = { input: 0, output: 0, reasoning: 0 };
+                                    const emitEvent = <EventName extends keyof ReActAgentEvents>(
+                                        eventName: EventName,
+                                        ...eventBody: Parameters<ReActAgentEvents[EventName]>
+                                    ) => {
+                                        if (eventName === "llm_result") {
+                                            const llmAnswer = eventBody[0] as LLMAnswer | undefined;
+                                            if (llmAnswer?.tokens) {
+                                                functionUsedTokens.input += llmAnswer.tokens.input;
+                                                functionUsedTokens.output += llmAnswer.tokens.output;
+                                                functionUsedTokens.reasoning += llmAnswer.tokens.reasoning;
+                                            }
                                         }
-                                    ],
-                                    skills: this.agentConfig.skills,
-                                    memory: this.agentConfig.memory,
-                                    hitl: this.agentConfig.hitl,
-                                    tools: [
-                                        ...this.agentConfig.tools,
-                                        ...agent.tools
-                                    ],
-                                    plugins: this.agentConfig.plugins,
-                                    subagents: this.agentConfig.subagents,
-                                    withConclusion: false,
-                                    abort: this.agentConfig.abort
-                                });
+                                        this.emitEvent(eventName, ...eventBody);
+                                    };
 
-                                subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
-                                subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
-                                subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
-                                subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
+                                    const beforeSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("before_model_call", {
+                                        nodeType: "subagent",
+                                        nodeName: agent.role,
+                                        nodeModel: null
+                                    }));
 
-                                const beforeSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("before_model_call", {
-                                    nodeType: "subagent",
-                                    nodeName: agent.role,
-                                    nodeModel: agent.model
-                                }));
+                                    if (beforeSubagentPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                        return {
+                                            role: agent.role,
+                                            instruction,
+                                            newMessages: [],
+                                            recall: null,
+                                            aborted: true
+                                        };
+                                    }
 
-                                if (beforeSubagentPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                    const agentCallResultExecution = await this.abortable.runAbortable(() => Promise.resolve(agent.fn(
+                                        {
+                                            ...currentState,
+                                            messages: this.agentConfig.messages
+                                        },
+                                        { emitEvent }
+                                    )));
+
+                                    if (agentCallResultExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                        return {
+                                            role: agent.role,
+                                            instruction,
+                                            newMessages: [],
+                                            recall: null,
+                                            aborted: true
+                                        };
+                                    }
+
+                                    const result = agentCallResultExecution;
+
+                                    // Track tokens consumed by the function subagent
+                                    this.calculateUsedTokens({ tokens: functionUsedTokens } as LLMAnswer);
+
+                                    // Detect if subagent requested an internal recall
+                                    const subagentRecall = this.parseRecallInstruction(result.messages);
+
+                                    let messagesToMerge = result.messages;
+                                    const lastMsg = messagesToMerge.at(-1);
+                                    if (lastMsg?.type === "ai" && lastMsg.content?.trim().startsWith(RECALL_MAIN_NODE_PREFIX)) {
+                                        messagesToMerge = messagesToMerge.slice(0, -1);
+                                    }
+
+                                    const newMessages = messagesToMerge.slice(subagentInitialMsgsCount + 1); // +1 because we added the instruction message
+
+                                    const afterSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("after_model_call", {
+                                        nodeType: "subagent",
+                                        nodeName: agent.role,
+                                        nodeModel: null
+                                    }));
+
+                                    if (afterSubagentPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                                        return {
+                                            role: agent.role,
+                                            instruction,
+                                            newMessages: [],
+                                            recall: null,
+                                            aborted: true
+                                        };
+                                    }
+
                                     return {
                                         role: agent.role,
                                         instruction,
-                                        newMessages: [],
-                                        recall: null,
-                                        aborted: true
+                                        newMessages,
+                                        recall: subagentRecall,
+                                        aborted: false
                                     };
                                 }
 
-                                const subagentResultExecution = await this.abortable.runAbortable(() => subagent.runGraph(undefined, undefined, "subagent"));
-
-                                if (subagentResultExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
-                                    return {
-                                        role: agent.role,
-                                        instruction,
-                                        newMessages: [],
-                                        recall: null,
-                                        aborted: true
-                                    };
+                                if (isSubAgentFn(agent)) {
+                                    return await subAgentAsFunction(agent);
                                 }
-
-                                const result = subagentResultExecution;
-
-                                if (result.state.isAborted) {
-                                    return {
-                                        role: agent.role,
-                                        instruction,
-                                        newMessages: [],
-                                        recall: null,
-                                        aborted: true
-                                    };
-                                }
-
-                                this.calculateUsedTokens({ tokens: subagent.usedTokens } as LLMAnswer);
-
-                                // Detect if subagent requested an internal recall
-                                const subagentRecall = this.parseRecallInstruction(result.messages);
-
-                                let messagesToMerge = result.messages;
-                                const lastMsg = messagesToMerge.at(-1);
-                                if (lastMsg?.type === "ai" && lastMsg.content?.trim().startsWith(RECALL_MAIN_NODE_PREFIX)) {
-                                    messagesToMerge = messagesToMerge.slice(0, -1);
-                                }
-
-                                const newMessages = messagesToMerge.slice(subagentInitialMsgsCount + 1); // +1 because we added the instruction message
-
-                                const afterSubagentPlugins = await this.abortable.runAbortable(() => this.runPlugins("after_model_call", {
-                                    nodeType: "subagent",
-                                    nodeName: agent.role,
-                                    nodeModel: agent.model
-                                }));
-
-                                if (afterSubagentPlugins === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
-                                    return {
-                                        role: agent.role,
-                                        instruction,
-                                        newMessages: [],
-                                        recall: null,
-                                        aborted: true
-                                    };
-                                }
-
-                                return {
-                                    role: agent.role,
-                                    instruction,
-                                    newMessages,
-                                    recall: subagentRecall,
-                                    aborted: false
-                                };
+                                else return await subAgentAsSpecLogic(agent);
+                                
                             })));
 
                             if (subagentResultsExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
@@ -1111,6 +1266,11 @@ export class ReActAgent
         // Spawn separate nodes where each of node is subagent
         if (this.agentConfig.subagents?.length) {
             for (const agent of this.agentConfig.subagents) {
+                // Function subagents are executed inline in main_node, not as graph nodes
+                if (isSubAgentFn(agent)) {
+                    continue;
+                }
+
                 reactAgentGraph.addNode(agent.role, async state => {
                     if (state.isAborted || this.abortable.isAbortRequested()) {
                         return this.abortable.createAbortedNodeResult(state);
