@@ -46,6 +46,8 @@ type DeterministicMemoryHook =
     | "afterSubagentRun";
 
 type DeterministicMemoryPhase = "orchestrator" | "subagent";
+type DeterministicMemoryToolKind = "fetch" | "update";
+type DeterministicMemoryWant = NonNullable<DeterministicFunctionInstruction["agentWants"]>[number];
 
 type DeterministicMemoryOutcome = {
     memoryInformations?: string[];
@@ -407,11 +409,16 @@ export class ReActAgent
     private cachedDeterministicMemoryAwareness?: string;
     private deterministicMemoryAwareness: string[] = [];
     private deterministicMemories: DeterministicMemorySchema[] = [];
+    private deterministicMemoryWants = new Map<
+        DeterministicMemorySchema,
+        Map<DeterministicMemoryHook, DeterministicMemoryWant[]>
+    >();
 
     constructor(config: ReActAgentConfig<Skills, Memory, HITL>) {
         this.agentConfig = {
             ...config,
             tools: [...config.tools],
+            plugins: config.plugins ? [...config.plugins] : undefined,
             // Agent generate conclusion by default
             withConclusion: config.withConclusion ?? true,
             parallelizeSubagents: config.parallelizeSubagents ?? false,
@@ -431,6 +438,8 @@ export class ReActAgent
             skillStorage: config.skills,
         }) : undefined;
         this.deterministicMemories = this.resolveDeterministicMemories(config.memory);
+        this.registerToolBasedMemoryTools(config.memory);
+        this.registerDeterministicMemoryTools();
         this.usedTokens = {
             input: 0,
             output: 0,
@@ -1814,6 +1823,196 @@ ${deterministicMemoryAwareness}`;
         return deterministicMemories;
     }
 
+    private registerToolBasedMemoryTools(
+        configuredMemory: ReActAgentConfig<Skills, Memory, HITL>["memory"]
+    ): void {
+        if (!configuredMemory) {
+            return;
+        }
+
+        const entries = Array.isArray(configuredMemory) ? configuredMemory : [configuredMemory];
+        for (const entry of entries) {
+            const memory = isConfiguredMemoryDescriptor(entry) ? entry.memory : entry;
+            if (memory.typeMemory !== "toolBased") {
+                continue;
+            }
+
+            if (memory.memoryTools.fetch) {
+                this.registerToolBasedMemoryTool(memory, memory.memoryTools.fetch);
+            }
+
+            if (memory.memoryTools.update) {
+                this.registerToolBasedMemoryTool(memory, memory.memoryTools.update);
+            }
+
+            if (memory.conclusionPlugin) {
+                this.registerMemoryPlugin(memory.conclusionPlugin);
+            }
+        }
+    }
+
+    private registerToolBasedMemoryTool<ToolArgs extends z.ZodObject>(
+        memory: ToolBasedMemorySchema<any, any>,
+        memoryTool: {
+            toolName: string;
+            fn: (
+                argsObj: z.infer<ToolArgs>,
+                agentState?: AgentMessagesGraphState & { messages: MessagesVariations[]; }
+            ) => Promise<string> | string;
+            instruction: string;
+            toolArguments: ToolArgs;
+        }
+    ): void {
+        this.registerMemoryTool(new Tool(
+            async argsObj => await memoryTool.fn(argsObj, this.createMemoryAgentState()),
+            {
+                toolName: memoryTool.toolName,
+                toolDescription: this.createMemoryToolDescription(memory.name, memory.purpose, memoryTool.instruction),
+                toolArguments: memoryTool.toolArguments
+            }
+        ));
+    }
+
+    private registerDeterministicMemoryTools(): void {
+        const hooks: DeterministicMemoryHook[] = [
+            "beforeOrchestratorAgentRun",
+            "afterOrchestratorAgentRun",
+            "beforeSubagentRun",
+            "afterSubagentRun"
+        ];
+
+        for (const memory of this.deterministicMemories) {
+            for (const hook of hooks) {
+                const hookTools = memory.config.tools[hook];
+                if (!hookTools) {
+                    continue;
+                }
+
+                if (hookTools.fetch) {
+                    this.registerDeterministicMemoryTool(memory, hook, "fetch", hookTools.fetch);
+                }
+
+                if (hookTools.update) {
+                    this.registerDeterministicMemoryTool(memory, hook, "update", hookTools.update);
+                }
+            }
+        }
+    }
+
+    private registerDeterministicMemoryTool<ToolArgs extends z.ZodObject>(
+        memory: DeterministicMemorySchema,
+        hook: DeterministicMemoryHook,
+        kind: DeterministicMemoryToolKind,
+        memoryTool: {
+            instruction: string;
+            args: ToolArgs;
+            fn?: (
+                argsObj: z.infer<ToolArgs>,
+                agentState?: AgentMessagesGraphState & { messages: MessagesVariations[]; }
+            ) => Promise<string> | string;
+        }
+    ): void {
+        const toolName = this.createDeterministicMemoryToolName(memory.config.name, hook, kind);
+
+        this.registerMemoryTool(new Tool(
+            async argsObj => {
+                this.recordDeterministicMemoryWant(memory, hook, kind, argsObj);
+                const result = await memoryTool.fn?.(argsObj, this.createMemoryAgentState());
+
+                return result ?? `Recorded ${kind} request for deterministic memory "${memory.config.name}".`;
+            },
+            {
+                toolName,
+                toolDescription: this.createMemoryToolDescription(
+                    memory.config.name,
+                    memory.config.purpose,
+                    `${memoryTool.instruction}\nThis request is provided to the ${hook} memory hook.`
+                ),
+                toolArguments: memoryTool.args
+            }
+        ));
+    }
+
+    private registerMemoryTool(tool: Tool<any, any>): void {
+        if (!this.agentConfig.tools.some(definedTool => definedTool.toolConfig.toolName === tool.toolConfig.toolName)) {
+            this.agentConfig.tools.push(tool);
+        }
+    }
+
+    private registerMemoryPlugin(plugin: ReActAgentPluginSpec): void {
+        const registeredPlugins = this.agentConfig.plugins ?? [];
+        if (registeredPlugins.some(registeredPlugin => registeredPlugin === plugin || registeredPlugin.name === plugin.name)) {
+            return;
+        }
+
+        this.agentConfig.plugins = [...registeredPlugins, plugin];
+    }
+
+    private createMemoryAgentState(): AgentMessagesGraphState & { messages: MessagesVariations[]; } {
+        return {
+            ...this.AgentGraph.graphState,
+            messages: [...this.agentConfig.messages]
+        };
+    }
+
+    private createMemoryToolDescription(name: string, purpose: string, instruction: string): string {
+        return [
+            `Memory system: ${name}.`,
+            `Purpose: ${purpose}`,
+            instruction
+        ].join("\n");
+    }
+
+    private createDeterministicMemoryToolName(
+        memoryName: string,
+        hook: DeterministicMemoryHook,
+        kind: DeterministicMemoryToolKind
+    ): string {
+        const normalizedMemoryName = memoryName
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "") || "memory";
+        const normalizedHook = hook.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+
+        return `${normalizedMemoryName}_${normalizedHook}_${kind}`;
+    }
+
+    private recordDeterministicMemoryWant(
+        memory: DeterministicMemorySchema,
+        hook: DeterministicMemoryHook,
+        kind: DeterministicMemoryToolKind,
+        argsObj: Record<string, unknown>
+    ): void {
+        const wantsByHook = this.deterministicMemoryWants.get(memory) ?? new Map<
+            DeterministicMemoryHook,
+            DeterministicMemoryWant[]
+        >();
+        const wants = wantsByHook.get(hook) ?? [];
+
+        wants.push({
+            type: kind,
+            wants: JSON.stringify(argsObj)
+        });
+        wantsByHook.set(hook, wants);
+        this.deterministicMemoryWants.set(memory, wantsByHook);
+    }
+
+    private consumeDeterministicMemoryWants(
+        memory: DeterministicMemorySchema,
+        hook: DeterministicMemoryHook
+    ): DeterministicMemoryWant[] {
+        const wantsByHook = this.deterministicMemoryWants.get(memory);
+        const wants = wantsByHook?.get(hook) ?? [];
+
+        wantsByHook?.delete(hook);
+        if (wantsByHook && wantsByHook.size === 0) {
+            this.deterministicMemoryWants.delete(memory);
+        }
+
+        return [...wants];
+    }
+
     private async runDeterministicMemoryHook(hook: DeterministicMemoryHook): Promise<void> {
         if (!this.deterministicMemories.length) {
             if (hook === "beforeOrchestratorAgentRun" || hook === "beforeSubagentRun") {
@@ -1822,7 +2021,7 @@ ${deterministicMemoryAwareness}`;
             return;
         }
 
-        const instruction: DeterministicFunctionInstruction = {
+        const contextAgentState = {
             contextAgentState: {
                 ...this.AgentGraph.graphState,
                 messages: [...this.agentConfig.messages]
@@ -1830,7 +2029,17 @@ ${deterministicMemoryAwareness}`;
         };
         const outcomes = await Promise.all(this.deterministicMemories.map(async memory => {
             const memoryHook = memory[hook];
-            return memoryHook ? await memoryHook.call(memory, instruction, false) : null;
+            if (!memoryHook) {
+                return null;
+            }
+
+            const agentWants = this.consumeDeterministicMemoryWants(memory, hook);
+            const instruction: DeterministicFunctionInstruction = {
+                ...contextAgentState,
+                ...(agentWants.length ? { agentWants } : {})
+            };
+
+            return await memoryHook.call(memory, instruction, false);
         }));
 
         if (hook !== "beforeOrchestratorAgentRun" && hook !== "beforeSubagentRun") {
@@ -1865,6 +2074,7 @@ ${deterministicMemoryAwareness}`;
         memoryPhase: DeterministicMemoryPhase = "orchestrator"
     ): Promise<ReActAgentInvokeResult> {
         this.abortable.resetForRun();
+        this.deterministicMemoryWants.clear();
 
         // Keep the message history
         if (modelOptions?.messages) {

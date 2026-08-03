@@ -99,8 +99,90 @@ const factualMemory = new Mem0({
 - `InMemoryMem0MemoryStore` is useful for tests and short-lived processes.
 - Implement `Mem0MemoryStore` with `list`, `get`, `set`, and `delete` for durable storage.
 - Set `retriever` to connect vector, BM25, or hybrid search. It must return normalized similarities in the range `[0, 1]`.
+> You've to implement retriver according to your database config and demands. It can be BM25, similairty, graph all everything at once
 - Use `scope` to isolate users, tenants, or sessions.
 - `topK` defaults to `10`, matching the paper's update retrieval setting.
+
+## Hierarchical Scopes
+
+Mem0 supports hierarchical identity scopes: `user` (broadest), `agent`, and `session` (run_id). When `scopes` are configured, retrieval searches across all provided levels, while writes use the most specific level.
+
+```typescript
+const factualMemory = new Mem0({
+  name: "User facts",
+  purpose: "Keep durable user preferences and constraints current.",
+  scopes: {
+    user: "user-123",
+    agent: "agent-456",
+    session: "run-789"
+  },
+  model: new OpenAI({ model: "gpt-5.5-nano" })
+});
+```
+
+You can also resolve scopes dynamically from agent state:
+
+```typescript
+const factualMemory = new Mem0({
+  name: "Runtime facts",
+  purpose: "Resolve identity scopes from the current conversation.",
+  scopeResolver: async (instruction) => ({
+    user: instruction.contextAgentState.userId,
+    session: instruction.contextAgentState.runId
+  }),
+  model: new OpenAI({ model: "gpt-5.5-nano" })
+});
+```
+
+## Graph Search
+
+Mem0 remains agnostic of the graph database. Provide a `graphExplorer` to find memories related to the initial semantic/BM25 results. The explorer receives the query, the ranked seed memories, and the retrieval context.
+
+```typescript
+const factualMemory = new Mem0({
+  name: "Related facts",
+  purpose: "Enrich retrieval with graph relations.",
+  scope: "user-123",
+  retriever: async (query, { scope, topK }) => {
+    // Your semantic/BM25/hybrid search
+  },
+  graphExplorer: {
+    explore: async (query, seeds, { scope, topK }) => {
+      // Query Neo4j, RavenHubDB, etc. using the seeds as entry points.
+      // Return candidates with normalized similarities in [0, 1].
+    }
+  },
+  model: new OpenAI({ model: "gpt-5.5-nano" })
+});
+```
+
+The graph explorer runs after the first retrieval pass and its results are merged, deduplicated, and re-ranked with the semantic/BM25 candidates.
+
+## Temporal Scoring
+
+Facts can expire or lose relevance over time. Set `expiresAt` on an individual fact for explicit TTL, or configure `temporalScoring` to apply default TTL, exponential decay, and recency boost.
+
+```typescript
+const factualMemory = new Mem0({
+  name: "Temporal facts",
+  purpose: "Prioritize recent information and ignore stale facts.",
+  scope: "user-123",
+  temporalScoring: {
+    ttlMs: 48 * 60 * 60 * 1000,       // exclude facts older than 48 hours
+    halfLifeMs: 12 * 60 * 60 * 1000,  // decay score with a 12-hour half-life
+    recencyBoostCap: 2                // freshly updated facts can score up to 2x
+  },
+  model: new OpenAI({ model: "gpt-5.5-nano" })
+});
+
+// Explicit expiration on a single fact
+await factualMemory.addMemory({
+  content: "Standup is at 9am Monday and Wednesday.",
+  expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000
+});
+```
+
+Expired memories are excluded from retrieval. Decay and boost are applied to the remaining memories before the final ranking.
 
 ## Manual Operations
 

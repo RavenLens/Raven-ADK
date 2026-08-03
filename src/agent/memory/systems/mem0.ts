@@ -24,11 +24,15 @@ export interface Mem0Memory {
 	revision: number;
 	createdAt: number;
 	updatedAt: number;
+	/** Epoch timestamp after which the memory is excluded from retrieval. */
+	expiresAt?: number;
 	metadata?: Record<string, unknown>;
 }
 
 export interface Mem0Fact {
 	content: string;
+	/** Optional epoch timestamp after which the fact is considered stale and excluded from retrieval. */
+	expiresAt?: number;
 	metadata?: Record<string, unknown>;
 }
 
@@ -52,6 +56,8 @@ export interface Mem0RankedMemory extends Mem0MemoryCandidate {
 
 export interface Mem0RetrievalOptions {
 	scope?: string;
+	/** Hierarchical scopes to search. Overrides static `scopes` when provided. */
+	scopes?: Mem0Scopes;
 	topK?: number;
 	similarityThreshold?: number;
 }
@@ -94,6 +100,8 @@ export interface Mem0LifecycleContext {
 export interface Mem0UpdatePlannerContext extends Mem0LifecycleContext {
 	fact: Mem0Fact;
 	similarMemories: readonly Mem0RankedMemory[];
+	/** Resolved hierarchical scopes available for this update decision. */
+	scopes: Mem0Scopes;
 }
 
 /** Extracts concise facts from the current exchange and its recent context. */
@@ -111,6 +119,44 @@ export type Mem0QueryBuilder = (
 	instruction: DeterministicFunctionInstruction,
 	context: Mem0LifecycleContext
 ) => Awaitable<string | undefined>;
+
+/** Hierarchical identity scopes: user (broadest), agent, session/run (narrowest). */
+export interface Mem0Scopes {
+	/** Broad user-level identity, shared across all agents and sessions for that user. */
+	user?: string;
+	/** Agent-level identity, shared across all runs of the same agent. */
+	agent?: string;
+	/** Session-level identity (run_id). Narrowest and most specific. */
+	session?: string;
+}
+
+/** Resolves scopes from agent state when they are not known at construction time. */
+export type Mem0ScopeResolver = (
+	instruction: DeterministicFunctionInstruction,
+	context: Mem0LifecycleContext
+) => Awaitable<Mem0Scopes | string | undefined>;
+
+/** Explores graph relations starting from semantic/BM25 seed memories. */
+export interface Mem0GraphExplorer {
+	explore(
+		query: string,
+		seeds: readonly Mem0RankedMemory[],
+		context: Mem0RetrieverContext
+	): Awaitable<readonly Mem0MemoryCandidate[]>;
+}
+
+/** Temporal scoring configuration for decay, TTL, and recency boost. */
+export interface Mem0TemporalScoring {
+	/** Time-to-live in milliseconds. Memories older than this are excluded from retrieval. */
+	ttlMs?: number;
+	/** Half-life in milliseconds for exponential decay of similarity scores. */
+	halfLifeMs?: number;
+	/**
+	 * Maximum recency multiplier for freshly updated memories.
+	 * A value of 1 disables the boost; higher values favor recent facts.
+	 */
+	recencyBoostCap?: number;
+}
 
 /** Compatible with RavenADK's OpenAI, Anthropic, Google, and RunPod model wrappers. */
 export interface Mem0LLM {
@@ -132,6 +178,10 @@ export interface Mem0Config extends Omit<DeterministicMemoryConfig, "tools"> {
 	tools?: DeterministicMemoryConfig["tools"];
 	/** Namespace separating facts for users, organizations, or sessions. */
 	scope?: string;
+	/** Hierarchical identity scopes. When provided, retrieval searches across all levels and storage uses the most specific level. */
+	scopes?: Mem0Scopes;
+	/** Resolves hierarchical scopes from agent state at runtime. Takes precedence over static `scopes`. */
+	scopeResolver?: Mem0ScopeResolver;
 	/** Number of semantically similar facts supplied to the update planner. Defaults to the paper's 10. */
 	topK?: number;
 	/** Minimum normalized retrieval score accepted into agent context. */
@@ -142,6 +192,8 @@ export interface Mem0Config extends Omit<DeterministicMemoryConfig, "tools"> {
 	store?: Mem0MemoryStore;
 	/** Replaces the built-in lexical fallback with semantic, BM25, or hybrid retrieval. */
 	retriever?: Mem0Retriever;
+	/** Explores graph relations using semantic/BM25 seed memories. Keeps Mem0 agnostic of the graph database. */
+	graphExplorer?: Mem0GraphExplorer;
 	/** Builds a retrieval query from agent state before the pre-run lifecycle hooks. */
 	queryBuilder?: Mem0QueryBuilder;
 	/** Application-controlled fact extraction. Takes precedence over the configured LLM or agent. */
@@ -154,6 +206,8 @@ export interface Mem0Config extends Omit<DeterministicMemoryConfig, "tools"> {
 	agent?: Mem0Agent;
 	/** Additional domain constraints supplied to the automatic extraction and update prompts. */
 	updateInstructions?: string;
+	/** Temporal scoring configuration for TTL, decay, and recency boost. */
+	temporalScoring?: Mem0TemporalScoring;
 	/** Converts a retrieved fact into context attached by deterministic hooks. */
 	formatMemoryForAwareness?: (memory: Mem0RankedMemory) => string;
 	idFactory?: () => string;
@@ -222,13 +276,15 @@ export class Mem0 implements DeterministicMemorySchema {
 	async addMemory(fact: Mem0Fact, scope?: string): Promise<Mem0Memory> {
 		const resolvedScope = this.resolveScope(scope);
 		const normalizedFact = this.normalizeFact(fact);
+		const now = this.getNow();
 		const memory: Mem0Memory = {
 			id: this.createMemoryId(),
 			scope: resolvedScope,
 			content: normalizedFact.content,
 			revision: 1,
-			createdAt: this.getNow(),
-			updatedAt: this.getNow(),
+			createdAt: now,
+			updatedAt: now,
+			expiresAt: this.resolveExpiresAt(normalizedFact, now),
 			metadata: cloneMetadata(normalizedFact.metadata)
 		};
 		const existing = await this.store.get(resolvedScope, memory.id);
@@ -252,6 +308,9 @@ export class Mem0 implements DeterministicMemorySchema {
 			content: normalizedFact.content,
 			revision: existing.revision + 1,
 			updatedAt,
+			expiresAt: normalizedFact.expiresAt === undefined
+				? existing.expiresAt
+				: this.resolveExpiresAt(normalizedFact, updatedAt),
 			metadata: normalizedFact.metadata === undefined
 				? cloneMetadata(existing.metadata)
 				: cloneMetadata(normalizedFact.metadata)
@@ -307,39 +366,70 @@ export class Mem0 implements DeterministicMemorySchema {
 	/** Retrieves facts using an injected retriever or the built-in lexical fallback. */
 	async retrieve(query: string, options: Mem0RetrievalOptions = {}): Promise<Mem0RetrievalResult> {
 		const normalizedQuery = this.normalizeRequiredText(query, "Mem0 retrieval query");
-		const scope = this.resolveScope(options.scope);
+		const primaryScope = this.resolveScope(options.scope);
+		const scopes = this.resolveScopeSet(primaryScope, options.scopes);
 		const topK = this.resolveTopK(options.topK);
 		const similarityThreshold = this.resolveSimilarityThreshold(options.similarityThreshold);
-		const candidates = this.config.retriever
-			? await this.config.retriever(normalizedQuery, { scope, topK, similarityThreshold })
-			: await this.retrieveFromStore(normalizedQuery, scope);
-		const candidateIds = new Set<string>();
+		const context: Mem0RetrieverContext = { scope: primaryScope, topK, similarityThreshold };
 
-		const memories = candidates
-			.map((candidate, index) => {
+		const candidateMap = new Map<string, { memory: Mem0Memory; similarity: number; index: number }>();
+		let sequence = 0;
+
+		for (const scope of scopes) {
+			const scopeCandidates = this.config.retriever
+				? await this.config.retriever(normalizedQuery, { scope, topK, similarityThreshold })
+				: await this.retrieveFromStore(normalizedQuery, scope);
+
+			for (const candidate of scopeCandidates) {
 				this.assertCandidate(candidate, scope);
-				if (candidateIds.has(candidate.memory.id)) {
-					throw new Error(`Mem0 retrieval candidates must be unique: ${candidate.memory.id}`);
+				const key = `${candidate.memory.scope}:${candidate.memory.id}`;
+				if (!candidateMap.has(key)) {
+					candidateMap.set(key, {
+						memory: cloneMemory(candidate.memory),
+						similarity: candidate.similarity,
+						index: sequence++
+					});
 				}
-				candidateIds.add(candidate.memory.id);
+			}
+		}
 
-				return {
-					memory: cloneMemory(candidate.memory),
-					similarity: candidate.similarity,
-					index
-				};
-			})
-			.filter(candidate => candidate.similarity >= similarityThreshold)
-			.sort((left, right) => right.similarity - left.similarity || left.index - right.index)
-			.slice(0, topK)
-			.map((candidate, index) => ({
-				memory: candidate.memory,
-				similarity: candidate.similarity,
-				rank: index + 1
-			}));
+		let ranked = this.rankCandidates([...candidateMap.values()], topK, similarityThreshold);
+
+		if (this.config.graphExplorer && ranked.length) {
+			const seeds = ranked.map((candidate, index) => ({ ...candidate, rank: index + 1 }));
+			const graphCandidates = await this.config.graphExplorer.explore(normalizedQuery, seeds, context);
+
+			for (const candidate of graphCandidates) {
+				this.assertGraphCandidate(candidate);
+				const key = `${candidate.memory.scope}:${candidate.memory.id}`;
+				if (!candidateMap.has(key)) {
+					candidateMap.set(key, {
+						memory: cloneMemory(candidate.memory),
+						similarity: candidate.similarity,
+						index: sequence++
+					});
+				}
+			}
+
+			ranked = this.rankCandidates([...candidateMap.values()], topK, similarityThreshold);
+		}
+
+		const now = this.getNow();
+		const memories = this.rankCandidates(
+			ranked.map(candidate => ({
+				...candidate,
+				similarity: this.applyTemporalScoring(candidate.memory, candidate.similarity, now)
+			})),
+			topK,
+			similarityThreshold
+		).map((candidate, index) => ({
+			memory: candidate.memory,
+			similarity: candidate.similarity,
+			rank: index + 1
+		}));
 
 		return {
-			scope,
+			scope: primaryScope,
 			query: normalizedQuery,
 			memories
 		};
@@ -384,6 +474,7 @@ export class Mem0 implements DeterministicMemorySchema {
 			scope: this.resolveScope(),
 			isAsync
 		};
+		const scopes = await this.resolveScopes(instruction, context);
 		const query = this.config.queryBuilder
 			? await this.config.queryBuilder(instruction, context)
 			: this.findLatestUserMessage(instruction);
@@ -391,7 +482,7 @@ export class Mem0 implements DeterministicMemorySchema {
 			return null;
 		}
 
-		const retrieval = await this.retrieve(query, { scope: context.scope });
+		const retrieval = await this.retrieve(query, { scope: context.scope, scopes });
 		if (!retrieval.memories.length) {
 			return null;
 		}
@@ -416,6 +507,7 @@ export class Mem0 implements DeterministicMemorySchema {
 			scope: this.resolveScope(),
 			isAsync
 		};
+		const scopes = await this.resolveScopes(instruction, context);
 		const facts = await this.extractFacts(instruction, context);
 		if (!facts.length) {
 			return null;
@@ -423,8 +515,8 @@ export class Mem0 implements DeterministicMemorySchema {
 
 		const results: Mem0UpdateResult[] = [];
 		for (const fact of facts) {
-			const retrieval = await this.retrieve(fact.content, { scope: context.scope });
-			const updates = await this.planUpdates(fact, retrieval.memories, context);
+			const retrieval = await this.retrieve(fact.content, { scope: context.scope, scopes });
+			const updates = await this.planUpdates(fact, retrieval.memories, context, scopes);
 			this.assertUpdateTargetsAreRetrieved(updates, retrieval.memories);
 
 			for (const update of updates) {
@@ -461,7 +553,8 @@ export class Mem0 implements DeterministicMemorySchema {
 	private async planUpdates(
 		fact: Mem0Fact,
 		similarMemories: readonly Mem0RankedMemory[],
-		context: Mem0LifecycleContext
+		context: Mem0LifecycleContext,
+		scopes: Mem0Scopes
 	): Promise<Mem0Update[]> {
 		const plannerContext: Mem0UpdatePlannerContext = {
 			...context,
@@ -469,7 +562,8 @@ export class Mem0 implements DeterministicMemorySchema {
 			similarMemories: similarMemories.map(memory => ({
 				...memory,
 				memory: cloneMemory(memory.memory)
-			}))
+			})),
+			scopes
 		};
 		const proposedUpdates = this.config.updatePlanner
 			? await this.config.updatePlanner(plannerContext)
@@ -735,8 +829,12 @@ export class Mem0 implements DeterministicMemorySchema {
 		if (!fact || typeof fact !== "object") {
 			throw new TypeError("Mem0 fact must be an object with content.");
 		}
+		if (fact.expiresAt !== undefined) {
+			this.assertTimestamp(fact.expiresAt, "Mem0 fact expiresAt");
+		}
 		return {
 			content: this.normalizeRequiredText(fact.content, "Mem0 fact content"),
+			expiresAt: fact.expiresAt,
 			metadata: cloneMetadata(fact.metadata)
 		};
 	}
@@ -777,7 +875,22 @@ export class Mem0 implements DeterministicMemorySchema {
 	}
 
 	private resolveScope(scope?: string): string {
-		const resolvedScope = (scope ?? this.config?.scope ?? DEFAULT_SCOPE).trim();
+		if (scope !== undefined) {
+			const trimmedScope = scope.trim();
+			if (!trimmedScope) {
+				throw new Error("Mem0 scope must not be empty.");
+			}
+			return trimmedScope;
+		}
+
+		if (this.config.scopes) {
+			const mostSpecific = this.config.scopes.session ?? this.config.scopes.agent ?? this.config.scopes.user;
+			if (mostSpecific !== undefined) {
+				return this.normalizeRequiredText(mostSpecific, "Mem0 scope");
+			}
+		}
+
+		const resolvedScope = (this.config?.scope ?? DEFAULT_SCOPE).trim();
 		if (!resolvedScope) {
 			throw new Error("Mem0 scope must not be empty.");
 		}
@@ -796,6 +909,99 @@ export class Mem0 implements DeterministicMemorySchema {
 		const resolvedThreshold = similarityThreshold ?? this.config.similarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD;
 		this.assertUnitInterval(resolvedThreshold, "Mem0 similarityThreshold");
 		return resolvedThreshold;
+	}
+
+	private async resolveScopes(
+		instruction: DeterministicFunctionInstruction,
+		context: Mem0LifecycleContext
+	): Promise<Mem0Scopes> {
+		if (this.config.scopeResolver) {
+			const resolved = await this.config.scopeResolver(instruction, context);
+			if (resolved !== undefined) {
+				if (typeof resolved === "string") {
+					return { session: this.normalizeRequiredText(resolved, "Mem0 resolved scope") };
+				}
+				return this.assertScopes(resolved);
+			}
+		}
+
+		if (this.config.scopes) {
+			return this.assertScopes(this.config.scopes);
+		}
+
+		return { session: this.resolveScope() };
+	}
+
+	private resolveScopeSet(primaryScope: string, overrideScopes?: Mem0Scopes): string[] {
+		const source = overrideScopes ?? this.config.scopes;
+		if (source) {
+			const scopes: string[] = [];
+			if (source.user) scopes.push(this.normalizeRequiredText(source.user, "Mem0 user scope"));
+			if (source.agent) scopes.push(this.normalizeRequiredText(source.agent, "Mem0 agent scope"));
+			if (source.session) scopes.push(this.normalizeRequiredText(source.session, "Mem0 session scope"));
+			if (!scopes.length) return [primaryScope];
+			return scopes;
+		}
+
+		return [primaryScope];
+	}
+
+	private assertScopes(scopes: Mem0Scopes): Mem0Scopes {
+		const validated: Mem0Scopes = {};
+		if (scopes.user !== undefined) validated.user = this.normalizeRequiredText(scopes.user, "Mem0 user scope");
+		if (scopes.agent !== undefined) validated.agent = this.normalizeRequiredText(scopes.agent, "Mem0 agent scope");
+		if (scopes.session !== undefined) validated.session = this.normalizeRequiredText(scopes.session, "Mem0 session scope");
+		return validated;
+	}
+
+	private resolveExpiresAt(fact: Mem0Fact, now: number): number | undefined {
+		if (fact.expiresAt !== undefined) {
+			this.assertTimestamp(fact.expiresAt, "Mem0 fact expiresAt");
+			return fact.expiresAt;
+		}
+		if (this.config.temporalScoring?.ttlMs !== undefined) {
+			return now + this.config.temporalScoring.ttlMs;
+		}
+		return undefined;
+	}
+
+	private applyTemporalScoring(memory: Mem0Memory, similarity: number, now: number): number {
+		if (memory.expiresAt !== undefined && now >= memory.expiresAt) {
+			return 0;
+		}
+
+		const age = now - memory.updatedAt;
+		let score = similarity;
+
+		if (this.config.temporalScoring?.ttlMs !== undefined && age >= this.config.temporalScoring.ttlMs) {
+			return 0;
+		}
+
+		if (this.config.temporalScoring?.halfLifeMs !== undefined && this.config.temporalScoring.halfLifeMs > 0) {
+			score *= Math.exp(-Math.max(0, age) / this.config.temporalScoring.halfLifeMs);
+		}
+
+		if (this.config.temporalScoring?.recencyBoostCap !== undefined && this.config.temporalScoring.recencyBoostCap > 1) {
+			const halfLife = this.config.temporalScoring.halfLifeMs;
+			if (halfLife !== undefined && halfLife > 0) {
+				const freshness = Math.exp(-Math.max(0, age) / halfLife);
+				const boost = 1 + (this.config.temporalScoring.recencyBoostCap - 1) * freshness;
+				score *= Math.min(boost, this.config.temporalScoring.recencyBoostCap);
+			}
+		}
+
+		return score;
+	}
+
+	private rankCandidates(
+		candidates: { memory: Mem0Memory; similarity: number; index: number }[],
+		topK: number,
+		similarityThreshold: number
+	): { memory: Mem0Memory; similarity: number; index: number }[] {
+		return candidates
+			.filter(candidate => candidate.similarity >= similarityThreshold)
+			.sort((left, right) => right.similarity - left.similarity || left.index - right.index)
+			.slice(0, topK);
 	}
 
 	private get recentMessages(): number {
@@ -835,6 +1041,15 @@ export class Mem0 implements DeterministicMemorySchema {
 		if (config.model && config.agent) {
 			throw new Error("Mem0 accepts either a model or an agent updater, not both.");
 		}
+		if (config.temporalScoring?.ttlMs !== undefined && (config.temporalScoring.ttlMs <= 0 || !Number.isFinite(config.temporalScoring.ttlMs))) {
+			throw new Error("Mem0 temporalScoring.ttlMs must be a positive finite number.");
+		}
+		if (config.temporalScoring?.halfLifeMs !== undefined && (config.temporalScoring.halfLifeMs <= 0 || !Number.isFinite(config.temporalScoring.halfLifeMs))) {
+			throw new Error("Mem0 temporalScoring.halfLifeMs must be a positive finite number.");
+		}
+		if (config.temporalScoring?.recencyBoostCap !== undefined && (config.temporalScoring.recencyBoostCap < 1 || !Number.isFinite(config.temporalScoring.recencyBoostCap))) {
+			throw new Error("Mem0 temporalScoring.recencyBoostCap must be a finite number >= 1.");
+		}
 	}
 
 	private assertCandidate(candidate: Mem0MemoryCandidate, scope: string): void {
@@ -843,6 +1058,14 @@ export class Mem0 implements DeterministicMemorySchema {
 		}
 		this.assertMemory(candidate.memory, scope);
 		this.assertUnitInterval(candidate.similarity, `Mem0 similarity for memory "${candidate.memory.id}"`);
+	}
+
+	private assertGraphCandidate(candidate: Mem0MemoryCandidate): void {
+		if (!candidate || typeof candidate !== "object") {
+			throw new TypeError("Mem0 graph candidate must be an object.");
+		}
+		this.assertMemory(candidate.memory);
+		this.assertUnitInterval(candidate.similarity, `Mem0 graph similarity for memory "${candidate.memory.id}"`);
 	}
 
 	private assertMemory(memory: Mem0Memory, expectedScope?: string): void {
@@ -860,6 +1083,9 @@ export class Mem0 implements DeterministicMemorySchema {
 		}
 		this.assertTimestamp(memory.createdAt, "Mem0 memory createdAt");
 		this.assertTimestamp(memory.updatedAt, "Mem0 memory updatedAt");
+		if (memory.expiresAt !== undefined) {
+			this.assertTimestamp(memory.expiresAt, "Mem0 memory expiresAt");
+		}
 		cloneMetadata(memory.metadata);
 	}
 
@@ -925,6 +1151,7 @@ function cloneMemory(memory: Mem0Memory): Mem0Memory {
 function cloneFact(fact: Mem0Fact): Mem0Fact {
 	return {
 		content: fact.content,
+		expiresAt: fact.expiresAt,
 		metadata: cloneMetadata(fact.metadata)
 	};
 }

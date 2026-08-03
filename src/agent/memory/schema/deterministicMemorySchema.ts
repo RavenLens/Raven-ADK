@@ -1,6 +1,5 @@
 import z from "zod";
 import { AgentMessagesGraphState, MessagesVariations } from "../../state";
-import { ToolLogic } from "../../tools/tools";
 import { MemoryDefault } from "./default";
 
 export type DeterministicFunctionInstruction = {
@@ -28,8 +27,8 @@ type MemoryFetched = {
 type DeterministicMemoryOperationOutcome = (MemoryUpdated | MemoryFetched)[] | null;
 type MemoryFunctionReturnType = DeterministicMemoryOperationOutcome | Promise<DeterministicMemoryOperationOutcome>;
 
-/** Tools required to pass with combined workflow */
-interface CombinedToolsSpec<ToolLogicArgs extends z.ZodObject> {
+/** Tools exposed to the agent while the associated deterministic hook manages lifecycle work. */
+export interface CombinedToolsSpec<ToolLogicArgs extends z.ZodObject> {
     /** 
      * Additional specification for what agent can `fetch`/`update`
      * - TODO: Is attached to Agent system prompt and tool description along basic `systemPrompt` from memory system
@@ -37,15 +36,18 @@ interface CombinedToolsSpec<ToolLogicArgs extends z.ZodObject> {
     instruction: string;
     /** Arguments for the tool the agent has to fill */
     args: ToolLogicArgs;
-    /** Logic of the `fetch`/`update` */
-    fn?: (toolLogic: ToolLogic<ToolLogicArgs>) => string | Promise<string>;
+    /** Optional logic to run immediately when the agent calls this tool. */
+    fn?: (
+        argsObj: z.infer<ToolLogicArgs>,
+        agentState?: AgentMessagesGraphState & { messages: MessagesVariations[]; }
+    ) => string | Promise<string>;
 }
 
 /**
  * Results of call will be attached to the agent awareness
  * @param async - specify whether operation has to be asynchronous. Default: false
  */
-type MethodsToolSchema<FetchArgs extends z.ZodObject, UpdateArgs extends z.ZodObject> = {
+export type MethodsToolSchema<FetchArgs extends z.ZodObject, UpdateArgs extends z.ZodObject> = {
     fetch?: CombinedToolsSpec<FetchArgs>;
     update?: CombinedToolsSpec<UpdateArgs>;
 }
@@ -82,7 +84,7 @@ interface MemoryAgentMethods<
 }
 
 export interface DeterministicMemoryConfig extends MemoryDefault {
-    tools: Record<keyof MemoryAgentMethods, MethodsToolSchema<any, any>>;
+    tools: Partial<Record<keyof MemoryAgentMethods, MethodsToolSchema<any, any>>>;
 }
 
 /**

@@ -64,9 +64,10 @@ Use a different value for a different user, session, or workspace.
 
 ## Step-by-Step ReActAgent Integration
 
-The current `ReActAgent` does not automatically invoke MemRL's deterministic
-memory hooks. Use the explicit bridge below around each agent run. This makes
-the data flow and identity boundary visible in your application.
+Pass `MemRL` through `ReActAgent`'s `memory` option to invoke its deterministic
+before-run hooks automatically. The explicit retrieval flow below remains
+useful when the application needs direct control over candidate attribution and
+the feedback trace.
 
 ### 1. Fetch Semantic Candidates for the User
 

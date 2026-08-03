@@ -243,4 +243,110 @@ describe("Mem0", () => {
             "after-orchestrator"
         ]);
     });
+
+    it("searches across hierarchical scopes during retrieval", async () => {
+        const memory = new Mem0({
+            name: "Scoped facts",
+            purpose: "Remember facts at different identity levels.",
+            scopes: { user: "user-123", agent: "agent-456", session: "session-789" },
+            idFactory: () => `scoped-fact-${Math.random().toString(36).slice(2)}`
+        });
+        await memory.addMemory({ content: "User-level preference." }, "user-123");
+        await memory.addMemory({ content: "Session-level preference." }, "session-789");
+
+        const result = await memory.retrieve("preference");
+
+        expect(result.memories.map(m => m.memory.content)).toContain("User-level preference.");
+        expect(result.memories.map(m => m.memory.content)).toContain("Session-level preference.");
+        expect(result.scope).toBe("session-789");
+    });
+
+    it("resolves scopes dynamically from agent state", async () => {
+        const memory = new Mem0({
+            name: "Dynamic scopes",
+            purpose: "Resolve scopes from conversation state.",
+            scopeResolver: async () => ({ user: "user-123", session: "session-abc" }),
+            idFactory: () => "dynamic-fact"
+        });
+        await memory.addMemory({ content: "Dynamic user fact." }, "user-123");
+        const instruction = {
+            contextAgentState: {
+                messages: [{ type: "user" as const, content: "Tell me a fact." }]
+            }
+        };
+
+        const result = await memory.beforeOrchestratorAgentRun(instruction);
+
+        expect(result).toEqual([{
+            memoryInformations: [expect.stringContaining("Dynamic user fact.")],
+            attchToAgentAwareness: true
+        }]);
+    });
+
+    it("merges graph exploration results with semantic/BM25 candidates", async () => {
+        const memory = new Mem0({
+            name: "Graph facts",
+            purpose: "Find related facts through graph relations.",
+            scope: "user-123",
+            idFactory: () => "seed-fact",
+            graphExplorer: {
+                explore: async (_query, seeds) => {
+                    if (seeds.some(seed => seed.memory.content.toLowerCase().includes("seed"))) {
+                        return [{
+                            memory: {
+                                id: "related-fact",
+                                scope: "user-123",
+                                content: "Related graph fact.",
+                                revision: 1,
+                                createdAt: 1_000,
+                                updatedAt: 1_000
+                            },
+                            similarity: 0.95
+                        }];
+                    }
+                    return [];
+                }
+            }
+        });
+        await memory.addMemory({ content: "Seed fact for graph." });
+
+        const result = await memory.retrieve("seed");
+
+        expect(result.memories.map(m => m.memory.content)).toContain("Related graph fact.");
+        expect(result.memories.map(m => m.memory.content)).toContain("Seed fact for graph.");
+    });
+
+    it("excludes expired facts and applies temporal decay", async () => {
+        let now = 1_000_000;
+        const memory = new Mem0({
+            name: "Temporal facts",
+            purpose: "Respect TTL and temporal decay.",
+            scope: "user-123",
+            now: () => now,
+            temporalScoring: { ttlMs: 10_000, halfLifeMs: 1_000, recencyBoostCap: 2 }
+        });
+        await memory.addMemory({ content: "Fresh fact." });
+        await memory.addMemory({ content: "Expired fact.", expiresAt: now - 1 });
+
+        const freshResult = await memory.retrieve("fact");
+        expect(freshResult.memories.map(m => m.memory.content)).toContain("Fresh fact.");
+        expect(freshResult.memories.map(m => m.memory.content)).not.toContain("Expired fact.");
+
+        now += 20_000;
+        const staleResult = await memory.retrieve("fact");
+        expect(staleResult.memories).toEqual([]);
+    });
+
+    it("assigns TTL from temporalScoring when fact has no explicit expiresAt", async () => {
+        let now = 1_000_000;
+        const memory = new Mem0({
+            name: "TTL facts",
+            purpose: "Apply default TTL.",
+            scope: "user-123",
+            now: () => now,
+            temporalScoring: { ttlMs: 5_000 }
+        });
+        const added = await memory.addMemory({ content: "Temporary fact." });
+        expect(added.expiresAt).toBe(now + 5_000);
+    });
 });

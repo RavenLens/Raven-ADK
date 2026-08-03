@@ -1,357 +1,380 @@
 # Memory Systems
 
-RavenADK agents can remember information across interactions. The SDK ships with several memory systems, each tuned for a different kind of recall:
+RavenADK memory gives an agent durable context across runs. Choose a built-in
+memory system for factual, procedural, or feedback-driven recall, or implement
+custom memory with one of two explicit execution models:
 
-| System | Memory type | Paper | Best for |
+| System | Memory type | Best for | Original paper |
 |---|---|---|---|
-| [MemP](./memp/README.md) | Procedural | [Memp: Exploring Agent Procedural Memory](https://arxiv.org/pdf/2508.06433) | Reusing approved workflows, tool sequences, and "how we did it last time" |
-| [MemRL](./memrl/README.md) | Episodic (RL-driven) | [MemRL: Self-Evolving Agents via Runtime Reinforcement Learning on Episodic Memory](https://arxiv.org/pdf/2601.03192) | Learning from outcomes and ranking strategies by feedback |
-| [Mem0](./mem0/README.md) | Factual | [Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory](https://arxiv.org/pdf/2504.19413) | Keeping user facts, preferences, and identity up to date |
-| [Custom](./custom/README.md) | Any | - | Your own storage, retrieval, or pre/post-processing logic |
+| [Mem0](./mem0/README.md) | Factual, deterministic | User facts, preferences, constraints, and changing state | [Mem0](https://arxiv.org/pdf/2504.19413) |
+| [MemP](./memp/README.md) | Procedural, deterministic | Validated playbooks, tool sequences, and reusable workflows | [MemP](https://arxiv.org/pdf/2508.06433) |
+| [MemRL](./memrl/README.md) | Episodic, deterministic | Ranking experiences, tools, or skills by outcome feedback | [MemRL](https://arxiv.org/pdf/2601.03192) |
+| Custom tool-based memory | Agent-directed | Knowledge the model should fetch or update only when needed | - |
+| Custom deterministic memory | Lifecycle-directed | Recall or reconciliation that must happen at fixed points in every run | - |
 
+## Execution Models
 
-You can use them individually, or mix several of them together in a single agent.
+Custom memory uses one of two schemas. Both can be supplied in the same
+`ReActAgent` configuration.
 
-## Memory Types
-<!-- TODO: Mention custom memory can run as tools or by use deterministic pin-points - denote the 2 separate systems and implement -->
-┌─────────────────────────────────────────────────────────────┐
-│  Memory pattern schemas (Mem0, MemP, MemRL, custom)         │
-│  ── produce a MemoryDefault + capability contract           │
-├─────────────────────────────────────────────────────────────┤
-│  MemoryDefault (base schema)                                │
-│  ── name, purpose, pattern, hasToRemember, capabilities     │
-├─────────────────────────────────────────────────────────────┤
-│  DeterministicMemorySchema  │  ToolBasedMemorySchema        │
-│  ── lifecycle hooks         │  ── explicit ToolSpec(s)      │
-├─────────────────────────────────────────────────────────────┤
-│  MemoryInterface (agent wrapper)                            │
-│  ── reads capabilities and generates tools / system prompt  │
-├─────────────────────────────────────────────────────────────┤
-│  SchemaMemoryStore (raw DB)                                 │
-│  ── fetchMemory, saveMemory, conclusion file, config        │
-└─────────────────────────────────────────────────────────────┘
+## Built-In Memory Systems
 
-- Deterministic/Combined
-  - Can use the memory functions to explicitly fill the agent memory or update the memory
-  - Can specify the tools to allow agent to instruct what to save and what to update with usage of tools
-  - With combined workflow user can 
-- Tool based
+All built-in memory systems use deterministic lifecycle hooks, so passing an
+instance to `memory` activates its supported ReAct lifecycle behavior.
 
-<!-- TODO: Denote in documentation that databases are removed because user has to decide what to use and how to parse the data will be return for agent still as string and differences in databases are too large to put harness on user shoulder -->
+### Mem0: Factual Memory
 
-<!-- 
-TODO:
-2. Implement the memory systesm with deterministic memory for ReActAgenr
-  - MemP
-  - MemRL
-  - Mem0
-
-  - Each leverages the deterministic memory
-3. Check how to implement the memory in the ReAct agent
-  - Deterministic
-    - Has to be able to use multiple
-      - In case of specified tool create tool with the name and description specified for eahc object with identifier matches to the object
-    - Has to make agent able to use the tools to specify what wants for each step
-    - Has to produce events from usage of deterministic function - events are registered for memory object
-  - 
-4. README.md update doc
-  - Show how to use tool based memory in this README.md
-  - Show how to use the deterministic memory here in README.md
- -->
-
-## Quick start
-
-### Singular memory
-
-Use a single memory store when all durable information can live in one place:
-
-```typescript
-import { ReActAgent } from "@ravenlens/raven-adk/agents";
-import { MemoryChromaDBStore } from "@ravenlens/raven-adk/memory";
-
-const agent = new ReActAgent({
-  model: /* your model */,
-  systemPrompt: "You are a helpful assistant.",
-  messages: [{ type: "user", content: "Hello" }],
-  tools: [],
-  memory: new MemoryChromaDBStore({
-    hasToRemember: [
-      "* User name",
-      "* User preferences and interests"
-    ].join("\n"),
-    session: "user-123",
-    conclusion: { maxCharacters: 2048 }
-  })
-});
-```
-
-### Plural memory (combining systems)
-
-Use plural memory when you want different kinds of knowledge stored in separate, named systems. The agent receives a dedicated `fetch_memory`/`save_memory` tool pair for each system.
-
-```typescript
-import { ReActAgent } from "@ravenlens/raven-adk/agents";
-import { MemoryChromaDBStore, MemoryDiskStore } from "@ravenlens/raven-adk/memory";
-
-const agent = new ReActAgent({
-  model: /* your model */,
-  systemPrompt: "You are a helpful assistant.",
-  messages: [{ type: "user", content: "Plan my trip" }],
-  tools: [],
-  memory: [
-    {
-      memory: new MemoryChromaDBStore({
-        hasToRemember: "* User preferences, dietary restrictions, budget",
-        session: "user-123"
-      }),
-      name: "User Facts",
-      purpose: "Keep durable facts about the user up to date."
-    },
-    {
-      memory: new MemoryDiskStore({
-        hasToRemember: "* Approved travel planning workflows\n* Successful itineraries and tool sequences",
-        session: "user-123"
-      }),
-      name: "Travel Procedures",
-      purpose: "Store reusable task playbooks built from past trips."
-    }
-  ]
-});
-```
-
-> **Tip:** Add `parallelTools: true` to the ReAct agent if many memory systems are used and latency matters.
-
-## MemP — Procedural Memory
-
-### Description
-MemP distills past agent trajectories into step-by-step instructions and higher-level, script-like abstractions. It is designed for *procedural* recall: "how something was done back then and how new approaches should look".
-
-### Requirements
-- A `SchemaMemoryStore` with search support (semantic or BM25), e.g. `MemoryChromaDBStore`, `MemoryMongoDBStore`, or `MemoryDiskStore`.
-- A `hasToRemember` prompt that focuses on durable workflows, tool sequences, and approved patterns.
-- (Recommended) `createMemoryConclusionPlugin` to keep a compact "playbook" conclusion.
-
-### Usecases
-- Reusing a validated deployment or data-pipeline sequence.
-- Remembering how a recurring report is built.
-- Avoiding deprecated approaches by marking them in memory.
-
-### Code Example
-
-```typescript
-import { ReActAgent } from "@ravenlens/raven-adk/agents";
-import { MemoryChromaDBStore, createMemoryConclusionPlugin } from "@ravenlens/raven-adk/memory";
-import { OpenAI } from "@ravenlens/raven-adk/models";
-
-const proceduralMemory = new MemoryChromaDBStore({
-  hasToRemember: [
-    "* Step-by-step workflows the user has approved",
-    "* Tool sequences that produced correct results",
-    "* Deprecated approaches to avoid in the future"
-  ].join("\n"),
-  session: "team-procedures",
-  conclusion: { maxCharacters: 2048 }
-});
-
-const agent = new ReActAgent({
-  model: new OpenAI({ model: "gpt-5.5-nano" }),
-  systemPrompt: "You are an SRE assistant.",
-  messages: [{ type: "user", content: "Roll back the canary" }],
-  tools: [],
-  memory: proceduralMemory,
-  plugins: [
-    createMemoryConclusionPlugin({
-      model: new OpenAI({ model: "gpt-5.5-nano" }),
-      systemPrompt: "Summarize durable procedural lessons."
-    })
-  ]
-});
-```
-
-MemP can be combined with Mem0 so the agent knows both *who* the user is and *how* to do the task.
-
-## MemRL — Episodic Memory with Runtime Reinforcement Learning
-
-### Description
-MemRL frames memory retrieval as a learnable decision problem. Instead of only matching by semantic similarity, it ranks memories (and tools/skills) by a learned Q-score that is updated from environmental or user feedback. This makes it ideal for learning from *how something went*.
-
-### Requirements
-- A VectorDB and an embedding model for the first retrieval phase.
-- A Q-score store for utility values.
-- A feedback source (user rating, automated evaluator, or self-evaluation).
-- (Recommended) `e_MemRL` configuration in `ReActAgent` when available.
-
-### Usecases
-- Selecting the best strategy for a coding task based on past success.
-- Ranking skills/tools by usefulness for a specific intent.
-- Reducing semantic noise in retrieval by preferring high-utility traces.
-
-### Code Example
-
-```typescript
-import { ReActAgent } from "@ravenlens/raven-adk/agents";
-import { MemoryChromaDBStore } from "@ravenlens/raven-adk/memory";
-
-const agent = new ReActAgent({
-  model: /* your model */,
-  systemPrompt: "You learn from every deployment.",
-  messages: [{ type: "user", content: "Deploy the service" }],
-  tools: [],
-  memory: [
-    {
-      memory: new MemoryChromaDBStore({
-        hasToRemember: [
-          "* Outcome of each deployment strategy",
-          "* Feedback score and root cause"
-        ].join("\n"),
-        session: "deployments"
-      }),
-      name: "Deployment Episodes",
-      purpose: "Remember which deployment strategies worked and which failed."
-    }
-  ]
-  // e_MemRL configuration for Q-score tracking is described in the MemRL extended spec
-});
-```
-
-See the [extended MemRL specification](./memrl/Extanded-MemRL.md) for the full `QScoreTrace`, feedback methods, and formulas.
-
-## Mem0 — Factual Memory
-
-### Description
-Mem0 keeps concise facts about the user, task, and world current. It extracts candidate facts from recent conversation context, retrieves similar stored facts, then reconciles them with `add`, `update`, `delete`, or `noop`.
-
-### Requirements
-- A `Mem0` instance with a `name` and `purpose`.
-- Either `model`, a separate `agent`, or both `factExtractor` and `updatePlanner`.
-- A `Mem0MemoryStore` for facts that must survive process restarts.
-- A semantic, BM25, or hybrid `retriever` when the lexical fallback is insufficient.
-
-### Usecases
-- Personal assistants that remember names, birthdays, interests.
-- Agents that track evolving project constraints.
-- Long-running conversations where consistency matters.
-
-### Code Example
+Mem0 extracts and reconciles durable facts with `add`, `update`, `delete`, and
+`noop`. It is useful for user profiles, current project constraints, and other
+facts that may change over time.
 
 ```typescript
 import { ReActAgent } from "@ravenlens/raven-adk/agents";
 import { Mem0 } from "@ravenlens/raven-adk/memory";
 import { OpenAI } from "@ravenlens/raven-adk/models";
 
-const factualMemory = new Mem0({
+const facts = new Mem0({
   name: "User facts",
-  purpose: "Keep durable user preferences current.",
+  purpose: "Keep durable preferences and project constraints current.",
   scope: "user-123",
-  hasToRemember: [
-    "* User name",
-    "* User job title and team",
-    "* Explicitly stated preferences (tone, format, channels)"
-  ].join("\n"),
   model: new OpenAI({ model: "gpt-5.5-nano" })
 });
 
 const agent = new ReActAgent({
   model: new OpenAI({ model: "gpt-5.5-nano" }),
   systemPrompt: "You are a personal assistant.",
-  messages: [{ type: "user", content: "Remind me about my standup" }],
+  messages: [{ type: "user", content: "I now prefer concise weekly updates." }],
   tools: [],
-  memory: factualMemory
+  memory: facts
 });
+
+await agent.invoke();
 ```
 
-`ReActAgent` automatically runs Mem0 retrieval before the main or a delegated agent starts and reconciliation after it completes. See the [Mem0 guide](./mem0/README.md) for custom stores, LLM update JSON, and a dedicated updater agent.
+See the [Mem0 guide](./mem0/README.md) and the
+[original paper](https://arxiv.org/pdf/2504.19413).
 
-## Custom Memory
+### MemP: Procedural Memory
 
-### Description
-Custom memory lets you provide your own implementation of `SchemaMemoryStore`. You can use any backend (PostgreSQL + pgvector, Pinecone, Redis, RavenAgentsHubDB, etc.), apply custom retrieval logic, and even run another agent before/after recall.
-
-### Requirements
-- Implement the `SchemaMemoryStore` interface.
-- Provide `fetchMemory`, `saveMemory`, `fetchMemoryConclusionFile`, and `writeMemoryConclusionFile`.
-- Decide your own duplicate detection, ranking, or preprocessing rules.
-
-### Usecases
-- Connecting to an existing corporate knowledge base.
-- Applying domain-specific ranking (e.g., BM25 over legal documents).
-- Running a summarization or anonymization agent before storing memory.
-
-### Code Example
+MemP stores validated trajectories as reusable procedures with concrete steps
+and a higher-level script. Configure `updateBuilder` when completed runs should
+produce reviewed procedure updates.
 
 ```typescript
 import { ReActAgent } from "@ravenlens/raven-adk/agents";
-import {
-  SchemaMemoryStore,
-  SchemaMemoryConfig,
-  MemoryRecord,
-  MemoryFetchResult,
-  FetchBySemantic,
-  MemoryFetch
-} from "@ravenlens/raven-adk/memory/store";
+import { MemP } from "@ravenlens/raven-adk/memory";
 
-export class MyCustomMemoryStore implements SchemaMemoryStore {
-  config: SchemaMemoryConfig;
-
-  constructor(config: SchemaMemoryConfig) {
-    this.config = config;
-  }
-
-  async fetchMemoryConclusionFile(): Promise<string> {
-    return "";
-  }
-
-  async writeMemoryConclusionFile(fileContent: string): Promise<boolean> {
-    const maxCharacters = this.config.conclusion?.maxCharacters;
-    if (maxCharacters !== undefined && fileContent.length > maxCharacters) {
-      return false;
-    }
-    return true;
-  }
-
-  async fetchMemory(fetchBy: FetchBySemantic | MemoryFetch.Explore): Promise<MemoryFetchResult> {
-    if (typeof fetchBy !== "number" && fetchBy.by === MemoryFetch.Sematic) {
-      // Your semantic / keyword retrieval logic
-    } else {
-      // Your graph exploration logic
-    }
-    return undefined;
-  }
-
-  async saveMemory(record: MemoryRecord): Promise<boolean> {
-    // Your persistence logic
-    return true;
-  }
-}
+const procedures = new MemP({
+  name: "Production playbooks",
+  purpose: "Reuse approved SRE recovery procedures.",
+  scope: "production",
+  updatePolicy: "validation",
+  outcomeEvaluator: async instruction => instruction.contextAgentState.isAborted !== true,
+  updateBuilder: async instruction => reviewCompletedRun(instruction.contextAgentState.messages)
+});
 
 const agent = new ReActAgent({
   model: /* your model */,
-  systemPrompt: "You use a custom knowledge base.",
-  messages: [{ type: "user", content: "Find the policy" }],
+  systemPrompt: "You are an SRE assistant.",
+  messages: [{ type: "user", content: "Recover the failing queue consumer." }],
   tools: [],
-  memory: new MyCustomMemoryStore({
-    hasToRemember: "Company policies and procedures",
-    session: "org-123"
-  })
+  memory: procedures
 });
 ```
 
-## Combining memory systems
+`reviewCompletedRun` should return a validated `MemPUpdate`, an array of
+updates, or `null`; do not allow unreviewed model output to mutate a production
+playbook. See the [MemP guide](./memp/README.md) and the
+[original paper](https://arxiv.org/pdf/2508.06433).
 
-There is no restriction on using only one memory system. A common pattern is:
+### MemRL: Episodic Memory
+
+MemRL combines semantic relevance with a learned Q-score, then accepts outcome
+feedback after the application knows whether the selected experience helped.
+Provide a `candidateProvider` that queries your vector, BM25, or hybrid store
+within the appropriate identity boundary.
 
 ```typescript
-memory: [
-  { memory: factualStore, name: "User Facts", purpose: "..." },   // Mem0-style
-  { memory: proceduralStore, name: "Procedures", purpose: "..." }, // MemP-style
-  { memory: episodicStore, name: "Episodes", purpose: "..." }      // MemRL-style
-]
+import { ReActAgent } from "@ravenlens/raven-adk/agents";
+import { MemRL } from "@ravenlens/raven-adk/memory";
+
+const episodes = new MemRL({
+  name: "Deployment episodes",
+  purpose: "Prefer deployment strategies that worked for this team.",
+  episodeId: "team-platform",
+  candidateProvider: async instruction => {
+    const query = instruction.contextAgentState.messages.at(-1)?.content ?? "";
+    return await searchDeploymentEpisodes(query);
+  }
+});
+
+const agent = new ReActAgent({
+  model: /* your model */,
+  systemPrompt: "You are a deployment assistant.",
+  messages: [{ type: "user", content: "Deploy the API without downtime." }],
+  tools: [],
+  memory: episodes
+});
+
+await agent.invoke();
+// Call episodes.applyFeedback(...) after an application or user outcome is known.
 ```
 
-The agent will see each system as a separate tool pair and conclusion, letting it choose the right memory for the right data.
+See the [MemRL guide](./memrl/README.md), the
+[extended specification](./memrl/Extanded-MemRL.md), and the
+[original paper](https://arxiv.org/pdf/2601.03192).
+
+## Combining Memory Systems
+
+Mix systems when each owns a distinct responsibility. A common configuration
+uses Mem0 for user facts, MemP for proven workflows, a tool-based store for
+on-demand project notes, and deterministic custom memory for required policy
+or reconciliation work.
+
+```typescript
+const agent = new ReActAgent({
+  model: /* your model */,
+  systemPrompt: "You are a delivery assistant.",
+  messages: [{ type: "user", content: "Prepare this week's rollout plan." }],
+  tools: [],
+  memory: [
+    facts,            // Mem0: user facts and constraints
+    procedures,       // MemP: validated rollout playbooks
+    projectMemory,    // Tool-based: model fetches/saves project notes when useful
+    userPreferences   // Deterministic: required preference recall and reconciliation
+  ],
+  parallelTools: true
+});
+```
+
+The benefit is separation of concerns: factual updates do not overwrite
+procedures, procedural learning does not pollute user preferences, and the
+model only calls on-demand memory tools when it needs them. Enable
+`parallelTools` only when the underlying tool operations are independent and
+safe to run concurrently.
+
+## Create a Custom Memory System
+
+You do not need to extend a RavenADK base class. Implement either
+`ToolBasedMemorySchema` or `DeterministicMemorySchema` with a plain object,
+factory function, or class. A reusable factory is useful when the memory needs
+a database, vector store, or other storage dependency.
+
+1. Choose tool-based memory when the agent should decide when to access it.
+2. Choose deterministic memory when retrieval or reconciliation must happen at
+  a lifecycle point.
+3. Define Zod schemas for every model-callable operation.
+4. Keep persistence behind your own storage boundary, then pass the resulting
+  memory object through `ReActAgent`'s `memory` option.
+
+### Tool-Based Memory: Create an On-Demand System
+
+Use `ToolBasedMemorySchema` when the agent should decide whether and when to
+read or write the memory. Define a `fetch` tool, an `update` tool, or both in
+`memoryTools`. `ReActAgent` registers them as ordinary tools, so they follow
+normal tool events, HITL rules, and `parallelTools` behavior.
+
+The optional `conclusionPlugin` is registered with the agent automatically.
+Use it for work that belongs after the run, such as persisting a compact
+summary or updating an external index.
+
+```typescript
+import { z } from "zod";
+import { ReActAgent } from "@ravenlens/raven-adk/agents";
+import { ToolBasedMemorySchema } from "@ravenlens/raven-adk/memory";
+
+type ProjectNotesStore = {
+  search(query: string): Promise<string[]>;
+  save(content: string): Promise<void>;
+};
+
+const searchArgs = z.object({ query: z.string().min(1) });
+const saveArgs = z.object({ content: z.string().min(1) });
+
+export function createProjectNotesMemory(
+  store: ProjectNotesStore
+): ToolBasedMemorySchema<typeof searchArgs, typeof saveArgs> {
+  return {
+    typeMemory: "toolBased",
+    name: "Project notes",
+    purpose: "Find and preserve durable project decisions.",
+    memoryTools: {
+      fetch: {
+        toolName: "search_project_notes",
+        instruction: "Search project notes when a prior decision may answer the request.",
+        toolArguments: searchArgs,
+        fn: async ({ query }) => {
+          const matches = await store.search(query);
+          return matches.length ? matches.join("\n") : "No matching project notes.";
+        }
+      },
+      update: {
+        toolName: "save_project_note",
+        instruction: "Save only durable, confirmed project decisions.",
+        toolArguments: saveArgs,
+        fn: async ({ content }, agentState) => {
+          await store.save(content);
+          return `Saved project note from a ${agentState?.messages.length ?? 0}-message run.`;
+        }
+      }
+    }
+  };
+}
+
+const notes = new Map<string, string>();
+const projectMemory = createProjectNotesMemory({
+  search: async query => [...notes.values()]
+    .filter(note => note.toLowerCase().includes(query.toLowerCase())),
+  save: async content => {
+    notes.set(`note-${notes.size + 1}`, content);
+  }
+});
+
+const agent = new ReActAgent({
+  model: /* your model */,
+  systemPrompt: "You help with project work.",
+  messages: [{ type: "user", content: "What did we decide about retries?" }],
+  tools: [],
+  memory: [projectMemory]
+});
+```
+
+Use stable, descriptive tool names. `ReActAgent` does not add implicit
+fetch/save operations for this schema: the tools you declare are exactly the
+memory capabilities the model receives.
+
+#### The tool `fn` callback
+
+`memoryTools.fetch.fn` and `memoryTools.update.fn` are the implementations the
+agent executes when it calls the tool. Each `fn` receives:
+
+1. `argsObj` — the parsed arguments described by `toolArguments`.
+2. `agentState` — a snapshot of the current graph state plus the full
+   `messages` array.
+
+The string returned by `fn` is sent back to the model as the tool result. Keep
+it concise and actionable: return fetched facts, a confirmation, or guidance
+such as "No matching notes found." This is where the memory talks to its
+storage backend.
+
+```typescript
+fetch: {
+  toolName: "search_project_notes",
+  instruction: "Search project notes when a prior decision may answer the request.",
+  toolArguments: searchArgs,
+  fn: async ({ query }, agentState) => {
+    const matches = await store.search(query);
+    return matches.length ? matches.join("\n") : "No matching project notes.";
+  }
+}
+```
+
+### Deterministic Memory: Create a Lifecycle System
+
+Use `DeterministicMemorySchema` when memory must run at fixed lifecycle
+points. `ReActAgent` calls these hooks automatically:
+
+| Hook | When it runs |
+|---|---|
+| `beforeOrchestratorAgentRun` | Before the main agent prompt is built |
+| `afterOrchestratorAgentRun` | After the main agent run completes |
+| `beforeSubagentRun` | Before each delegated agent starts |
+| `afterSubagentRun` | After each delegated agent completes |
+
+`afterConversationEnd` remains available for a conversation host to call when
+it owns a broader conversation lifecycle.
+
+Deterministic memory can also expose `fetch` and `update` request tools under
+`config.tools` for the ReAct-managed hooks. RavenADK generates a tool named
+`<memory_name>_<hook>_<fetch|update>`. When the model calls one, its arguments
+are serialized into `instruction.agentWants` for that memory's matching hook;
+an optional `fn` can also perform immediate work and return the tool result.
+
+The object below is a complete custom deterministic system. Put the same
+implementation in a factory or class when it needs a configured storage client.
+
+```typescript
+import { z } from "zod";
+import { ReActAgent } from "@ravenlens/raven-adk/agents";
+import {
+  DeterministicMemorySchema
+} from "@ravenlens/raven-adk/memory";
+
+const preferences = new Map<string, string>();
+
+const userPreferences: DeterministicMemorySchema = {
+  typeMemory: "deterministic",
+  config: {
+    name: "User preferences",
+    purpose: "Attach known preferences before a run and reconcile new ones afterward.",
+    tools: {
+      afterOrchestratorAgentRun: {
+        update: {
+          instruction: "Record a durable preference explicitly confirmed by the user.",
+          args: z.object({ preference: z.string().min(1) }),
+          fn: async ({ preference }) => `Preference queued: ${preference}`
+        }
+      }
+    }
+  },
+  beforeOrchestratorAgentRun: async () => {
+    const preference = preferences.get("user-123");
+    return preference
+      ? [{
+          memoryInformations: [`Known user preference: ${preference}`],
+          attchToAgentAwareness: true
+        }]
+      : null;
+  },
+  afterOrchestratorAgentRun: async instruction => {
+    const requests = instruction.agentWants ?? [];
+    const updates = requests
+      .filter(request => request.type === "update")
+      .map(request => JSON.parse(request.wants) as { preference: string });
+
+    for (const { preference } of updates) {
+      preferences.set("user-123", preference);
+    }
+
+    return updates.length
+      ? [{ updatedInformations: updates.map(({ preference }) => preference) }]
+      : null;
+  }
+};
+
+const agent = new ReActAgent({
+  model: /* your model */,
+  systemPrompt: "You manage user preferences carefully.",
+  messages: [{ type: "user", content: "I prefer concise weekly updates." }],
+  tools: [],
+  memory: [userPreferences]
+});
+```
+
+Use deterministic memory for guaranteed pre-run recall, post-run
+reconciliation, or policy enforcement. Use its optional tools when the model
+also needs to describe a specific fetch/update request to the memory logic.
+
+#### The optional tool with `fn` callback
+
+`config.tools[hook].fetch.fn` and `config.tools[hook].update.fn` are optional.
+When the agent calls a generated deterministic memory tool:
+
+1. The call is recorded as a **want** for that hook. The serialized arguments
+   appear in `instruction.agentWants` when the lifecycle hook runs.
+2. If `fn` is provided, it runs immediately and its return value is shown to
+   the model as the tool result.
+3. The matching lifecycle hook eventually runs and can reconcile all recorded
+   wants with durable storage, side effects, or awareness injection.
+
+Omit `fn` when the tool is only a request mechanism; the tool still records the
+want and returns a default acknowledgment. Provide `fn` when the call should
+also produce an immediate result, such as a lightweight cache lookup or
+validation, while keeping durable writes inside the lifecycle hook.
 
 ## Further Reading
 
-- [Main Memory documentation](../Memory.md) — how memory works in `ReActAgent`, the conclusion system, and built-in stores.
-- [MemRL description](./memrl/MemRL-Description.md) — deep dive into MemRL concepts.
-- [Extended MemRL specification](./memrl/Extanded-MemRL.md) — `QScoreTrace`, feedback API, and formulas. 
+- [Main memory documentation](../Memory.md)
+- [Mem0 guide](./mem0/README.md)
+- [MemP guide](./memp/README.md)
+- [MemRL guide](./memrl/README.md)
