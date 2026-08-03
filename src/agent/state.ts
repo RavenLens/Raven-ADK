@@ -103,6 +103,8 @@ export interface AgentMessagesGraphState {
     parallelRecalls?: string[];
     /** Model options for the execution */
     modelOptions?: any;
+    /** Attached as `true` when action was aborted */
+    isAborted?: boolean;
 }
 
 export type AgentMessagesGraphNodeResult = GraphNodeExecutionResult<AgentMessagesGraphState>;

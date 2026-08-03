@@ -47,3 +47,25 @@ export interface MCPDownloadedTool {
     inputSchema: Record<string, unknown>;
     outputSchema?: Record<string, unknown>;
 }
+
+export interface MCPDownloadedPrompt {
+    serverId: string;
+    serverName?: string;
+    remotePromptName: string;
+    agentPromptName: string;
+    description?: string;
+    arguments?: Array<{
+        name: string;
+        description?: string;
+        required?: boolean;
+    }>;
+}
+
+export interface MCPDownloadedResource {
+    serverId: string;
+    serverName?: string;
+    remoteResourceName: string;
+    uri: string;
+    description?: string;
+    mimeType?: string;
+}

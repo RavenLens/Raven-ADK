@@ -1,6 +1,6 @@
 import * as z from "zod";
 
-type ToolLogic<ToolLogicArgs extends z.ZodObject> = (argsObj: z.infer<ToolLogicArgs>) => Promise<string> | string;
+export type ToolLogic<ToolLogicArgs extends z.ZodObject> = (argsObj: z.infer<ToolLogicArgs>) => Promise<string> | string;
 
 export interface ToolConfig<
     ToolLogicArgs extends z.ZodObject,

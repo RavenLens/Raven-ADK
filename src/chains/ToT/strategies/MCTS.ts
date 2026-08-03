@@ -1,7 +1,7 @@
 import z4 from "zod/v4";
 import { randomUUID } from "node:crypto";
 import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
-import { TreeOfThoughts } from "../ToT";
+import { DEFAULT_THOUGHTS_DEPTH, TreeOfThoughts } from "../ToT";
 import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
 
 interface MCTS_GenerateOptions {
@@ -36,7 +36,9 @@ export interface MCTSConfig {
     iterations?: number;
     /** Exploration constant (C) for UCT. Default is sqrt(2) */
     explorationConstant?: number;
-    /** Optional penalty for depth to encourage shorter paths */
+    /** Optional penalty for depth to encourage shorter paths
+     * @default 0.01
+    */
     depthPenalty?: number;
 }
 
@@ -132,15 +134,15 @@ Generate ${this.ToT.config.thoughtsCount || 3} thoughts that continue this path.
         return thoughts;
     }
 
-    private backpropagate(path: string[], value: number, depth: number = 0) {
+    private backpropagate(path: string[], score: number, depth: number = 0) {
         // Apply depth penalty to the value being backpropagated
-        const penalizedValue = Math.max(0, value - (depth * this.config.depthPenalty));
+        const penalizedScore = Math.max(0, score - (depth * this.config.depthPenalty));
         
         for (const id of path) {
             const stat = this.stats.get(id);
             if (stat) {
                 stat.visits += 1;
-                stat.value += penalizedValue;
+                stat.value += penalizedScore;
             }
         }
     }
@@ -190,7 +192,7 @@ Generate ${this.ToT.config.thoughtsCount || 3} thoughts that continue this path.
 
             // Expansion
             const currentNode = this.nodeMap.get(currentId)!;
-            if (depth < (tot.config.maxThoughtsDepth ?? 10)) {
+            if (depth < (tot.config.maxThoughtsDepth ?? DEFAULT_THOUGHTS_DEPTH)) {
                 const newThoughts = await this.expand(currentNode);
                 if (newThoughts.length > 0) {
                     this.childrenMap.set(currentId, newThoughts.map(t => t.id));
@@ -217,7 +219,7 @@ Generate ${this.ToT.config.thoughtsCount || 3} thoughts that continue this path.
         }
 
         // 3. Finalization
-        // Select child of root with highest visits (robustness indicator in MCTS)
+        // Select child of root (option) with highest visits (robustness indicator in MCTS)
         const rootChildren = this.childrenMap.get(rootId)!;
         const bestOptionId = rootChildren.reduce((best, child) => 
             (this.stats.get(child)!.visits > this.stats.get(best)!.visits) ? child : best
