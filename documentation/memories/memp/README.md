@@ -1,79 +1,123 @@
-﻿# MemP — Procedural Memory
+﻿# MemP - Procedural Memory
 
 **Paper:** [Memp: Exploring Agent Procedural Memory](https://arxiv.org/pdf/2508.06433) (ACL 2026 Findings)
 
-## Type
-Procedural memory — the agent remembers *how something was done* and can reuse approved workflows and new approaches.
+MemP remembers how an agent completed a task. Each procedure retains both a concrete, step-by-step trajectory and a higher-level script so close tasks can replay proven details while related tasks can reuse the general approach.
 
-## Description
-MemP distills past agent trajectories into fine-grained, step-by-step instructions and higher-level, script-like abstractions. A dynamic update regimen continuously corrects and deprecates old entries, so the repository evolves as new experience is gathered.
+The implementation follows the paper's Build, Retrieve, and Update loop:
 
-## Requirements
-- A `SchemaMemoryStore` with search support, such as `MemoryChromaDBStore`, `MemoryMongoDBStore`, or `MemoryDiskStore`.
-- A `hasToRemember` prompt that focuses on durable workflows, tool sequences, and patterns to keep or avoid.
-- (Recommended) `createMemoryConclusionPlugin` to maintain a compact, up-to-date playbook conclusion.
-- Retrieval can be semantic or BM25-style depending on the store implementation.
+- Build: add a procedure with a retrieval key, detailed steps, and an abstract script.
+- Retrieve: return the best active procedures for a task. A lexical fallback is included; inject a vector, BM25, or hybrid retriever for production search.
+- Update: add, revise, deprecate, or remove procedures as new experience arrives.
 
-## Usecases
-- Reusing a validated deployment, migration, or data-pipeline sequence.
-- Remembering how a recurring report, dashboard, or document is built.
-- Avoiding deprecated approaches by explicitly marking them in memory.
-- Onboarding new team members by replaying the most successful procedures.
-
-## Code Example
+## Quick Start
 
 ```typescript
-import { ReActAgent } from "@ravenlens/raven-adk/agents";
-import { MemoryChromaDBStore, createMemoryConclusionPlugin } from "@ravenlens/raven-adk/memory";
-import { OpenAI } from "@ravenlens/raven-adk/models";
+import { MemP } from "@ravenlens/raven-adk/memory";
 
-const proceduralMemory = new MemoryChromaDBStore({
-  hasToRemember: [
-    "* Step-by-step workflows the user has approved",
-    "* Tool sequences that produced correct results",
-    "* Deprecated approaches to avoid in the future"
-  ].join("\n"),
-  session: "team-procedures",
-  conclusion: { maxCharacters: 2048 }
+const procedures = new MemP({
+  name: "Production playbooks",
+  purpose: "Reuse validated SRE workflows.",
+  scope: "production",
+  topK: 3
 });
 
-const agent = new ReActAgent({
-  model: new OpenAI({ model: "gpt-5.5-nano" }),
-  systemPrompt: "You are an SRE assistant.",
-  messages: [{ type: "user", content: "Roll back the canary" }],
-  tools: [],
-  memory: proceduralMemory,
-  plugins: [
-    createMemoryConclusionPlugin({
-      model: new OpenAI({ model: "gpt-5.5-nano" }),
-      systemPrompt: "Summarize durable procedural lessons."
-    })
-  ]
+await procedures.addProcedure({
+  id: "rollback-canary",
+  key: "Roll back a failed canary deployment",
+  steps: [
+    "Pause traffic shifting.",
+    "Route traffic to the stable deployment.",
+    "Verify error rates before closing the incident."
+  ],
+  script: "Stop exposure first, restore the known-good version, then verify health.",
+  tags: ["deployment", "rollback"]
 });
+
+const result = await procedures.retrieve("Roll back the failed canary");
+const playbook = result.procedures[0]?.procedure;
 ```
 
-## Combining with other systems
+`retrieve()` only returns active procedures. `deprecateProcedure()` keeps the historical record for audit while excluding it from later retrieval.
 
-MemP works best when paired with a factual memory system such as Mem0:
+## Updating Procedures
+
+Use `applyUpdate()` to make the repository's changes explicit and auditable:
 
 ```typescript
-memory: [
-  {
-    memory: proceduralMemory,
-    name: "Procedures",
-    purpose: "Reusable task playbooks and approved workflows."
-  },
-  {
-    memory: new MemoryChromaDBStore({
-      hasToRemember: "* User name, role, preferences",
-      session: "user-123"
-    }),
-    name: "User Facts",
-    purpose: "Durable facts about the user."
+await procedures.applyUpdate({
+  type: "update",
+  procedureId: "rollback-canary",
+  patch: {
+    steps: [
+      "Pause traffic shifting.",
+      "Route traffic to the stable deployment.",
+      "Verify error rate, latency, and saturation before closing the incident."
+    ]
   }
-]
+});
+
+await procedures.applyUpdate({
+  type: "deprecate",
+  procedureId: "legacy-rollback",
+  reason: "The legacy deployment path was removed."
+});
 ```
+
+The supported operations map directly to the paper's update mechanism: `add`, `update`, `deprecate`, and `remove`.
+
+## Durable Storage and Retrieval
+
+`InMemoryMemPProcedureStore` is the default and is useful for a single process. For durable memory, implement `MemPProcedureStore` and pass it as `store`; its four methods are `list`, `get`, `set`, and `delete`.
+
+Pass `retriever` when the store is backed by semantic or lexical infrastructure. It receives the task query plus the scope, `topK`, and similarity threshold, then returns `MemPProcedureCandidate` values with normalized scores from $0$ to $1$.
+
+```typescript
+const procedures = new MemP({
+  name: "Team procedures",
+  purpose: "Retrieve reusable workflows across deployments.",
+  scope: "team-a",
+  store: durableProcedureStore,
+  retriever: async (query, { scope, topK }) => {
+    return await searchProceduresByEmbedding(query, scope, topK);
+  }
+});
+```
+
+## Lifecycle Hooks
+
+`MemP` implements `DeterministicMemorySchema`. When deterministic-memory lifecycle execution is enabled in `ReActAgent`, it will:
+
+- retrieve procedures in `beforeOrchestratorAgentRun` and `beforeSubagentRun`;
+- invoke `updateBuilder` after a conversation, orchestrator run, or subagent run;
+- attach retrieved scripts and numbered steps to agent awareness.
+
+`updateBuilder` is deliberately application-provided because converting a raw trajectory into a reliable script is domain and model dependent. It returns one or more `MemPUpdate` operations. Choose an `updatePolicy` matching the paper:
+
+- `vanilla`: accept the builder's operations.
+- `validation`: only build updates when `outcomeEvaluator` reports success.
+- `adjustment`: allow the builder to revise or deprecate a retrieved procedure after failure.
+
+```typescript
+const procedures = new MemP({
+  name: "Validated procedures",
+  purpose: "Turn successful agent work into reusable playbooks.",
+  updatePolicy: "validation",
+  outcomeEvaluator: async instruction => instruction.contextAgentState.isAborted !== true,
+  updateBuilder: async () => ({
+    type: "add",
+    procedure: {
+      key: "Recover a failing queue consumer",
+      steps: ["Pause new messages.", "Resolve the consumer failure.", "Resume and observe lag."],
+      script: "Stabilize intake, repair the consumer, then verify backlog recovery."
+    }
+  })
+});
+```
+
+Until ReAct invokes deterministic lifecycle hooks directly, call `retrieve`, `addProcedure`, and `applyUpdate` from the application's agent orchestration code.
 
 ## Further Reading
+
 - [Memory systems overview](../README.md)
 - [Main Memory documentation](../../Memory.md)
