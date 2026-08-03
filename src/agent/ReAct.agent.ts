@@ -4,7 +4,6 @@ import { InvokeOptions, LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/openai";
 import { Google } from "../models/google";
 import { SchemaMemoryStore } from "./memory/stores/schema";
-import { Memory as MemoryInterface, MutliMemoryObject } from "./memory/memory";
 import { SchemaSkillStore } from "./skills/stores/schema";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
@@ -14,6 +13,8 @@ import { RunPod } from "../models/runpod";
 import z from "zod";
 import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
+import { DeterministicMemorySchema } from "./memory/schema/deterministicMemorySchema";
+import { ToolBasedMemorySchema } from "./memory/schema/toolMemorySchema";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -72,7 +73,7 @@ export interface ReActAgentPluginSpec {
     }>;
 }
 
-export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends SchemaMemoryStore, HITL extends HITLTransportSchema> {
+export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema> {
     model: AgentModel;
     systemPrompt: string;
     messages: MessagesVariations[];
@@ -84,9 +85,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     /**
      * It's the agent memory he developed for specific user session or for organization
     */
-    memory?: Memory | ({
-        memory: Memory;
-    } & MutliMemoryObject)[];
+    memory?: Memory | Memory[];
     /** It's list with agent plugins are going to be execute and can */
     plugins?: ReActAgentPluginSpec[];
     tools: Tool<any, any>[];
@@ -358,7 +357,7 @@ export class ReActAgentAbortable {
 export class ReActAgent
 <
     Skills extends SchemaSkillStore,
-    Memory extends SchemaMemoryStore,
+    Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>,
     HITL extends HITLTransportSchema,
     SkillsSandbox extends CodeExecutionSandboxSchema
 > {

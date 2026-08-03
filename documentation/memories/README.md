@@ -9,7 +9,55 @@ RavenADK agents can remember information across interactions. The SDK ships with
 | [Mem0](./mem0/README.md) | Factual | [Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory](https://arxiv.org/pdf/2504.19413) | Keeping user facts, preferences, and identity up to date |
 | [Custom](./custom/README.md) | Any | - | Your own storage, retrieval, or pre/post-processing logic |
 
+
 You can use them individually, or mix several of them together in a single agent.
+
+## Memory Types
+<!-- TODO: Mention custom memory can run as tools or by use deterministic pin-points - denote the 2 separate systems and implement -->
+┌─────────────────────────────────────────────────────────────┐
+│  Memory pattern schemas (Mem0, MemP, MemRL, custom)         │
+│  ── produce a MemoryDefault + capability contract           │
+├─────────────────────────────────────────────────────────────┤
+│  MemoryDefault (base schema)                                │
+│  ── name, purpose, pattern, hasToRemember, capabilities     │
+├─────────────────────────────────────────────────────────────┤
+│  DeterministicMemorySchema  │  ToolBasedMemorySchema        │
+│  ── lifecycle hooks         │  ── explicit ToolSpec(s)      │
+├─────────────────────────────────────────────────────────────┤
+│  MemoryInterface (agent wrapper)                            │
+│  ── reads capabilities and generates tools / system prompt  │
+├─────────────────────────────────────────────────────────────┤
+│  SchemaMemoryStore (raw DB)                                 │
+│  ── fetchMemory, saveMemory, conclusion file, config        │
+└─────────────────────────────────────────────────────────────┘
+
+- Deterministic/Combined
+  - Can use the memory functions to explicitly fill the agent memory or update the memory
+  - Can specify the tools to allow agent to instruct what to save and what to update with usage of tools
+  - With combined workflow user can 
+- Tool based
+
+<!-- TODO: Denote in documentation that databases are removed because user has to decide what to use and how to parse the data will be return for agent still as string and differences in databases are too large to put harness on user shoulder -->
+
+<!-- 
+TODO:
+2. Implement the memory systesm with deterministic memory for ReActAgenr
+  - MemP
+  - MemRL
+  - Mem0
+
+  - Each leverages the deterministic memory
+3. Check how to implement the memory in the ReAct agent
+  - Deterministic
+    - Has to be able to use multiple
+      - In case of specified tool create tool with the name and description specified for eahc object with identifier matches to the object
+    - Has to make agent able to use the tools to specify what wants for each step
+    - Has to produce events from usage of deterministic function - events are registered for memory object
+  - 
+4. README.md update doc
+  - Show how to use tool based memory in this README.md
+  - Show how to use the deterministic memory here in README.md
+ -->
 
 ## Quick start
 
