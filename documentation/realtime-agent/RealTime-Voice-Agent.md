@@ -209,6 +209,23 @@ voiceAgent.onLogicEvent("plugin_result", (pluginName, executionWay, event) => {
 
 `onCompressionUpdate` reports the estimated category totals on every plugin run. A `plugin_result` event confirms execution, while `event.result?.status === true` indicates that the plugin produced a compaction or truncation update. A successful run with `event.result?.status === false` means the plugin ran but the configured threshold did not require a change. The lifecycle events are also emitted to the client as `logic.plugin_invoking` and `logic.plugin_result`.
 
+#### Provider fallback and encrypted compaction
+
+Some providers can compact automatically inside the model request after the local plugin has run. OpenAI may return that fallback as a message like this:
+
+```typescript
+{
+    type: "compaction",
+    provider: "openai",
+    encryptedContent: "...",
+    items: [{ type: "compaction", encrypted_content: "..." }]
+}
+```
+
+`encryptedContent` is opaque provider state. Raven ADK preserves it for the next provider request, but does not decrypt it, interpret it as a user-readable summary, or send it to TTS. `RealTimeVoiceAgent` speaks the compaction plugin's configured lifecycle announcement and the final string `ai` response only. It does not speak the contents of a `compaction` message.
+
+The compaction plugin also uses a bounded estimate for opaque encrypted state, rather than tokenizing the entire ciphertext. This prevents a large encrypted payload from causing an unnecessary second local compaction while keeping the provider marker in the conversation. Provider fallback remains provider-owned; a successful local `plugin_result` only proves that the local plugin executed.
+
 ---
 ## Frontend
 

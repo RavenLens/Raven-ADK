@@ -51,6 +51,27 @@ async function safeTokenize(content: string | undefined | null, tokenizer?: Toke
 }
 
 /**
+ * Provider compaction state is opaque and must not be treated as natural-language content.
+ * Keep its accounting bounded so a ciphertext length cannot trigger local compaction by itself.
+ */
+const OPAQUE_COMPACTION_TOKEN_ESTIMATE = 32;
+
+async function estimateCompactionTokens(
+    message: Extract<MessagesVariations, { type: "compaction" }>,
+    tokenizer?: Tokenizer
+): Promise<number> {
+    if (message.content) {
+        return safeTokenize(message.content, tokenizer);
+    }
+
+    if (message.encryptedContent || message.items?.length) {
+        return OPAQUE_COMPACTION_TOKEN_ESTIMATE;
+    }
+
+    return 0;
+}
+
+/**
  * Creates a ReActAgent plugin that monitors conversation size and compacts
  * older messages before a model call when the configured context threshold is exceeded.
  *
@@ -137,10 +158,7 @@ export function generateCompactReActAgentPlugin(
                         break;
 
                     case "compaction": {
-                        const compactedContent = message.content
-                            ?? message.encryptedContent
-                            ?? JSON.stringify(message.items ?? []);
-                        tokens.aiResponses += await safeTokenize(compactedContent, tokenizer);
+                        tokens.aiResponses += await estimateCompactionTokens(message, tokenizer);
                     }
                         break;
                     
