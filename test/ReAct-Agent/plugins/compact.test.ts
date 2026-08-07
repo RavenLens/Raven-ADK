@@ -71,6 +71,38 @@ describe("Mocking: Conversation Tokenizer & Compaction Tests", () => {
         expect(result.status).toBe(false);
     });
 
+    it("treats encrypted provider compaction state as bounded opaque metadata", async () => {
+        const messages: MessagesVariations[] = [
+            { type: "system", content: "You are an agent." },
+            {
+                type: "compaction",
+                provider: "openai",
+                encryptedContent: "ciphertext".repeat(10_000),
+                items: [{ type: "compaction", encrypted_content: "opaque" }]
+            },
+            { type: "user", content: "Recent request." },
+            { type: "ai", content: "Recent answer." },
+            { type: "user", content: "Current request." },
+            { type: "ai", content: "Current answer." }
+        ];
+
+        const characterTokenizer: Tokenizer = (content) => Math.ceil(content.length / 4);
+        const plugin = generateCompactReActAgentPlugin(
+            { name: "gpt-5", contextWindowTokens: 1000 },
+            characterTokenizer,
+            80
+        );
+
+        const result = await plugin.execute({ nodeType: "aside", way: "before_model_call" }, {
+            model: {} as any,
+            systemPrompt: "",
+            messages,
+            tools: []
+        }, {});
+
+        expect(result.status).toBe(false);
+    });
+
     it("delegates older history to a provider compaction method", async () => {
         const messages: MessagesVariations[] = [
             { type: "system", content: "You are an agent." },
