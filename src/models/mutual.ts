@@ -52,17 +52,27 @@ export interface InvokeOptions {
     };
 }
 
+export interface CompactOptions {
+    /** The conversation slice to compact. Defaults to the model's configured messages. */
+    messages?: MessagesVariations[];
+    abort?: AbortSignal;
+}
+
 export interface StandardLLMShema {
     typeAPI: "model";
     apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
     config: LLMConfig;
     invoke(options?: InvokeOptions): Promise<LLMAnswer>;
     invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer>;
+    /** Whether the provider compacts inside a normal invocation or through `compact`. */
+    compactionMode?: "automatic" | "manual";
+    /** Compacts a conversation slice into provider-replayable context when supported. */
+    compact?(options?: CompactOptions): Promise<MessagesVariations[]>;
     tts(text: string, options?: any): Promise<Buffer | undefined>;
     stt(speechFile: File, options?: any): Promise<string>;
 }
 
 /** Extension of StandardLLMShema for RAG */
-export interface EmbeddingModel extends Omit<StandardLLMShema, "invoke" | "invokeStructuredOutput" | "tts" | "stt"> {
+export interface EmbeddingModel extends Omit<StandardLLMShema, "invoke" | "invokeStructuredOutput" | "compact" | "tts" | "stt"> {
     embed(text: string | string[]): Promise<number[][]>;
 }

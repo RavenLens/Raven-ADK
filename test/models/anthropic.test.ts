@@ -4,9 +4,11 @@ import { z } from "zod";
 import { tool } from "../../src/agent/tools";
 import { Anthropic } from "../../src/models/anthropic";
 
-const { anthropicCreateMock, anthropicStreamMock, anthropicCtorMock } = vi.hoisted(() => ({
+const { anthropicCreateMock, anthropicStreamMock, anthropicBetaCreateMock, anthropicBetaStreamMock, anthropicCtorMock } = vi.hoisted(() => ({
     anthropicCreateMock: vi.fn(),
     anthropicStreamMock: vi.fn(),
+    anthropicBetaCreateMock: vi.fn(),
+    anthropicBetaStreamMock: vi.fn(),
     anthropicCtorMock: vi.fn()
 }));
 
@@ -15,6 +17,12 @@ vi.mock("@anthropic-ai/sdk", () => ({
         messages = {
             create: anthropicCreateMock,
             stream: anthropicStreamMock
+        };
+        beta = {
+            messages: {
+                create: anthropicBetaCreateMock,
+                stream: anthropicBetaStreamMock
+            }
         };
 
         constructor(config: unknown) {
@@ -27,6 +35,8 @@ describe("Anthropic model wrapper", () => {
     beforeEach(() => {
         anthropicCreateMock.mockReset();
         anthropicStreamMock.mockReset();
+        anthropicBetaCreateMock.mockReset();
+        anthropicBetaStreamMock.mockReset();
         anthropicCtorMock.mockReset();
     });
 
@@ -136,7 +146,8 @@ describe("Anthropic model wrapper", () => {
                     type: "enabled",
                     budget_tokens: 1024
                 }
-            })
+            }),
+            expect.objectContaining({ signal: undefined })
         );
 
         expect(result.tokens).toStrictEqual({
@@ -157,6 +168,7 @@ describe("Anthropic model wrapper", () => {
                     {
                         type: "tool",
                         tool_id: "toolu_1",
+                        tool_name: "get_weather",
                         content: '{"location":"Paris"}',
                         arguments: { location: "Paris" }
                     }
@@ -165,6 +177,7 @@ describe("Anthropic model wrapper", () => {
             {
                 type: "tool",
                 tool_id: "toolu_1",
+                tool_name: "get_weather",
                 content: '{"location":"Paris"}',
                 arguments: { location: "Paris" }
             }
@@ -210,7 +223,102 @@ describe("Anthropic model wrapper", () => {
                         content: "Continue"
                     }
                 ]
-            })
+            }),
+            expect.objectContaining({ signal: undefined })
+        );
+    });
+
+    it("enables server-side compaction and preserves returned compact blocks", async () => {
+        anthropicBetaCreateMock.mockResolvedValueOnce({
+            content: [
+                {
+                    type: "compaction",
+                    content: "The user is planning a deployment.",
+                    encrypted_content: "opaque-compaction-state"
+                },
+                {
+                    type: "text",
+                    text: "I can continue from that summary."
+                }
+            ],
+            usage: {
+                input_tokens: 100,
+                output_tokens: 20
+            }
+        });
+
+        const model = new Anthropic({
+            model: "claude-sonnet-5",
+            apiKey: "test-key",
+            compaction: {
+                triggerTokens: 50000,
+                instructions: "Keep deployment decisions.",
+                pauseAfterCompaction: true
+            },
+            messages: [{ type: "user", content: "Plan a deployment." }]
+        });
+
+        const result = await model.invoke();
+
+        expect(anthropicBetaCreateMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                betas: ["compact-2026-01-12"],
+                context_management: {
+                    edits: [{
+                        type: "compact_20260112",
+                        trigger: { type: "input_tokens", value: 50000 },
+                        instructions: "Keep deployment decisions.",
+                        pause_after_compaction: true
+                    }]
+                }
+            }),
+            expect.objectContaining({ signal: undefined })
+        );
+        expect(result.messages).toContainEqual({
+            type: "compaction",
+            provider: "anthropic",
+            content: "The user is planning a deployment.",
+            encryptedContent: "opaque-compaction-state"
+        });
+    });
+
+    it("round-trips Anthropic compact blocks through a later request", async () => {
+        anthropicBetaCreateMock.mockResolvedValueOnce({
+            content: [{ type: "text", text: "Continued." }],
+            usage: { input_tokens: 12, output_tokens: 2 }
+        });
+
+        const model = new Anthropic({
+            model: "claude-sonnet-5",
+            apiKey: "test-key",
+            messages: [
+                {
+                    type: "compaction",
+                    provider: "anthropic",
+                    content: "Saved state",
+                    encryptedContent: "opaque-compaction-state"
+                },
+                { type: "user", content: "Continue." }
+            ]
+        });
+
+        await model.invoke();
+
+        expect(anthropicBetaCreateMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                messages: [
+                    {
+                        role: "assistant",
+                        content: [{
+                            type: "compaction",
+                            content: "Saved state",
+                            encrypted_content: "opaque-compaction-state"
+                        }]
+                    },
+                    { role: "user", content: "Continue." }
+                ]
+            }),
+            expect.objectContaining({ signal: undefined })
         );
     });
 
@@ -266,9 +374,53 @@ describe("Anthropic model wrapper", () => {
                         content: "Stream this response."
                     }
                 ]
-            })
+            }),
+            expect.objectContaining({ signal: undefined })
         );
         expect(iteratedEvents).toStrictEqual(streamEvents);
         expect(emittedEvents).toStrictEqual(streamEvents);
+    });
+
+    it("stops forwarding stream events after abort", async () => {
+        const streamEvents = [
+            { type: "message_start" },
+            { type: "content_block_delta", delta: { type: "text_delta", text: "ignored" } }
+        ];
+
+        anthropicStreamMock.mockReturnValueOnce({
+            async *[Symbol.asyncIterator]() {
+                for (const event of streamEvents) {
+                    yield event;
+                }
+            }
+        });
+
+        const controller = new AbortController();
+        const model = new Anthropic({
+            model: "claude-3-5-haiku-20241022",
+            apiKey: "test-key",
+            tools: [],
+            messages: [{ type: "user", content: "Stream this response." }]
+        });
+
+        const emittedEvents: unknown[] = [];
+        model.onEvent("stream", (event) => {
+            emittedEvents.push(event);
+            controller.abort();
+        });
+
+        const stream = await model.invoke({ stream: true, abort: controller.signal });
+        const iteratedEvents: unknown[] = [];
+
+        for await (const event of stream) {
+            iteratedEvents.push(event);
+        }
+
+        expect(anthropicStreamMock).toHaveBeenCalledWith(
+            expect.anything(),
+            { signal: controller.signal }
+        );
+        expect(iteratedEvents).toStrictEqual([streamEvents[0]]);
+        expect(emittedEvents).toStrictEqual([streamEvents[0]]);
     });
 });

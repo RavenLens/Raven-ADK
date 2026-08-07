@@ -1,4 +1,4 @@
-import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { CompactOptions, EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { GoogleGenAI } from "@google/genai";
 import type { 
     GenerateContentResponse, 
@@ -13,6 +13,7 @@ import { parseToolCallContentToParams, parseToolDescription, Tool } from "../age
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { compactMessagesWithStructuredOutput } from "./structuredOutput";
 
 export interface GoogleConfig extends LLMConfig {
     /** 
@@ -55,6 +56,7 @@ export class Google implements StandardLLMShema {
     private client: GoogleGenAI;
     private EventsListeners: Partial<{ [EventName in keyof GoogleAIEvents]: GoogleAIEvents[EventName] }> = {};
     config: GoogleConfig;
+    compactionMode: "manual" = "manual";
 
     constructor(config: GoogleConfig) {
         this.config = config;
@@ -237,6 +239,12 @@ export class Google implements StandardLLMShema {
                         parts: thinkingParts
                     });
                     break;
+                case "compaction":
+                    contents.push({
+                        role: "model",
+                        parts: [{ text: `Conversation summary: ${message.content ?? ""}` }]
+                    });
+                    break;
                 case "tool":
                     const googleToolContent = message.content;
                     const truncatedGoogleToolContent = googleToolContent.length > 60000
@@ -377,7 +385,10 @@ export class Google implements StandardLLMShema {
 
     private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>, abort?: AbortSignal) {
         for await (const event of stream) {
-            if (abort?.aborted) break;
+            if (abort?.aborted) {
+                return;
+            }
+
             this.emitEvent("stream", event);
 
             if (event.candidates?.[0]?.content?.parts) {
@@ -466,8 +477,18 @@ export class Google implements StandardLLMShema {
             setTools: (tools) => {
                 this.config.tools = tools;
             },
-            invoke: (opts) => this.invoke(opts),
+            invoke: (opts) => this.invoke({ ...opts, stream: false }),
             options
+        });
+    }
+
+    async compact(options?: CompactOptions) {
+        return compactMessagesWithStructuredOutput({
+            messages: options?.messages ?? this.config.messages ?? [],
+            abort: options?.abort,
+            invokeStructuredOutput: (schema, maxRecallTries, invokeOptions) => {
+                return this.invokeStructuredOutput(schema, maxRecallTries, invokeOptions);
+            }
         });
     }
 

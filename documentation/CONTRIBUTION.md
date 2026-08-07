@@ -12,13 +12,13 @@ By participating in this project, you are expected to uphold our Code of Conduct
 
 ### Reporting Bugs
 
-- Check the [GitHub Issues](https://github.com/RavenLens/Raven-SDK/issues) to see if the bug has already been reported.
-- If not, open a new issue. Include a clear title, a description of the problem, steps to reproduce, and any relevant logs or screenshots.
+* Check the [GitHub Issues](https://github.com/RavenLens/Raven-SDK/issues) to see if the bug has already been reported.
+* If not, open a new issue. Include a clear title, a description of the problem, steps to reproduce, and any relevant logs or screenshots.
 
 ### Suggesting Enhancements
 
-- Open a [GitHub Issue](https://github.com/RavenLens/Raven-SDK/issues) with the tag "enhancement".
-- Provide a clear description of the proposed feature and why it would be beneficial.
+* Open a [GitHub Issue](https://github.com/RavenLens/Raven-SDK/issues) with the tag "enhancement".
+* Provide a clear description of the proposed feature and why it would be beneficial.
 
 ### Pull Requests
 
@@ -32,8 +32,8 @@ By participating in this project, you are expected to uphold our Code of Conduct
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (Latest LTS recommended)
-- [npm](https://www.npmjs.com/)
+* [Node.js](https://nodejs.org/) (Latest LTS recommended)
+* [npm](https://www.npmjs.com/)
 
 ### Installation
 
@@ -63,17 +63,17 @@ Please ensure all tests pass before submitting a Pull Request. If you add new fu
 
 ## Coding Guidelines
 
-- **TypeScript**: Use TypeScript for all new code. Ensure types are properly defined.
-- **Style**: Follow the existing code style. We aim for clean, readable, and well-documented code.
-- **Events**: Since RavenADK is strongly based on events, ensure new features properly emit events where appropriate to support UI/UX integrations.
-- **Documentation**: If you change or add functionality, update the relevant documentation in the `documentation/` folder.
+* **TypeScript**: Use TypeScript for all new code. Ensure types are properly defined.
+* **Style**: Follow the existing code style. We aim for clean, readable, and well-documented code.
+* **Events**: Since RavenADK is strongly based on events, ensure new features properly emit events where appropriate to support UI/UX integrations.
+* **Documentation**: If you change or add functionality, update the relevant documentation in the `documentation/` folder.
 
 ## Commit Messages
 
-- Use clear and descriptive commit messages.
-- Reference issues if applicable (e.g., `fix: #123 resolve memory leak in ChromaDB store`).
-- Follow [Conventional Commits](https://www.conventionalcommits.org/) if possible.
+* Use clear and descriptive commit messages.
+* Reference issues if applicable (e.g., `fix: #123 resolve memory leak in ChromaDB store`).
+* Follow [Conventional Commits](https://www.conventionalcommits.org/) if possible.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [Apache-2.0 License](./LICENSE).
+By contributing, you agree that your contributions will be licensed under the [Apache-2.0 License](https://github.com/RavenLens/Raven-ADK/blob/main/documentation/LICENSE/README.md).

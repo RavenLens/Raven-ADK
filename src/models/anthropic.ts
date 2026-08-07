@@ -2,7 +2,7 @@ import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema }
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
 import { MessageParam, ToolUseBlock, TextBlock } from "@anthropic-ai/sdk/resources/messages";
 import { parseToolCallContentToParams, parseToolDescription, Tool } from "../agent/tools/tools";
-import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
+import { AIMessage, CompactionMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
@@ -18,6 +18,12 @@ export interface AnthropicConfig extends LLMConfig {
     thinking?: ThinkingConfigParam;
     /** As default max tokens are 1024 */
     max_tokens?: number;
+    /** Server-side compaction configuration for Anthropic's compact-2026-01-12 beta. */
+    compaction?: {
+        triggerTokens?: number;
+        instructions?: string;
+        pauseAfterCompaction?: boolean;
+    };
 }
 
 export interface AnthropicEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
@@ -36,6 +42,10 @@ export class Anthropic implements StandardLLMShema {
     private EventsListeners: Partial<{ [EventName in keyof AnthropicAIEvents]: AnthropicAIEvents[EventName] }> = {};
     baseURL?: string;
     config: AnthropicConfig;
+
+    get compactionMode(): "automatic" | undefined {
+        return this.config.compaction ? "automatic" : undefined;
+    }
     
     constructor(config: AnthropicConfig, baseURL?: string) {
         this.config = config;
@@ -162,6 +172,22 @@ export class Anthropic implements StandardLLMShema {
                                 }
                             ]
                         } satisfies MessageParam
+                    case "compaction":
+                        if (message.provider === "anthropic") {
+                            return {
+                                role: "assistant",
+                                content: [{
+                                    type: "compaction",
+                                    content: message.content ?? null,
+                                    encrypted_content: message.encryptedContent
+                                }]
+                            } as any;
+                        }
+
+                        return {
+                            role: "assistant",
+                            content: `Conversation summary: ${message.content ?? ""}`
+                        } satisfies MessageParam;
                     case "tool":
                         const anthropicToolContent = message.content;
                         const truncatedAnthropicToolContent = anthropicToolContent.length > 60000
@@ -195,6 +221,12 @@ export class Anthropic implements StandardLLMShema {
         }
 
         return systemMessages.join("\n\n");
+    }
+
+    private hasAnthropicCompaction(): boolean {
+        return !!this.config.compaction || (this.config.messages ?? []).some((message) => {
+            return message.type === "compaction" && message.provider === "anthropic";
+        });
     }
 
     private prepareTools(toolsOverride?: Tool<any, any>[]): AnthropicStandalone.Messages.Tool[] {
@@ -239,7 +271,10 @@ export class Anthropic implements StandardLLMShema {
     
     private async *streamWithEvents(stream: AsyncIterable<AnthropicStandalone.Messages.RawMessageStreamEvent>, abort?: AbortSignal) {
         for await (const event of stream) {
-            if (abort?.aborted) break;
+            if (abort?.aborted) {
+                return;
+            }
+
             this.emitEvent("stream", event);
 
             if (event.type === "content_block_delta" && event.delta.type === "thinking_delta") {
@@ -278,6 +313,14 @@ export class Anthropic implements StandardLLMShema {
                 content: content.thinking,
                 signature: content.signature
             })) : null;
+        const compactionMessages: CompactionMessage[] = completion.content
+            .filter((content: any) => content.type === "compaction")
+            .map((content: any) => ({
+                type: "compaction",
+                provider: "anthropic",
+                content: content.content ?? null,
+                encryptedContent: content.encrypted_content
+            }));
 
         if (thinkingReasonMessage && thinkingReasonMessage.length > 0) {
             this.emitEvent("reasoning", thinkingReasonMessage.map(t => t.content).join("\n"));
@@ -322,6 +365,7 @@ export class Anthropic implements StandardLLMShema {
         return {
             messages: [
                 ...(this.config.messages ?? []),
+                ...compactionMessages,
                 ...answer
             ],
             answer,
@@ -354,6 +398,36 @@ export class Anthropic implements StandardLLMShema {
             tools: this.prepareTools(options?.tools),
             thinking: thinking as any
         }
+
+        if (this.hasAnthropicCompaction()) {
+            const compaction = this.config.compaction;
+            const betaConfig = {
+                ...config,
+                betas: ["compact-2026-01-12"],
+                context_management: {
+                    edits: [{
+                        type: "compact_20260112",
+                        ...(compaction?.triggerTokens ? {
+                            trigger: {
+                                type: "input_tokens",
+                                value: compaction.triggerTokens
+                            }
+                        } : {}),
+                        ...(compaction?.instructions ? { instructions: compaction.instructions } : {}),
+                        ...(compaction?.pauseAfterCompaction ? { pause_after_compaction: true } : {})
+                    }]
+                }
+            };
+            const betaMessages = (this.anthropic as any).beta.messages;
+
+            if (options?.stream) {
+                const streamCompletion = betaMessages.stream(betaConfig, { signal: options?.abort });
+                return this.streamWithEvents(streamCompletion, options?.abort) as any;
+            }
+
+            const completion = await betaMessages.create(betaConfig, { signal: options?.abort });
+            return this.prepareSyncAnswer(completion as any);
+        }
         
         if (options?.stream) {
             const streamCompletion = this.anthropic.messages.stream(config, { signal: options?.abort });
@@ -377,7 +451,7 @@ export class Anthropic implements StandardLLMShema {
             setTools: (tools) => {
                 this.config.tools = tools;
             },
-            invoke: (opts) => this.invoke(opts),
+            invoke: (opts) => this.invoke({ ...opts, stream: false }),
             options
         });
     }

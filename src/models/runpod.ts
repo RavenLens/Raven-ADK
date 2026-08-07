@@ -1,8 +1,9 @@
 import runpodSdk from "runpod-sdk";
 import * as z from "zod";
 import { AIMessage, ResponseInputVideo } from "../agent/state";
-import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { CompactOptions, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { compactMessagesWithStructuredOutput } from "./structuredOutput";
 
 export interface RunPodConfig extends LLMConfig {
 	endpointId: string;
@@ -45,6 +46,7 @@ export class RunPod implements StandardLLMShema {
 	apiName = { custom: "RunPod" } as const;
 	config: RunPodConfig;
 	baseURL?: string;
+	compactionMode: "manual" = "manual";
 
 	private endpoint: RunPodEndpoint;
 
@@ -80,7 +82,7 @@ export class RunPod implements StandardLLMShema {
 		}
 
 		const requiresStructuredMessages = this.config.messages?.some((message) => {
-			return message.type === "ai" || message.type === "thinking" || message.type === "tool";
+			return message.type === "ai" || message.type === "thinking" || message.type === "tool" || message.type === "compaction";
 		});
 
 		return requiresStructuredMessages ? "messages" : "prompt";
@@ -122,6 +124,11 @@ export class RunPod implements StandardLLMShema {
 						role: "assistant",
 						content: `Assistant thoughts: ${message.content}`
 					};
+				case "compaction":
+					return {
+						role: "assistant",
+						content: `Conversation summary: ${message.content ?? ""}`
+					};
 				case "tool":
 					const runpodToolContent = message.toolOutput ?? message.content;
 					const truncatedRunpodToolContent = runpodToolContent.length > 60000
@@ -162,6 +169,8 @@ export class RunPod implements StandardLLMShema {
 					return `Assistant: ${message.content ?? ""}`;
 				case "thinking":
 					return `Assistant thoughts: ${message.content}`;
+				case "compaction":
+					return `Conversation summary: ${message.content ?? ""}`;
 				case "tool":
 					const toolText = message.toolOutput ?? message.content;
 					const truncatedToolText = toolText.length > 60000
@@ -414,6 +423,10 @@ export class RunPod implements StandardLLMShema {
 	}
 
 	async *stream(options?: InvokeOptions): AsyncGenerator<unknown, void, unknown> {
+		if (options?.abort?.aborted) {
+			return;
+		}
+
 		if (options?.messages) {
 			this.config.messages = options.messages;
 		}
@@ -425,8 +438,9 @@ export class RunPod implements StandardLLMShema {
 
 		for await (const chunk of this.endpoint.stream(request.id, this.config.streamTimeout)) {
 			if (options?.abort?.aborted) {
-				break;
+				return;
 			}
+
 			yield chunk;
 		}
 	}
@@ -467,8 +481,18 @@ export class RunPod implements StandardLLMShema {
 			setTools: (tools) => {
 				this.config.tools = tools;
 			},
-			invoke: (opts) => this.invoke(opts),
+			invoke: (opts) => this.invoke({ ...opts, stream: false }),
 			options
+		});
+	}
+
+	async compact(options?: CompactOptions) {
+		return compactMessagesWithStructuredOutput({
+			messages: options?.messages ?? this.config.messages ?? [],
+			abort: options?.abort,
+			invokeStructuredOutput: (schema, maxRecallTries, invokeOptions) => {
+				return this.invokeStructuredOutput(schema, maxRecallTries, invokeOptions);
+			}
 		});
 	}
 

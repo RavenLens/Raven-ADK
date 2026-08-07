@@ -1,10 +1,20 @@
 import * as z from "zod";
-import { AIMessage, MessagesVariations } from "../agent/state";
-import { LLMAnswer } from "./mutual";
+import { AIMessage, CompactionMessage, MessagesVariations } from "../agent/state";
+import { InvokeOptions, LLMAnswer } from "./mutual";
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = [
     "Return only valid JSON that matches the requested schema.",
     "Do not wrap the response in markdown, code fences, or explanations."
+].join("\n");
+
+export const COMPACTION_SUMMARY_SCHEMA = z.object({
+    summary: z.string().min(1)
+});
+
+const COMPACTION_SYSTEM_PROMPT = [
+    "Create a compact but durable conversation summary for a future model call.",
+    "Preserve the user's goals, decisions, constraints, facts, tool results, unfinished work, and exact identifiers needed to continue.",
+    "Do not include chain-of-thought or invent information."
 ].join("\n");
 
 function createStructuredOutputMessages(
@@ -99,6 +109,45 @@ export function parseStructuredOutputContent(content: string, schema: z.ZodTypeA
     return validationResult.data;
 }
 
+/** 
+ * Use to compact the messages with the sturctured output form
+ * 
+ * ### Used by:
+ * 
+ * 
+ * ### Work behaviour:
+ * * Result comes as the "summary" field that is pasted to `compaction` message type attached to the chat
+*/
+export async function compactMessagesWithStructuredOutput(params: {
+    messages: MessagesVariations[];
+    abort?: AbortSignal;
+    invokeStructuredOutput: (schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions) => Promise<LLMAnswer>;
+}): Promise<CompactionMessage[]> {
+    const result = await params.invokeStructuredOutput(COMPACTION_SUMMARY_SCHEMA, 0, {
+        messages: [
+            {
+                type: "system",
+                content: COMPACTION_SYSTEM_PROMPT
+            },
+            ...params.messages
+        ],
+        tools: [],
+        abort: params.abort
+    });
+    const aiMessage = extractStructuredOutputAIMessage(result);
+    const structuredOutput = aiMessage.structuredOutput as { summary?: unknown } | undefined;
+
+    if (typeof structuredOutput?.summary !== "string" || !structuredOutput.summary.trim()) {
+        throw new Error("Structured compaction did not return a summary.");
+    }
+
+    return [{
+        type: "compaction",
+        provider: "summary",
+        content: structuredOutput.summary
+    }];
+}
+
 function attachStructuredOutput(answer: LLMAnswer, structuredOutput: unknown): LLMAnswer {
     return {
         ...answer,
@@ -137,14 +186,16 @@ export async function invokeStructuredOutputWithRetries<TTools>(params: {
 }): Promise<LLMAnswer> {
     const originalMessages = params.messages;
     const originalTools = params.getTools();
+    const messagesToProcess = params.options?.messages ?? originalMessages;
     const maxRetries = params.maxRecallTries ?? 3;
     let lastError: Error | null = null;
+    const { messages: _messages, tools: _tools, ...invokeOptions } = params.options ?? {};
 
     try {
         for (let attempt = 0; attempt <= maxRetries; attempt++) {
             params.setMessages(
                 createStructuredOutputMessages(
-                    originalMessages,
+                    messagesToProcess,
                     params.schema,
                     attempt > 0 && lastError ? lastError.message : undefined
                 )
@@ -152,7 +203,7 @@ export async function invokeStructuredOutputWithRetries<TTools>(params: {
             params.setTools([] as unknown as TTools);
 
             try {
-                const answer = await params.invoke(params.options);
+                const answer = await params.invoke(invokeOptions);
                 const aiMessage = extractStructuredOutputAIMessage(answer);
                 const structuredOutput = parseStructuredOutputContent(aiMessage.content ?? "", params.schema);
 
@@ -163,7 +214,7 @@ export async function invokeStructuredOutputWithRetries<TTools>(params: {
         }
     } finally {
         params.setMessages(originalMessages);
-        params.setTools(originalTools);
+        params.setTools(originalTools as TTools);
     }
 
     throw new Error(

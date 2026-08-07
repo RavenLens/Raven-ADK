@@ -6,6 +6,7 @@
     *   - tokenizer has to be aware of model tokenizer
     *   - instruction what to compress and what to maintain - user can override the default one
 */
+import { StandardLLMShema } from "../../models/mutual";
 import { ReActAgentPluginSpec } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
 
@@ -65,6 +66,31 @@ export function generateCompressReActAgentPlugin(
                 toolResponses: 0,
                 mediaAndFiles: 0,
             }
+
+            let latestCompactionIndex = -1;
+            for (let index = 0; index < agentConfig.messages.length; index++) {
+                if (agentConfig.messages[index].type === "compaction") {
+                    latestCompactionIndex = index;
+                }
+            }
+
+            if (latestCompactionIndex >= 0) {
+                const systemMessages = agentConfig.messages.filter((message) => message.type === "system");
+                const messagesAfterCompaction = agentConfig.messages.slice(latestCompactionIndex);
+                const compactedHistory = [...systemMessages, ...messagesAfterCompaction];
+
+                if (compactedHistory.length !== agentConfig.messages.length) {
+                    return {
+                        status: true,
+                        result: {
+                            agentConfig: {
+                                ...agentConfig,
+                                messages: compactedHistory
+                            }
+                        }
+                    };
+                }
+            }
             
             for (const message of agentConfig.messages) {
                 switch(message.type) {
@@ -77,6 +103,14 @@ export function generateCompressReActAgentPlugin(
                     case "thinking":{
                         const tokenizerOutcome = await safeTokenize(message.content, tokenizer);
                         tokens.thinking += tokenizerOutcome;
+                    }
+                        break;
+
+                    case "compaction": {
+                        const compactedContent = message.content
+                            ?? message.encryptedContent
+                            ?? JSON.stringify(message.items ?? []);
+                        tokens.aiResponses += await safeTokenize(compactedContent, tokenizer);
                     }
                         break;
                     
@@ -269,6 +303,30 @@ export function generateCompressReActAgentPlugin(
                     const preserveCount = 4;
                     const messagesToCompact = otherMessages.slice(0, -preserveCount);
                     const messagesToPreserve = otherMessages.slice(-preserveCount);
+                    const compactableModel = agentConfig.model as StandardLLMShema;
+
+                    if (compactableModel.compactionMode === "automatic") {
+                        return {
+                            status: false
+                        };
+                    }
+
+                    if (compactableModel.compact) {
+                        const compactedMessages = await compactableModel.compact({
+                            messages: messagesToCompact,
+                            abort: agentConfig.abort
+                        });
+
+                        return {
+                            status: true,
+                            result: {
+                                agentConfig: {
+                                    ...agentConfig,
+                                    messages: [...systemMessages, ...compactedMessages, ...messagesToPreserve]
+                                }
+                            }
+                        };
+                    }
 
                     const compactedList: MessagesVariations[] = [];
 

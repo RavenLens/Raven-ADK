@@ -1,12 +1,13 @@
-import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { CompactOptions, EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
 import type * as ChatAPI from "openai/resources/chat/completions";
 import { parseToolCallContentToParams, parseToolDescription, Tool } from "../agent/tools/tools";
-import { AIMessage, ToolMessage, ResponseInputVideo, ReasoningMessage } from "../agent/state";
+import { AIMessage, CompactionMessage, ToolMessage, ResponseInputVideo, ReasoningMessage, MessagesVariations } from "../agent/state";
 import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { compactMessagesWithStructuredOutput } from "./structuredOutput";
 import { randomUUID } from "node:crypto";
 
 export interface OpenAIConfig extends LLMConfig {
@@ -16,6 +17,10 @@ export interface OpenAIConfig extends LLMConfig {
      * Useful for base models that don't support chat templates.
      */
     useCompletionsApi?: boolean;
+    /** Enables OpenAI Responses API server-side compaction. */
+    compaction?: {
+        compactThreshold: number;
+    };
 }
 
 export interface OpenAIEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
@@ -37,6 +42,7 @@ export class OpenAI implements StandardLLMShema {
     private EventsListeners: Partial<{ [EventName in keyof OpenAIEvents]: OpenAIEvents[EventName] }> = {};
     config: OpenAIConfig;
     baseURL?: string;
+    compactionMode: "manual" = "manual";
 
     constructor(config: OpenAIConfig, baseURL?: string) {
         this.config = config;
@@ -81,11 +87,11 @@ export class OpenAI implements StandardLLMShema {
     }
 
     /** Parse messages and return in Responses API format */
-    private prepareInput(): ResponsesAPI.ResponseInputItem[] {
+    private prepareInput(messages: MessagesVariations[] = this.config.messages ?? []): ResponsesAPI.ResponseInputItem[] {
         const MAX_TOKEN_SIZE = 60000; // ~60KB limit for individual fields
         const truncate = (str: string) => str.length > MAX_TOKEN_SIZE ? str.slice(0, MAX_TOKEN_SIZE) + "... [Truncated due to size limits]" : str;
 
-        const inputItems = this.config.messages?.flatMap((message): any[] => { // Parse messages to openai compatible format
+        const inputItems = messages.flatMap((message): any[] => { // Parse messages to openai compatible format
             switch(message.type) {
                 case "system":
                     return [{
@@ -125,6 +131,17 @@ export class OpenAI implements StandardLLMShema {
                     return [{
                         role: "assistant",
                         content: `Assistant thoughts: ${message.content}`
+                    } satisfies ResponsesAPI.EasyInputMessage]
+                case "compaction":
+                    if (message.provider === "openai") {
+                        return message.items ?? [{
+                            type: "compaction",
+                            encrypted_content: message.encryptedContent
+                        }];
+                    }
+                    return [{
+                        role: "assistant",
+                        content: `Conversation summary: ${message.content ?? ""}`
                     } satisfies ResponsesAPI.EasyInputMessage]
                 case "tool":
                     // The 'input' field for a call should be the original arguments (JSON string)
@@ -238,6 +255,11 @@ export class OpenAI implements StandardLLMShema {
                         role: "assistant",
                         content: `Assistant thoughts: ${message.content}`
                     } satisfies ChatAPI.ChatCompletionAssistantMessageParam
+                case "compaction":
+                    return {
+                        role: "assistant",
+                        content: `Conversation summary: ${message.content ?? ""}`
+                    } satisfies ChatAPI.ChatCompletionAssistantMessageParam
                 case "tool":
                     const toolContent = message.toolOutput ?? message.toolError ?? message.content;
                     const truncatedToolContent = toolContent.length > 60000
@@ -274,7 +296,7 @@ export class OpenAI implements StandardLLMShema {
     }
 
     private prepareCreatePayload(reasoning?: InvokeOptions["reasoning"], toolsOverride?: Tool<any, any>[]): Omit<ResponsesAPI.ResponseCreateParamsBase, "stream"> {
-        return {
+        const payload: any = {
             model: this.config.model,
             reasoning: {
                 effort: reasoning?.effort ?? this.config.reasoningEffort ?? undefined
@@ -282,6 +304,15 @@ export class OpenAI implements StandardLLMShema {
             input: this.prepareInput(),
             tools: this.prepareTools(toolsOverride)
         };
+
+        if (this.config.compaction) {
+            payload.context_management = [{
+                type: "compaction",
+                compact_threshold: this.config.compaction.compactThreshold
+            }];
+        }
+
+        return payload;
     }
 
     private parseResponseToAnswer(response: ResponsesAPI.Response): LLMAnswer {
@@ -291,6 +322,14 @@ export class OpenAI implements StandardLLMShema {
             outputItem.type === "custom_tool_call" || 
             outputItem.type === "function_call"
         );
+        const compactionMessages: CompactionMessage[] = response.output
+            .filter((outputItem: any) => outputItem.type === "compaction")
+            .map((outputItem: any) => ({
+                type: "compaction",
+                provider: "openai",
+                encryptedContent: outputItem.encrypted_content,
+                items: [outputItem]
+            }));
 
         // Map output for answer
         const calledToolsMessage = answerTools.map(toolCall => {
@@ -370,6 +409,7 @@ export class OpenAI implements StandardLLMShema {
             messages: [
                 // Standalone messages
                 ...(this.config.messages ?? []),
+                ...compactionMessages,
                 // AI answer
                 ...answer
             ],
@@ -480,7 +520,10 @@ export class OpenAI implements StandardLLMShema {
 
     private async *streamWithEvents(stream: AsyncIterable<ResponsesAPI.ResponseStreamEvent>, abort?: AbortSignal) {
         for await (const event of stream) {
-            if (abort?.aborted) break;
+            if (abort?.aborted) {
+                return;
+            }
+
             this.emitEvent("stream", event);
 
             const eventAny = event as any;
@@ -562,9 +605,42 @@ export class OpenAI implements StandardLLMShema {
             setTools: (tools) => {
                 this.config.tools = tools;
             },
-            invoke: (opts) => this.invoke(opts),
+            invoke: (opts) => this.invoke({ ...opts, stream: false }),
             options
         });
+    }
+
+    async compact(options?: CompactOptions): Promise<MessagesVariations[]> {
+        const messages = options?.messages ?? this.config.messages ?? [];
+
+        if (!messages.length) {
+            return [];
+        }
+
+        if (this.isLegacy || typeof (this.openai.responses as any).compact !== "function") {
+            return compactMessagesWithStructuredOutput({
+                messages,
+                abort: options?.abort,
+                invokeStructuredOutput: (schema, maxRecallTries, invokeOptions) => {
+                    return this.invokeStructuredOutput(schema, maxRecallTries, invokeOptions);
+                }
+            });
+        }
+
+        const compacted = await (this.openai.responses as any).compact({
+            model: this.config.model,
+            input: this.prepareInput(messages)
+        }, { signal: options?.abort });
+
+        if (!Array.isArray(compacted.output) || !compacted.output.length) {
+            throw new Error("OpenAI compaction returned no context items.");
+        }
+
+        return [{
+            type: "compaction",
+            provider: "openai",
+            items: compacted.output
+        }];
     }
 
     async tts(text: string, options: OpenAIStandalone.Audio.Speech.SpeechCreateParams): Promise<Buffer> {
