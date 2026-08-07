@@ -5,11 +5,11 @@ import { HITLConfigSchema, HITLTransportSchema, ToolUsageConfObject } from "../t
 import { AgentModel, ReActAgentEvents, ReActAgentInvokeResult, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
 import { SchemaSkillStore } from "../skills/stores/schema";
-import { SchemaMemoryStore } from "../memory/stores/schema";
+import { SkillSharedConfig } from "../skills/skills";
+import { DeterministicMemorySchema } from "../memory/schema/deterministicMemorySchema";
 import { AvatarOneStepPipeline, AvatarTwoStepPipeline } from "./live-avatar.pipelines";
 import { ParsedUrlQuery } from "node:querystring";
 import { STTModel, STTMode } from "./stt";
-import { MutliMemoryObject } from "../memory/memory";
 import { IncomingHttpHeaders } from "node:http";
 import { SpeechLevel } from "./agent";
 
@@ -19,25 +19,18 @@ import { SpeechLevel } from "./agent";
  * * Specify object to give agent additional instructions about plugin execution
  * @default false
 */
-export type VoiceAgentDescriptionConfig = boolean | {
-  /** 
-   * Whether to say the plugin execution
-   * Use as additional knob to disable some tool / thing execution
-   * Setup as `false` to stop talking
-   * @default {undefined} - it always will be told in default
-  */
-  sayAloud?: boolean;
-  /** 
-   * Give instruction to `agent.models.transcriber` regard how to describe the operation
-   * 
-   * Usable only when `sayLoud` isn't `false` and `communicationSpeechLevels` property matches to the specification level and when `agent.models.transcriber` is specified and with level has in space this action
-  */
-  describeVoiceInstruction?: string;
-}
+export type VoiceAgentDescriptionConfig = any;
 
 export type ConfigLessSchemaSkillsStore = Omit<SchemaSkillStore, "config">;
+type SchemaMemoryConfig = {
+  hasToRemember?: string;
+  conclusion?: { maxCharacters: number };
+};
+type SchemaMemoryStore = DeterministicMemorySchema & {
+  config: SchemaMemoryConfig;
+};
 export interface RealTimeVoiceAgentSkillsSchema extends ConfigLessSchemaSkillsStore {
-    config: SchemaMemoryStore["config"] & {
+  config: SkillSharedConfig & {
       /**
        * Give description for specific action that has to be communicated
        * @default - no action is communicated has to be specified each action that has to be communicated
@@ -49,18 +42,36 @@ export interface RealTimeVoiceAgentSkillsSchema extends ConfigLessSchemaSkillsSt
 export type SpeakPositionRecordKeys = "speakBefore" | "speakAfter";
 export type SpeakBeforeAfter<ConfigExtenstion extends Record<string, any> = {}> = Partial<Record<SpeakPositionRecordKeys, VoiceAgentDescriptionConfig & ConfigExtenstion>>;
 
-export type ConfigLessSchemaMemoryStore = Omit<SchemaMemoryStore, "config">;
+export type ConfigLessSchemaMemoryStore = Omit<SchemaMemoryStore, "config"> & Record<string, unknown>;
+export interface MutliMemoryObject {
+  name: string;
+  purpose: string;
+}
+/** Canonical memory operations exposed to the RealTimeVoiceAgent speech layer. */
+export type RealTimeVoiceMemoryOperation =
+  | "fetch"
+  | "save"
+  | "update"
+  | "delete"
+  | "select"
+  | "feedback"
+  | "get_conclusion"
+  | "set_conclusion";
 type SpeakBeforeAfterWithMemoryDescription = SpeakBeforeAfter<{
   /** The result is available only for `speakAfter`. */
-  defaultInstruction?: string | ((memoryName: string, action: Parameters<ReActAgentEvents["memory_action"]>[0], details: Record<string, any>, result?: any) => Promise<string> | string);
+  defaultInstruction?: string | ((memoryName: string, action: RealTimeVoiceMemoryOperation | Parameters<ReActAgentEvents["memory_action"]>[0], details: Record<string, any>, result?: any) => Promise<string> | string);
 }>;
+export interface RealTimeVoiceMemorySpeechConfig {
+  actions?: Partial<Record<RealTimeVoiceMemoryOperation, SpeakBeforeAfterWithMemoryDescription>>;
+  tools?: Partial<Record<"fetch" | "update", SpeakBeforeAfterWithMemoryDescription>>;
+}
 export interface RealTimeVoiceAgentSchemaMemoryStore extends ConfigLessSchemaMemoryStore {
     config: SchemaMemoryStore["config"] & {
       /**
        * Give description for specific action that has to be communicated
        * @default - no action is communicated if desired specify object for specific action
        */
-      actionsVoiceDescriptionInstruction: Partial<Record<keyof ConfigLessSchemaMemoryStore, SpeakBeforeAfterWithMemoryDescription>>;
+      actionsVoiceDescriptionInstruction: Partial<Record<RealTimeVoiceMemoryOperation | keyof ConfigLessSchemaMemoryStore, SpeakBeforeAfterWithMemoryDescription>>;
     }
 }
 
@@ -95,7 +106,7 @@ type SpeakBeforeAfterWithSubagentDescription = SpeakBeforeAfter<{
   toolCalls?: SpeakBeforeAfterWithToolDescription;
 };
 
-export interface RealTimeVoiceSubAgent extends SubAgent {
+export type RealTimeVoiceSubAgent = SubAgent & {
     /**
      * Whether to describe agent execution and if desired how.
      * @default false
@@ -382,9 +393,14 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     messages: MessagesVariations[];
     skills?: UnitDependencyWrapper<RealTimeVoiceAgentSkills>;
     /** Memory version with transcription definition */
-    memory?: UnitDependencyWrapper<Memory | ({
-      memory: Memory;
-    } & MutliMemoryObject)[]>;
+    memory?: {
+      /** Specify the memory object */
+      interface: UnitDependencyWrapper<Memory | ({
+        memory: Memory;
+      } & MutliMemoryObject)[]>;
+      /** Voice descriptions for deterministic actions and tool-based memory tools, keyed by memory name. */
+      memorySpeech?: Partial<Record<string, RealTimeVoiceMemorySpeechConfig>>;
+    };
     /** Tools have defined description instruction */
     tools: RealTimeVoiceAgentTool<any, any>[];
     /** 
@@ -428,4 +444,4 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
    * @default "production"
   */
   operationMode?: "dev" | "production";
-}
+};

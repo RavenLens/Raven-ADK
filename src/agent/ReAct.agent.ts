@@ -133,6 +133,14 @@ export interface ReActAgentPluginSpec {
     */
     executionWay: PluginExecutionWays | PluginExecutionWays[];
     /**
+     * Specify the errors handling methods
+     * - "abort-agent" - stops agent execution, emits events: "plugin_result", "plugin_error"
+     * - "log" - logs the error to agent explaining that 
+     * - "ignore" - doesn't communicate to agent the error status - as message, 
+     * @default "log"
+    */
+    errorHandling?: "abort-agent" | "log" | "ignore";
+    /**
      * Runs the plugin logic 
      * @param executionPlace - it's singular place from where execution happens - it can be singular atime
      * @returns Execution status and changed/unchanged state of agent is assigned in place of prior state, When success is `false` then doesn't use a result to override the agent state
@@ -184,7 +192,21 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     abort?: AbortSignal;
 }
 
-interface ReActAgentEvents extends SkillEvents {
+type PluginExecutionResult = Awaited<
+    ReturnType<ReActAgentPluginSpec["execute"]>
+>;
+
+type PluginResultEvent =
+    | {
+        status: "success";
+        result: PluginExecutionResult;
+    }
+    | {
+        status: "error";
+        error: unknown;
+    };
+
+export interface ReActAgentEvents extends SkillEvents {
     llm_result: (result: LLMAnswer) => void | Promise<void>;
     tool_invoked: (toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
     tool_executed: (toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
@@ -199,9 +221,23 @@ interface ReActAgentEvents extends SkillEvents {
     concluding_start: () => void | Promise<void>;
     concluding_end: (conclusion: string) => void | Promise<void>;
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
-    plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => void | Promise<void>;
+    plugin_error: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], error: unknown) => void | Promise<void>;
+    plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: PluginResultEvent) => void | Promise<void>;
+    subagent_called: (role: string, instruction: string) => void | Promise<void>;
+    subagent_result: (role: string, instruction: string, result: ReActAgentInvokeResult) => void | Promise<void>;
+    subagent_reasoning: (role: string, content: string) => void | Promise<void>;
+    subagent_tool_invoked: (role: string, toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
+    subagent_tool_executed: (role: string, toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
+    hitl_triggered: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>) => void | Promise<void>;
+    hitl_result: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>, result: any) => void | Promise<void>;
+    hitl_tool_approval: (toolName: string, allowance: Record<string, any>) => void | Promise<void>;
+    memory_action: (action: "fetch" | "save" | "get_conclusion" | "set_conclusion", memoryName: string, details: Record<string, any>, result?: any) => void | Promise<void>;
+    memory_fetch: (memoryName: string, params: Record<string, any>, result: any) => void | Promise<void>;
+    memory_save: (memoryName: string, record: any, result: any) => void | Promise<void>;
+    memory_get_conclusion: (memoryName: string, conclusion: string) => void | Promise<void>;
+    memory_set_conclusion: (memoryName: string, content: string, status: boolean) => void | Promise<void>;
 }
-interface ReActAgentInvokeResult {
+export interface ReActAgentInvokeResult {
 
     messages: MessagesVariations[];
     state: AgentMessagesGraphState;
@@ -253,6 +289,7 @@ export type ReActAgentStreamChunk = {
 }[keyof ReActAgentStreamEventMap];
 
 type ReActAgentStreamListener = (event: ReActAgentStreamChunk) => void;
+type ReActAgentAnyEventListener = (eventName: keyof ReActAgentEvents, ...args: any[]) => void | Promise<void>;
 type AbortableOperationResult<Result> = Result | typeof ABORTED_OPERATION;
 
 const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
@@ -286,6 +323,9 @@ const CONCLUSION_SYSTEM_PROMPT = [
     "Use tool results and prior reasoning as evidence.",
     "Return only the conclusion text."
 ].join("\n");
+
+/** Specifies how is handled error in plugin */
+const DEFAULT_ERROR_HANDLING: ReActAgentPluginSpec["errorHandling"] = "log";
 
 interface ReActAgentAbortableContext {
     getAbortSignal: () => AbortSignal | undefined;
@@ -443,6 +483,7 @@ export class ReActAgent
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private readonly abortable: ReActAgentAbortable;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private AnyEventListeners: Set<ReActAgentAnyEventListener> = new Set();
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
@@ -1902,10 +1943,21 @@ ${deterministicMemoryAwareness}`;
         return this;
     }
 
+    onAnyEvent(eventListener: ReActAgentAnyEventListener): this {
+        this.AnyEventListeners.add(eventListener);
+        return this;
+    }
+
     protected emitEvent<EventName extends keyof ReActAgentEvents>(
         eventName: EventName,
         ...eventArgs: Parameters<ReActAgentEvents[EventName]>
     ) {
+        this.AnyEventListeners.forEach(listener => {
+            void Promise.resolve(listener(eventName, ...eventArgs)).catch((error) => {
+                console.warn(`Any-event listener for "${String(eventName)}" failed during execution.`, error);
+            });
+        });
+
         const streamEvent = this.mapEventToStreamChunk(eventName, ...eventArgs);
 
         // Emit stream event
@@ -1934,11 +1986,11 @@ ${deterministicMemoryAwareness}`;
         };
     }
 
-    /** It's responsible to run agent plugins have the specific execution way
-     * 
-     * TODO: Add error resistant plugin execution behaviour as default and ignoring as option
-    */
-    private async runPlugins(executionWay: PluginExecutionWays, executionFrom?: Omit<ExecutionFrom, "way">) {
+    /** It's responsible to run agent plugins have the specific execution way */
+    private async runPlugins(
+        executionWay: PluginExecutionWays,
+        executionFrom?: Omit<ExecutionFrom, "way">,
+    ) {
         const pluginsToRun = this.agentConfig.plugins?.filter(plugin => plugin.executionWay instanceof Array ? plugin.executionWay.includes(executionWay) : plugin.executionWay === executionWay);
         if (pluginsToRun?.length) {
             for (const plugin of pluginsToRun) {
@@ -1949,18 +2001,81 @@ ${deterministicMemoryAwareness}`;
                 this.emitEvent("plugin_invoking", plugin.name, executionWay);
                 
                 const executionFromObjPass: ExecutionFrom = executionFrom ? { ...executionFrom, way: executionWay } : { way: executionWay, nodeType: "aside" };
-                const runResult = await plugin.execute(executionFromObjPass, this.agentConfig, this.AgentGraph.graphState);
 
-                if (this.abortable.isAbortRequested()) {
-                    return;
+                const handlePluginExecuted = ({ error, runResult }: {
+                    error?: unknown;
+                    runResult?: Awaited<ReturnType<(typeof plugin)["execute"]>>
+                }) => {
+                    this.emitEvent(
+                        "plugin_result",
+                        plugin.name,
+                        executionWay,
+                        // Emit with error or with the success
+                        error ? 
+                        {
+                            status: "error",
+                            error
+                        }
+                        :
+                        {
+                            status: "success",
+                            result: runResult!
+                        }
+                    );
+    
+                    if (error) {
+                        this.emitEvent("plugin_error",  plugin.name, executionWay, error)
+                    }
+                    
+                    if (runResult?.status) {
+                        if (runResult.result?.agentConfig) {
+                            this.agentConfig = runResult.result.agentConfig as ReActAgentConfig<Skills, Memory, HITL>;
+                        }
+                        if (runResult.result?.graphState) this.AgentGraph.graphState = runResult.result.graphState;
+                    }
+                }
+
+                try {
+                    const runResultExecution = await this.abortable.runAbortable(() => plugin.execute(
+                        executionFromObjPass,
+                        this.agentConfig,
+                        this.AgentGraph.graphState
+                    ));
+
+                    if (runResultExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
+                        return;
+                    }
+
+                    const runResult = runResultExecution;
+                    handlePluginExecuted({ runResult });
+
+                    if (this.abortable.isAbortRequested()) {
+                        return;
+                    }
+
+                }
+                catch(err) {
+                    handlePluginExecuted({ error: err });
+
+                    switch(plugin.errorHandling ?? DEFAULT_ERROR_HANDLING) {
+                        case "abort-agent":
+                            throw err;
+
+                        case "log": {
+                            const errorMessage = err instanceof Error ? err.message : String(err);
+
+                            this.agentConfig.messages.push({
+                                type: "user",
+                                content: `Plugin "${plugin.name}" failed during "${executionWay}": ${errorMessage}. Continue without relying on this plugin.`
+                            });
+                            break;
+                        }
+
+                        case "ignore":
+                            break;
+                    }
                 }
                 
-                this.emitEvent("plugin_result", plugin.name, executionWay, runResult);
-
-                if (runResult.status) {
-                    if (runResult.result?.agentConfig) this.agentConfig = runResult.result.agentConfig;
-                    if (runResult.result?.graphState) this.AgentGraph.graphState = runResult.result.graphState;
-                }
             }
         }
     }
@@ -1993,6 +2108,10 @@ ${deterministicMemoryAwareness}`;
         const entries = Array.isArray(configuredMemory) ? configuredMemory : [configuredMemory];
         for (const entry of entries) {
             const memory = isConfiguredMemoryDescriptor(entry) ? entry.memory : entry;
+            if (!memory.typeMemory && typeof (memory as any).fetchMemory === "function") {
+                this.registerCustomMemoryTools(memory as any);
+                continue;
+            }
             if (memory.typeMemory !== "toolBased") {
                 continue;
             }
@@ -2011,6 +2130,50 @@ ${deterministicMemoryAwareness}`;
         }
     }
 
+    private registerCustomMemoryTools(memory: {
+        config: { name?: string; purpose?: string };
+        fetchMemory?: (params: Record<string, unknown>) => Promise<unknown> | unknown;
+        saveMemory?: (record: Record<string, unknown>) => Promise<unknown> | unknown;
+        fetchMemoryConclusionFile?: () => Promise<unknown> | unknown;
+        writeMemoryConclusionFile?: (content: string) => Promise<unknown> | unknown;
+    }): void {
+        const memoryName = memory.config.name ?? "default";
+        const memoryPurpose = memory.config.purpose ?? "Custom memory store";
+        const argumentSchema = z.object({}).passthrough();
+        const register = (
+            toolName: string,
+            action: "fetch" | "save" | "get_conclusion" | "set_conclusion",
+            execute: (args: Record<string, unknown>) => Promise<unknown> | unknown,
+            instruction: string
+        ) => {
+            this.registerMemoryTool(new Tool(
+                async args => {
+                    const result = await execute(args as Record<string, unknown>);
+                    this.emitEvent("memory_action", action, memoryName, args as Record<string, unknown>, result);
+                    return typeof result === "string" ? result : JSON.stringify(result ?? "");
+                },
+                {
+                    toolName,
+                    toolDescription: this.createMemoryToolDescription(memoryName, memoryPurpose, instruction),
+                    toolArguments: argumentSchema
+                }
+            ));
+        };
+
+        if (memory.fetchMemory) {
+            register("fetch_memory", "fetch", args => memory.fetchMemory!(args), "Fetch relevant records from memory.");
+        }
+        if (memory.saveMemory) {
+            register("save_memory", "save", args => memory.saveMemory!(args), "Save a record to memory.");
+        }
+        if (memory.fetchMemoryConclusionFile) {
+            register("fetch_memory_conclusion", "get_conclusion", () => memory.fetchMemoryConclusionFile!(), "Fetch the memory conclusion.");
+        }
+        if (memory.writeMemoryConclusionFile) {
+            register("save_memory_conclusion", "set_conclusion", args => memory.writeMemoryConclusionFile!(String(args.content ?? "")), "Save the memory conclusion.");
+        }
+    }
+
     private registerToolBasedMemoryTool<ToolArgs extends z.ZodObject>(
         memory: ToolBasedMemorySchema<any, any>,
         memoryTool: {
@@ -2024,7 +2187,17 @@ ${deterministicMemoryAwareness}`;
         }
     ): void {
         this.registerMemoryTool(new Tool(
-            async argsObj => await memoryTool.fn(argsObj, this.createMemoryAgentState()),
+            async argsObj => {
+                const result = await memoryTool.fn(argsObj, this.createMemoryAgentState());
+                this.emitEvent(
+                    "memory_action",
+                    memory.memoryTools.fetch?.toolName === memoryTool.toolName ? "fetch" : "save",
+                    memory.name,
+                    argsObj,
+                    result
+                );
+                return result;
+            },
             {
                 toolName: memoryTool.toolName,
                 toolDescription: this.createMemoryToolDescription(memory.name, memory.purpose, memoryTool.instruction),
@@ -2078,6 +2251,13 @@ ${deterministicMemoryAwareness}`;
             async argsObj => {
                 this.recordDeterministicMemoryWant(memory, hook, kind, argsObj);
                 const result = await memoryTool.fn?.(argsObj, this.createMemoryAgentState());
+                this.emitEvent(
+                    "memory_action",
+                    kind === "fetch" ? "fetch" : "save",
+                    memory.config.name,
+                    argsObj,
+                    result
+                );
 
                 return result ?? `Recorded ${kind} request for deterministic memory "${memory.config.name}".`;
             },

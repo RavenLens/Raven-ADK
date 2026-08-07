@@ -65,6 +65,48 @@ describe("ReActAgent Plugins", () => {
         expect(result.state.injectedByAfter).toBe(true);
     });
 
+    it("returns an aborted result while a pending plugin is still running", async () => {
+        const abortController = new AbortController();
+        const model = new Google({
+            model: "gemini-3-flash-preview",
+            apiKey: "test"
+        });
+        const modelInvoke = vi.spyOn(model, "invoke").mockResolvedValue({
+            messages: [],
+            answer: [{ type: "ai", content: "Should not run" }],
+            tokens: { input: 0, output: 0, reasoning: 0 }
+        });
+
+        const pendingPlugin: ReActAgentPluginSpec = {
+            name: "pending-plugin",
+            executionWay: "before_agent_run",
+            execute: async (_from, config) => {
+                queueMicrotask(() => abortController.abort());
+
+                await Promise.all([
+                    new Promise<void>(() => undefined),
+                    new Promise<void>(resolve => config.abort?.addEventListener("abort", () => resolve(), { once: true }))
+                ]);
+
+                return { status: true };
+            }
+        };
+
+        const agent = new ReActAgent({
+            model,
+            systemPrompt: "test",
+            messages: [{ type: "user", content: "test" }],
+            tools: [],
+            plugins: [pendingPlugin],
+            abort: abortController.signal
+        });
+
+        const result = await agent.invoke();
+
+        expect(result.state.isAborted).toBe(true);
+        expect(modelInvoke).not.toHaveBeenCalled();
+    });
+
     it("executes tool plugins (before_tool_invoked, after_tool_result) with execution place context", async () => {
         const events: { way: string; toolName?: string; toolParams?: any; toolOutput?: string }[] = [];
 

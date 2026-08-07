@@ -243,7 +243,7 @@ export class RealTimeVoiceAgent<
                 const skillToolCallUnified = async (actionType: SpeakPositionRecordKeys) => {
                     const [toolName] = args;
 
-                    const specifiedSkillsToSay = Object.entries(config.agent.skills?.(clientID, authParams)!.config!.actionsVoiceDescriptionInstruction!) as unknown as [
+                    const specifiedSkillsToSay = Object.entries(config.agent.skills?.(clientID, authParams)?.config?.actionsVoiceDescriptionInstruction ?? {}) as unknown as [
                         keyof ConfigLessSchemaSkillsStore,
                         SpeakBeforeAfter
                     ][];
@@ -286,6 +286,46 @@ export class RealTimeVoiceAgent<
                     
                     const [toolName, toolParams, toolOutput] = args as Parameters<ReActAgentEvents[Event]>;
                     const toolFound = this.config.agent.tools.find(tool => tool.toolConfig.toolName === toolName);
+
+                    const configuredMemories = Array.isArray(memory) ? memory : memory ? [memory] : [];
+                    const memoryTool = configuredMemories
+                        .map(entry => {
+                            const configuredMemory = (entry as any).memory ?? entry;
+                            if (configuredMemory?.typeMemory !== "toolBased") return undefined;
+
+                            const toolKind = configuredMemory.memoryTools.fetch?.toolName === toolName
+                                ? "fetch"
+                                : configuredMemory.memoryTools.update?.toolName === toolName
+                                    ? "update"
+                                    : undefined;
+                            return toolKind ? { memory: configuredMemory, toolKind } : undefined;
+                        })
+                        .find(Boolean) as { memory: { name: string }; toolKind: "fetch" | "update" } | undefined;
+
+                    if (memoryTool) {
+                        const voiceConfig = this.config.agent.memorySpeech?.[memoryTool.memory.name]?.tools?.[memoryTool.toolKind]?.[event === "tool_executed" ? "speakAfter" : "speakBefore"];
+                        const canMemoryToolBeTold = voiceConfig !== false
+                            && (typeof voiceConfig !== "object" || voiceConfig.sayAloud !== false);
+                        if (voiceConfig !== undefined && canMemoryToolBeTold) {
+                            const configuredInstruction = typeof voiceConfig === "object" ? voiceConfig.defaultInstruction : undefined;
+                            const instruction = typeof configuredInstruction === "function"
+                                ? await configuredInstruction(memoryTool.memory.name, memoryTool.toolKind, toolParams, toolOutput)
+                                : configuredInstruction;
+                            const defaultInstruction = event === "tool_invoked"
+                                ? `I'm fetching information from ${memoryTool.memory.name} memory`
+                                : `I've updated ${memoryTool.memory.name} memory`;
+                            const speakPromise = this.speak(
+                                clientID,
+                                instruction ?? defaultInstruction,
+                                "memory",
+                                logicAbortController.signal,
+                                args,
+                                typeof voiceConfig === "object" ? voiceConfig.describeVoiceInstruction : undefined
+                            );
+                            if (this.config.speechBlocksReasoningEngine) await speakPromise;
+                            return true;
+                        }
+                    }
 
                     const afterOrBeforeKey: SpeakPositionRecordKeys = event === "tool_executed" ? "speakAfter" : "speakBefore";
                     const canToolBeTold = (!toolFound?.describeVoiceInstruction || !toolFound.describeVoiceInstruction[afterOrBeforeKey]) || (typeof toolFound.describeVoiceInstruction[afterOrBeforeKey] === "object" && (toolFound.describeVoiceInstruction[afterOrBeforeKey].sayAloud === true || toolFound.describeVoiceInstruction[afterOrBeforeKey].sayAloud === undefined));
@@ -494,18 +534,21 @@ export class RealTimeVoiceAgent<
 
                 // Memory
                 // TODO: Adjust once the memory MemRL, Mem0, MemP and Custom classes arrive
-                const memoryActionToConfigKey: Record<Parameters<ReActAgentEvents["memory_action"]>[0], keyof ConfigLessSchemaMemoryStore> = {
-                    fetch: "fetchMemory",
-                    save: "saveMemory",
-                    get_conclusion: "fetchMemoryConclusionFile",
-                    set_conclusion: "writeMemoryConclusionFile"
+                const memoryActionToConfigKeys: Record<Parameters<ReActAgentEvents["memory_action"]>[0], (keyof ConfigLessSchemaMemoryStore | "fetch" | "save" | "update" | "delete" | "select" | "feedback" | "get_conclusion" | "set_conclusion")[]> = {
+                    fetch: ["fetch", "fetchMemory"],
+                    save: ["save", "saveMemory"],
+                    get_conclusion: ["get_conclusion", "fetchMemoryConclusionFile"],
+                    set_conclusion: ["set_conclusion", "writeMemoryConclusionFile"]
                 };
                 const memoryUnified = async () => {
                     const [action, memoryName, details, result] = args as Parameters<ReActAgentEvents["memory_action"]>;
                     const memoryStore = Array.isArray(memory)
                         ? memory.find(({ name }) => name === memoryName)?.memory
                         : memory;
-                    const voiceConfig = memoryStore?.config.actionsVoiceDescriptionInstruction?.[memoryActionToConfigKey[action]]?.speakAfter;
+                    const voiceConfig = this.config.agent.memorySpeech?.[memoryName]?.actions?.[action]?.speakAfter
+                        ?? memoryActionToConfigKeys[action]
+                            .map(key => memoryStore?.config.actionsVoiceDescriptionInstruction?.[key])
+                            .find(config => config !== undefined)?.speakAfter;
                     const canMemoryBeTold = voiceConfig !== false
                         && (typeof voiceConfig !== "object" || voiceConfig.sayAloud !== false);
 
@@ -518,7 +561,7 @@ export class RealTimeVoiceAgent<
                         ? await configuredInstruction(memoryName, action, details, result)
                         : configuredInstruction;
                     const defaultInstruction = {
-                        fetch: `I've checked ${memoryName} memory`,
+                        fetch: `I've fetched information from ${memoryName} memory`,
                         save: `I've saved information to ${memoryName} memory`,
                         get_conclusion: `I've checked the ${memoryName} memory summary`,
                         set_conclusion: `I've updated the ${memoryName} memory summary`
@@ -718,6 +761,7 @@ export class RealTimeVoiceAgent<
             state = { queue: [], currentAbortController: null, isProcessing: false };
             this.outputSpeechQueues.set(clientID, state);
         }
+        const queueState = state;
 
         const speechApproach = this.config.agent.models.stt.speechApproach ?? "blocking";
         if (speechApproach === "flush") {
@@ -729,11 +773,11 @@ export class RealTimeVoiceAgent<
         }
 
         const completion = new Promise<void>((resolve) => {
-            state.queue.push({ text, type, describeVoiceInstruction, args, abort, resolve });
+            queueState.queue.push({ text, type, describeVoiceInstruction, args, abort, resolve });
         });
 
         // Start processing if not already
-        if (!state.isProcessing) {
+        if (!queueState.isProcessing) {
             this.processSpeakQueue(clientID).catch(err => {
                 this.devConsole(`[RealTimeVoiceAgent] Error in processSpeakQueue for ${clientID}: ${err}`, "error");
             });
