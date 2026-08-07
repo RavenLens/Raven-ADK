@@ -1,4 +1,4 @@
-import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { CompactOptions, EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
 import { GoogleGenAI } from "@google/genai";
 import type { 
     GenerateContentResponse, 
@@ -13,6 +13,7 @@ import { parseToolCallContentToParams, parseToolDescription, Tool } from "../age
 import { AIMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
 import * as z from "zod";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { compactMessagesWithStructuredOutput } from "./structuredOutput";
 
 export interface GoogleConfig extends LLMConfig {
     /** 
@@ -55,6 +56,7 @@ export class Google implements StandardLLMShema {
     private client: GoogleGenAI;
     private EventsListeners: Partial<{ [EventName in keyof GoogleAIEvents]: GoogleAIEvents[EventName] }> = {};
     config: GoogleConfig;
+    compactionMode: "manual" = "manual";
 
     constructor(config: GoogleConfig) {
         this.config = config;
@@ -237,6 +239,12 @@ export class Google implements StandardLLMShema {
                         parts: thinkingParts
                     });
                     break;
+                case "compaction":
+                    contents.push({
+                        role: "model",
+                        parts: [{ text: `Conversation summary: ${message.content ?? ""}` }]
+                    });
+                    break;
                 case "tool":
                     const googleToolContent = message.content;
                     const truncatedGoogleToolContent = googleToolContent.length > 60000
@@ -375,8 +383,12 @@ export class Google implements StandardLLMShema {
         };
     }
 
-    private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>) {
+    private async *streamWithEvents(stream: AsyncGenerator<GenerateContentResponse>, abort?: AbortSignal) {
         for await (const event of stream) {
+            if (abort?.aborted) {
+                return;
+            }
+
             this.emitEvent("stream", event);
 
             if (event.candidates?.[0]?.content?.parts) {
@@ -392,8 +404,8 @@ export class Google implements StandardLLMShema {
     }
 
     async invoke(): Promise<LLMAnswer>;
-    async invoke(options?: { stream?: false | undefined; messages?: InvokeOptions["messages"] }): Promise<LLMAnswer>;
-    async invoke(options: { stream: true; messages?: InvokeOptions["messages"] }): Promise<AsyncGenerator<GenerateContentResponse>>;
+    async invoke(options?: InvokeOptions & { stream?: false }): Promise<LLMAnswer>;
+    async invoke(options: InvokeOptions & { stream: true }): Promise<AsyncGenerator<GenerateContentResponse>>;
     async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncGenerator<GenerateContentResponse>> {
         if (options?.messages) {
             this.config.messages = options.messages;
@@ -428,7 +440,7 @@ export class Google implements StandardLLMShema {
                 }
             });
 
-            return this.streamWithEvents(stream);
+            return this.streamWithEvents(stream, options?.abort);
         }
 
         const response = await this.client.models.generateContent({
@@ -451,7 +463,7 @@ export class Google implements StandardLLMShema {
         return this.parseResponseToAnswer(response);
     }
 
-    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer> {
+    async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer> {
         return invokeStructuredOutputWithRetries({
             schema,
             maxRecallTries,
@@ -463,7 +475,18 @@ export class Google implements StandardLLMShema {
             setTools: (tools) => {
                 this.config.tools = tools;
             },
-            invoke: () => this.invoke()
+            invoke: (opts) => this.invoke({ ...(opts ?? {}), stream: false } as any) as Promise<LLMAnswer>,
+            options
+        });
+    }
+
+    async compact(options?: CompactOptions) {
+        return compactMessagesWithStructuredOutput({
+            messages: options?.messages ?? this.config.messages ?? [],
+            abort: options?.abort,
+            invokeStructuredOutput: (schema, maxRecallTries, invokeOptions) => {
+                return this.invokeStructuredOutput(schema, maxRecallTries, invokeOptions);
+            }
         });
     }
 

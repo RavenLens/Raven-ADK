@@ -129,4 +129,46 @@ describe("RunPod model wrapper", () => {
             expect((result.answer[0] as AIMessage).content).toBe(expected);
         }
     });
+
+    it("compacts history with structured output for endpoint-agnostic RunPod workers", async () => {
+        const model = new RunPod({ apiKey: "key", endpointId: "id", model: "m" });
+        runpodEndpointMock.runSync.mockResolvedValueOnce({
+            output: '{"summary":"The user chose deployment A."}'
+        });
+
+        const result = await model.compact({
+            messages: [{ type: "user", content: "Choose deployment A." }]
+        });
+
+        expect(result).toStrictEqual([{
+            type: "compaction",
+            provider: "summary",
+            content: "The user chose deployment A."
+        }]);
+        expect(model.config.messages).toBeUndefined();
+    });
+
+    it("stops yielding stream chunks after abort", async () => {
+        const streamChunks = [{ output: "first" }, { output: "ignored" }];
+        runpodEndpointMock.run.mockResolvedValueOnce({ id: "request-1" });
+        runpodEndpointMock.stream.mockReturnValueOnce({
+            async *[Symbol.asyncIterator]() {
+                for (const chunk of streamChunks) {
+                    yield chunk;
+                }
+            }
+        });
+
+        const controller = new AbortController();
+        const model = new RunPod({ apiKey: "key", endpointId: "id", model: "m" });
+        const stream = await model.invoke({ stream: true, abort: controller.signal });
+        const yieldedChunks: unknown[] = [];
+
+        for await (const chunk of stream) {
+            yieldedChunks.push(chunk);
+            controller.abort();
+        }
+
+        expect(yieldedChunks).toStrictEqual([streamChunks[0]]);
+    });
 });

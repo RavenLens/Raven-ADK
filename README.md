@@ -58,6 +58,7 @@ npm install @ravenlens/raven-adk
 - [Self-Improvement](./documentation/Self-Improvement.md)
 - [Secure Sandboxes](./documentation/Sandbox.md)
 - [Supported Models](./documentation/Models.md)
+    - [Models comes with Compaction](./documentation/compaction/Readme.md#model-support)
 
 ## GraphBased
 Use graph with this style to make your own workflow

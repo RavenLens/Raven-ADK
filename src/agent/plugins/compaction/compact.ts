@@ -6,9 +6,9 @@
     *   - tokenizer has to be aware of model tokenizer
     *   - instruction what to compress and what to maintain - user can override the default one
 */
-import { StandardLLMShema } from "../../models/mutual";
-import { ReActAgentPluginSpec } from "../ReAct.agent";
-import { MessagesVariations } from "../state";
+import { StandardLLMShema } from "../../../models/mutual";
+import { ReActAgentPluginSpec } from "../../ReAct.agent";
+import { MessagesVariations } from "../../state";
 
 export type Fields = "systemPrompt" | "thinking" | "userPrompt" | "aiResponses" | "toolCalls" | "toolResponses" | "mediaAndFiles";
 
@@ -25,6 +25,13 @@ export type CompressionEventsCallers = {
     compression_update: (context: Context) => any;
 }
 export type CompressionEvents = keyof CompressionEventsCallers;
+
+export interface CompactReActAgentPluginOptions {
+    /** Skip automatic and model-provided compaction and truncate older messages directly. */
+    forceTruncate?: boolean;
+    /** Maximum number of characters retained for each truncated message field. */
+    truncateSize?: number;
+}
 
 /**
  * Safely runs the tokenizer on text content.
@@ -43,14 +50,37 @@ async function safeTokenize(content: string | undefined | null, tokenizer?: Toke
     return Math.ceil(content.length / 4);
 }
 
-export function generateCompressReActAgentPlugin(
+/**
+ * Creates a ReActAgent plugin that monitors conversation size and compacts
+ * older messages before a model call when the configured context threshold is exceeded.
+ *
+ * The plugin preserves system messages and the four most recent non-system messages.
+ * It uses the model's `compact()` method when available, skips compaction for automatic
+ * providers, and otherwise falls back to bounded truncation. Set `forceTruncate` to bypass
+ * both provider compaction modes and use truncation directly.
+ *
+ * @param model Model metadata used for context calculations.
+ * @param model.name Provider model name, used as descriptive metadata.
+ * @param model.contextWindowTokens Model context-window limit in tokens. Above this limit compaction is triggered
+ * @param tokenizer Function that estimates the token count for text content.
+ * @param compressOnceContextPercentage Percentage of the context window at which compaction starts. Defaults to `80`.
+ * @param onCompressionUpdate Optional callback invoked with per-category token counts before each model call.
+ * @param options Optional compaction behavior and truncation settings.
+ * @param options.forceTruncate When `true`, bypasses automatic and manual model compaction.
+ * @param options.truncateSize Optional character limit applied to each truncated tool, user, and AI field.
+ * @returns A `before_model_call` plugin specification for use in `ReActAgent.plugins`.
+ */
+export function generateCompactReActAgentPlugin(
     model: {
+        /** Provider model name, used as descriptive metadata. */
         name: string;
+        /** Model context-window limit in tokens. Above this limit compaction is triggered */
         contextWindowTokens: number;
     },
     tokenizer: Tokenizer,
-    compressOnceContextPr: number = 80,
-    onCompressionUpdate?: (context: Context) => any
+    compressOnceContextPercentage: number = 80,
+    onCompressionUpdate?: (context: Context) => any,
+    options: CompactReActAgentPluginOptions = {}
 ): ReActAgentPluginSpec {
     return {
         name: "CompressConversation",
@@ -292,7 +322,7 @@ export function generateCompressReActAgentPlugin(
             }
 
             const totalTokens = tokens.systemPrompt + tokens.thinking + tokens.userPrompt + tokens.aiResponses + tokens.toolCalls + tokens.toolResponses + tokens.mediaAndFiles;
-            const maxAllowed = Math.floor(model.contextWindowTokens * (compressOnceContextPr / 100));
+            const maxAllowed = Math.floor(model.contextWindowTokens * (compressOnceContextPercentage / 100));
 
             if (totalTokens > maxAllowed) {
                 // Perform compaction to preserve conversational space
@@ -305,13 +335,13 @@ export function generateCompressReActAgentPlugin(
                     const messagesToPreserve = otherMessages.slice(-preserveCount);
                     const compactableModel = agentConfig.model as StandardLLMShema;
 
-                    if (compactableModel.compactionMode === "automatic") {
+                    if (!options.forceTruncate && compactableModel.compactionMode === "automatic") {
                         return {
                             status: false
                         };
                     }
 
-                    if (compactableModel.compact) {
+                    if (!options.forceTruncate && compactableModel.compact) {
                         const compactedMessages = await compactableModel.compact({
                             messages: messagesToCompact,
                             abort: agentConfig.abort
@@ -329,11 +359,14 @@ export function generateCompressReActAgentPlugin(
                     }
 
                     const compactedList: MessagesVariations[] = [];
+                    const toolTruncateSize = options.truncateSize ?? 400;
+                    const userTruncateSize = options.truncateSize ?? 1000;
+                    const aiTruncateSize = options.truncateSize ?? 1000;
 
                     for (const msg of messagesToCompact) {
                         if (msg.type === "tool") {
                             // Truncate large tool content or toolOutput
-                            const maxToolLen = 400;
+                            const maxToolLen = toolTruncateSize;
                             let truncatedContent = msg.content;
                             let truncatedOutput = msg.toolOutput;
 
@@ -351,7 +384,7 @@ export function generateCompressReActAgentPlugin(
                             });
                         } 
                         else if (msg.type === "user") {
-                            const maxUserLen = 1000;
+                            const maxUserLen = userTruncateSize;
                             let truncatedContent = msg.content;
                             if (msg.content && msg.content.length > maxUserLen) {
                                 truncatedContent = msg.content.substring(0, maxUserLen) + `... [Truncated user prompt]`;
@@ -366,7 +399,7 @@ export function generateCompressReActAgentPlugin(
                             });
                         } 
                         else if (msg.type === "ai") {
-                            const maxAiLen = 1000;
+                            const maxAiLen = aiTruncateSize;
                             let truncatedContent = msg.content;
                             if (msg.content && msg.content.length > maxAiLen) {
                                 truncatedContent = msg.content.substring(0, maxAiLen) + `... [Truncated AI response]`;
