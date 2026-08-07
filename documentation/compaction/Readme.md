@@ -35,10 +35,6 @@ if (model.compact) {
 
 ## Denote: 
 You should now the traits of dealing with compaction
-<!-- 
-    TODO: Potentiall Compaction fallback for the RealTimeVoiceAgent
-    - Encyrption of response - the RealTimneVoiceAgent has to now how to understand the compaction
- -->
 
 1. Each compaction case takes more time to produce the answer than going without compaction
 2. Usage of compaction in each form increases costs due to shrinking the history by processing it by model [Input Tokens] -> [Model Infference] -> [Output Tokens]
