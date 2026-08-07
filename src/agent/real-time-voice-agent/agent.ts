@@ -212,7 +212,7 @@ export class RealTimeVoiceAgent<
 
             // Config ReAct Agent
             const { authParams } = this.activeClients.get(clientID)!;
-            const memory = config.agent.memory?.(clientID, authParams);
+            const memory = config.agent.memory.memory?.(clientID, authParams);
             const agent = new ReActAgent({
                 model: config.agent.models.reasoning,
                 systemPrompt: `${config.agent.systemPrompt}
@@ -332,7 +332,8 @@ export class RealTimeVoiceAgent<
                     
                     if (toolFound && canToolBeTold) {
                         const userConfigInstruction = async () => {
-                            const def = toolFound.describeVoiceInstruction?.[afterOrBeforeKey]?.defaultInstruction;
+                            const voiceConfig = toolFound.describeVoiceInstruction?.[afterOrBeforeKey];
+                            const def = typeof voiceConfig === "object" ? voiceConfig.defaultInstruction : undefined;
 
                             if (typeof def === "function") {
                                 return await def(toolName, toolParams, toolOutput);
@@ -601,7 +602,9 @@ export class RealTimeVoiceAgent<
 
                     if (!subagent || !canSubagentBeTold) return false;
 
-                    const configuredInstruction = voiceConfig?.defaultInstruction;
+                    const configuredInstruction = typeof voiceConfig === "object"
+                        ? voiceConfig.defaultInstruction
+                        : undefined;
                     const instruction = typeof configuredInstruction === "function"
                         ? await configuredInstruction(subAgentRole, subagentInstruction, result)
                         : configuredInstruction;

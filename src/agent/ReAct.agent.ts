@@ -196,7 +196,7 @@ type PluginExecutionResult = Awaited<
     ReturnType<ReActAgentPluginSpec["execute"]>
 >;
 
-type PluginResultEvent =
+export type PluginResultEvent =
     | {
         status: "success";
         result: PluginExecutionResult;

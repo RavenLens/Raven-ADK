@@ -2,7 +2,7 @@ import { Tool, ToolConfig, ToolLogic } from "../tools";
 import { ServerOptions } from "socket.io";
 import z from "zod/v4";
 import { HITLConfigSchema, HITLTransportSchema, ToolUsageConfObject } from "../tools/hitl/hitlToolSchema";
-import { AgentModel, ReActAgentEvents, ReActAgentInvokeResult, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
+import { AgentModel, PluginResultEvent, ReActAgentEvents, ReActAgentInvokeResult, ReActAgentPluginSpec, SubAgent } from "../ReAct.agent";
 import { MessagesVariations } from "../state";
 import { SchemaSkillStore } from "../skills/stores/schema";
 import { SkillSharedConfig } from "../skills/skills";
@@ -12,14 +12,30 @@ import { ParsedUrlQuery } from "node:querystring";
 import { STTModel, STTMode } from "./stt";
 import { IncomingHttpHeaders } from "node:http";
 import { SpeechLevel } from "./agent";
+import { generateCompactReActAgentPlugin } from "../plugins/compaction";
 
 /**
- * Specify to teel whether describe and optionally how the Plugin Execution
- * * Specify `true` to give agent free will in description the plugin execution - under such condition the execution will be communicated only base on rest of configuration
- * * Specify object to give agent additional instructions about plugin execution
- * @default false
-*/
-export type VoiceAgentDescriptionConfig = any;
+ * Specifies whether an execution should be described aloud and, optionally,
+ * which instruction should be passed to the transcriber.
+ */
+export interface VoiceAgentDescriptionConfigObject {
+  /**
+   * Controls only the spoken announcement; it never enables, skips, or cancels
+   * the underlying execution. For plugin, tool, memory, HITL, and subagent
+   * descriptions, omitting this property defaults to `true`. Set it to `false`
+   * to keep the execution silent. Skill actions must currently opt in with
+   * `true` (or an object with `sayAloud: true`).
+   */
+  sayAloud?: boolean;
+  /** Additional instruction passed to the voice transcriber, when configured. */
+  describeVoiceInstruction?: string;
+}
+
+/**
+ * Specify whether and how an execution should be described.
+ * `true` enables the default description, while `false` disables it.
+ */
+export type VoiceAgentDescriptionConfig = boolean | VoiceAgentDescriptionConfigObject;
 
 export type ConfigLessSchemaSkillsStore = Omit<SchemaSkillStore, "config">;
 type SchemaMemoryConfig = {
@@ -40,7 +56,10 @@ export interface RealTimeVoiceAgentSkillsSchema extends ConfigLessSchemaSkillsSt
 }
 
 export type SpeakPositionRecordKeys = "speakBefore" | "speakAfter";
-export type SpeakBeforeAfter<ConfigExtenstion extends Record<string, any> = {}> = Partial<Record<SpeakPositionRecordKeys, VoiceAgentDescriptionConfig & ConfigExtenstion>>;
+export type SpeakBeforeAfter<ConfigExtenstion extends Record<string, any> = {}> = Partial<Record<
+  SpeakPositionRecordKeys,
+  boolean | (VoiceAgentDescriptionConfigObject & ConfigExtenstion)
+>>;
 
 export type ConfigLessSchemaMemoryStore = Omit<SchemaMemoryStore, "config"> & Record<string, unknown>;
 export interface MutliMemoryObject {
@@ -136,13 +155,13 @@ type SpeakBeforeAfterWithPluginDescription = SpeakBeforeAfter<{
   /**
    * Specify what the agent should say before or after the plugin execution.
    *
-   * The result is available only for `speakAfter`.
+   * @param pluginOutput - is available only for `speakAfter` since this is place where output sits
   */
-  defaultInstruction?: string | ((pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], pluginOutput?: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => Promise<string> | string);
+  defaultInstruction?: string | ((pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], pluginOutput?: PluginResultEvent) => Promise<string> | string);
 }>;
 
 export interface RealTimeVoiceAgentPluginSpec extends ReActAgentPluginSpec {
-  /** Optionally describe the plugin execution before or after it runs. */
+  /** Use to specify what agent has to say with usage of tts model for `before` and/or `after` the execution stage */
   describeVoiceInstruction?: SpeakBeforeAfterWithPluginDescription;
 }
 
@@ -173,8 +192,6 @@ export interface HITLLiveTimeVoiceAgent<HITL extends HITLTransportSchema> extend
     defaultInstruction?: string | ((payload: any, result?: any) => Promise<string> | string);
   }>>>;
 }
-
-
 
 export interface RealTimeVoiceAgentServerConfig {
   socketIo: {
@@ -395,11 +412,11 @@ export interface RealTimeVoiceAgentConfig<RealTimeVoiceAgentSkills extends RealT
     /** Memory version with transcription definition */
     memory?: {
       /** Specify the memory object */
-      interface: UnitDependencyWrapper<Memory | ({
+      interface: UnitDependencyWrapper<(Memory & { memorySpeech?: Partial<Record<string, RealTimeVoiceMemorySpeechConfig>>; }) | ({
         memory: Memory;
+        memorySpeech?: Partial<Record<string, RealTimeVoiceMemorySpeechConfig>>;
       } & MutliMemoryObject)[]>;
       /** Voice descriptions for deterministic actions and tool-based memory tools, keyed by memory name. */
-      memorySpeech?: Partial<Record<string, RealTimeVoiceMemorySpeechConfig>>;
     };
     /** Tools have defined description instruction */
     tools: RealTimeVoiceAgentTool<any, any>[];

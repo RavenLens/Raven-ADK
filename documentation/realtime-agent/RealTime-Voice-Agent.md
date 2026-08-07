@@ -84,6 +84,131 @@ Set `nature` to `"blocking"` when the agent must wait until the acknowledgement 
 2. Specify instruction for tools - Use to setup specific tool to not be told or have to be told and specify instructions for each subsequent tool
 > You can implement fine-grained tunning actions base on the agent config object specification
 
+### Plugins
+
+Plugins are configured in `agent.plugins`. The real-time voice agent forwards them to its internal `ReActAgent`, so a plugin runs as part of the reasoning lifecycle. The compaction plugin runs at `before_model_call`, before each reasoning-model call, and estimates the current conversation size before deciding whether older messages need to be compacted or truncated.
+
+Use `generateCompactReActAgentPlugin` with the context window of the `reasoning` model, not the STT or TTS model:
+
+```typescript
+import { generateCompactReActAgentPlugin } from "@ravenlens/raven-adk/agents";
+import { RealTimeVoiceAgent as RealTimeVoiceAgentModule } from "@ravenlens/raven-adk/agents";
+
+const RealTimeVoiceAgent = RealTimeVoiceAgentModule.RealTimeAgent.RealTimeVoiceAgent;
+
+const compactionPlugin = generateCompactReActAgentPlugin(
+    {
+        name: "gpt-5-mini",
+        contextWindowTokens: 128_000
+    },
+    (text) => text.split(/\s+/).filter(Boolean).length,
+    80, // Run the compaction decision above 80% estimated usage.
+    (context) => {
+        console.log("Realtime context usage:", context);
+    },
+    {
+        // Optional: bypass provider compaction and truncate older messages.
+        forceTruncate: true,
+        truncateSize: 500
+    }
+);
+
+const voiceAgent = new RealTimeVoiceAgent({
+    executionMode: {
+        mode: "remote",
+        server: {
+            socketIo: { port: 3000 },
+            webRTC: { iceServers: [] }
+        }
+    },
+    communicationSpeechLevels: "all",
+    agent: {
+        models: {
+            stt: {
+                model: sttModel,
+                speechApproach: "flush"
+            },
+            reasoning: reasoningModel,
+            tts: ttsModel
+        },
+        systemPrompt: "You are a helpful voice assistant.",
+        messages: [],
+        tools: [],
+        plugins: [compactionPlugin]
+    }
+});
+
+await voiceAgent.run();
+```
+
+#### Voice description
+
+The compaction plugin is a normal real-time plugin, so it is announced through TTS by default when `communicationSpeechLevels` allows the `plugins` level. If `describeVoiceInstruction` is omitted, the agent uses these default announcements:
+
+- Before execution: `I'm using CompressConversation plugin to help you`
+- After execution: `I've executed CompressConversation plugin and successfully retrieved output`
+
+The announcement is optional and does not affect compaction or model execution. To provide clearer voice feedback, configure custom instructions:
+
+```typescript
+const compactionPlugin = {
+    ...generateCompactReActAgentPlugin(
+        { name: "gpt-5-mini", contextWindowTokens: 128_000 },
+        tokenizer
+    ),
+    describeVoiceInstruction: {
+        speakBefore: {
+            defaultInstruction: "I am checking the conversation size before continuing."
+        },
+        speakAfter: {
+            defaultInstruction: (_pluginName, _executionWay, pluginOutput) => {
+                const status = pluginOutput?.status ?? "unknown";
+                return `Conversation maintenance completed: ${status}.`;
+            }
+        },
+    }
+};
+```
+
+To keep compaction completely silent, disable both lifecycle announcements:
+
+```typescript
+const silentCompactionPlugin = {
+    ...generateCompactReActAgentPlugin(
+        { name: "gpt-5-mini", contextWindowTokens: 128_000 },
+        tokenizer
+    ),
+    describeVoiceInstruction: {
+        speakBefore: false,
+        speakAfter: false
+    }
+};
+```
+
+If the user does not configure `describeVoiceInstruction`, the compaction plugin still executes. The only difference is that the default before/after announcements are used. Setting `speakBefore` or `speakAfter` to `false` suppresses that announcement only; it does not disable the plugin, prevent the model call, or prevent compaction.
+
+#### Listening for execution
+
+Use logic events to observe the plugin lifecycle for each reasoning-model call:
+
+```typescript
+voiceAgent.onLogicEvent("plugin_invoking", (pluginName, executionWay) => {
+    if (pluginName === "CompressConversation") {
+        console.log("Compaction plugin started:", executionWay);
+    }
+});
+
+voiceAgent.onLogicEvent("plugin_result", (pluginName, executionWay, event) => {
+    if (pluginName !== "CompressConversation") return;
+
+    console.log("Compaction plugin finished:", executionWay, event);
+    // event.status === "success" confirms plugin execution.
+    // event.result?.status === true means it returned a changed agent config.
+});
+```
+
+`onCompressionUpdate` reports the estimated category totals on every plugin run. A `plugin_result` event confirms execution, while `event.result?.status === true` indicates that the plugin produced a compaction or truncation update. A successful run with `event.result?.status === false` means the plugin ran but the configured threshold did not require a change. The lifecycle events are also emitted to the client as `logic.plugin_invoking` and `logic.plugin_result`.
+
 ---
 ## Frontend
 
