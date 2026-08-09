@@ -64,6 +64,46 @@
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.js"
     },
+    "./models/speech-to-text": {
+      "types": "./dist/models/speech-to-text/index.d.ts",
+      "import": "./dist/models/speech-to-text/index.js",
+      "require": "./dist/models/speech-to-text/index.js"
+    },
+    "./models/text-to-speech": {
+      "types": "./dist/models/text-to-speech/index.d.ts",
+      "import": "./dist/models/text-to-speech/index.js",
+      "require": "./dist/models/text-to-speech/index.js"
+    },
+    "./models/text-to-text": {
+      "types": "./dist/models/text-to-text/index.d.ts",
+      "import": "./dist/models/text-to-text/index.js",
+      "require": "./dist/models/text-to-text/index.js"
+    },
+    "./models/embeddings": {
+      "types": "./dist/models/embeddings/index.d.ts",
+      "import": "./dist/models/embeddings/index.js",
+      "require": "./dist/models/embeddings/index.js"
+    },
+    "./speech-to-text": {
+      "types": "./dist/models/speech-to-text/index.d.ts",
+      "import": "./dist/models/speech-to-text/index.js",
+      "require": "./dist/models/speech-to-text/index.js"
+    },
+    "./text-to-speech": {
+      "types": "./dist/models/text-to-speech/index.d.ts",
+      "import": "./dist/models/text-to-speech/index.js",
+      "require": "./dist/models/text-to-speech/index.js"
+    },
+    "./text-to-text": {
+      "types": "./dist/models/text-to-text/index.d.ts",
+      "import": "./dist/models/text-to-text/index.js",
+      "require": "./dist/models/text-to-text/index.js"
+    },
+    "./embeddings": {
+      "types": "./dist/models/embeddings/index.d.ts",
+      "import": "./dist/models/embeddings/index.js",
+      "require": "./dist/models/embeddings/index.js"
+    },
     "./tools": {
       "types": "./dist/agent/tools/index.d.ts",
       "import": "./dist/agent/tools/index.js",

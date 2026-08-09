@@ -1,11 +1,11 @@
-import { CompactOptions, EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
-import { OpenAI as OpenAIStandalone } from 'openai';
 import type * as ResponsesAPI from "openai/resources/responses/responses";
 import type * as ChatAPI from "openai/resources/chat/completions";
-import { parseToolCallContentToParams, parseToolDescription, Tool } from "../agent/tools/tools";
-import { AIMessage, CompactionMessage, ToolMessage, ResponseInputVideo, ReasoningMessage, MessagesVariations } from "../agent/state";
-import { ReasoningEffort } from "openai/resources";
 import * as z from "zod";
+import { CompactOptions, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "../mutual";
+import { OpenAI as OpenAIStandalone } from 'openai';
+import { parseToolCallContentToParams, parseToolDescription, Tool } from "../../agent/tools/tools";
+import { AIMessage, CompactionMessage, ToolMessage, ReasoningMessage, MessagesVariations } from "../../agent/state";
+import { ReasoningEffort } from "openai/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 import { compactMessagesWithStructuredOutput } from "./structuredOutput";
 import { randomUUID } from "node:crypto";
@@ -643,6 +643,7 @@ export class OpenAI implements StandardLLMShema {
         }];
     }
 
+    /** We recomend to use dedicated  */
     async tts(text: string, options: OpenAIStandalone.Audio.Speech.SpeechCreateParams): Promise<Buffer> {
         const response = await this.openai.audio.speech.create({
             ...options,
@@ -659,32 +660,5 @@ export class OpenAI implements StandardLLMShema {
         });
 
         return response.text;
-    }
-}
-
-/**
- * Wrapper for OpenAI embedding models for RavenADK
- */
-export class OpenAIEmbedding implements EmbeddingModel {
-    typeAPI: "model" = "model";
-    apiName = "OpenAI" as const;
-    private openai: OpenAIStandalone;
-    config: OpenAIEmbeddingConfig;
-
-    constructor(config: OpenAIEmbeddingConfig, baseURL?: string) {
-        this.config = config as any;
-        this.openai = new OpenAIStandalone({
-            apiKey: this.config.apiKey,
-            baseURL: (config as any).baseURL ?? baseURL,
-        });
-    }
-
-    async embed(text: string | string[]): Promise<number[][]> {
-        const response = await this.openai.embeddings.create({
-            model: this.config.model,
-            input: text,
-        });
-
-        return response.data.map((d) => d.embedding);
     }
 }

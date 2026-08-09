@@ -68,11 +68,10 @@ export interface StandardLLMShema {
     compactionMode?: "automatic" | "manual";
     /** Compacts a conversation slice into provider-replayable context when supported. */
     compact?(options?: CompactOptions): Promise<MessagesVariations[]>;
-    tts(text: string, options?: any): Promise<Buffer | undefined>;
-    stt(speechFile: File, options?: any): Promise<string>;
+    /** We recomend to use dedicated model instead */
+    tts?: (text: string, options?: any) => Promise<Buffer | undefined>;
+    /** We recomend to use dedicated model instead */
+    stt?: (speechFile: File, options?: any) => Promise<string>;
 }
 
-/** Extension of StandardLLMShema for RAG */
-export interface EmbeddingModel extends Omit<StandardLLMShema, "invoke" | "invokeStructuredOutput" | "compact" | "tts" | "stt"> {
-    embed(text: string | string[]): Promise<number[][]>;
-}
+export type { EmbeddingModel } from "./embeddings/embedding.mutual";

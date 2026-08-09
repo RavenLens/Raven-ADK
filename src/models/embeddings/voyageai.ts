@@ -1,4 +1,5 @@
-import { EmbeddingModel, LLMConfig } from "./mutual";
+import { LLMConfig } from "../mutual";
+import { EmbeddingModel } from "./embedding.mutual";
 
 export interface VoyageEmbeddingConfig extends Omit<LLMConfig, "messages" | "tools" | "model"> {
     /** 

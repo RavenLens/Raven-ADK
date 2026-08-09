@@ -1,8 +1,8 @@
-import { EmbeddingModel, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "../mutual";
 import { Anthropic as AnthropicStandalone } from '@anthropic-ai/sdk';
 import { MessageParam, ToolUseBlock, TextBlock } from "@anthropic-ai/sdk/resources/messages";
-import { parseToolCallContentToParams, parseToolDescription, Tool } from "../agent/tools/tools";
-import { AIMessage, CompactionMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../agent/state";
+import { parseToolCallContentToParams, parseToolDescription, Tool } from "../../agent/tools/tools";
+import { AIMessage, CompactionMessage, ReasoningMessage, ToolMessage, ResponseInputVideo } from "../../agent/state";
 import * as z from "zod";
 import { ThinkingConfigParam } from "@anthropic-ai/sdk/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
@@ -457,15 +457,5 @@ export class Anthropic implements StandardLLMShema {
             invoke: (opts) => this.invoke({ ...(opts ?? {}), stream: false } as any) as Promise<LLMAnswer>,
             options
         });
-    }
-
-    /** Anthropic doesn't provide tts */
-    async tts(text: string): Promise<Buffer> {
-        throw new Error("TTS is not supported by Anthropic provider in Raven ADK.");
-    }
-
-    /** Anthropic doesn't provide stt */
-    async stt(speechFile: File, options?: any): Promise<string> {
-        throw new Error("STT is not supported by Anthropic provider in Raven ADK.");
     }
 }

@@ -1,7 +1,7 @@
 import runpodSdk from "runpod-sdk";
 import * as z from "zod";
-import { AIMessage, ResponseInputVideo } from "../agent/state";
-import { CompactOptions, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "./mutual";
+import { AIMessage, ResponseInputVideo } from "../../agent/state";
+import { CompactOptions, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "../mutual";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 import { compactMessagesWithStructuredOutput } from "./structuredOutput";
 
