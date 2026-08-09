@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a usage question
+    url: https://github.com/RavenLens/Raven-ADK/discussions
+    about: Use Discussions for help with setup, APIs, providers, and agent design.
+  - name: Report a security vulnerability
+    url: https://github.com/RavenLens/Raven-ADK/security/advisories/new
+    about: Do not disclose security vulnerabilities in a public issue.

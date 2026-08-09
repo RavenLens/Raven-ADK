@@ -22,12 +22,12 @@
   "license": "Apache-2.0",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/RavenLens/Raven-SDK/issues"
+    "url": "https://github.com/RavenLens/Raven-ADK/issues"
   },
-  "homepage": "https://github.com/RavenLens/Raven-SDK#readme",
+  "homepage": "https://github.com/RavenLens/Raven-ADK#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RavenLens/Raven-SDK.git",
+    "url": "git+https://github.com/RavenLens/Raven-ADK.git",
     "directory": "ravenone-related/libs/Raven ADK"
   },
   "publishConfig": {

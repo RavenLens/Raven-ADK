@@ -1,0 +1,49 @@
+name: 📚Documentation issue
+description: Report incorrect, missing, or unclear RavenADK documentation.
+title: "[Docs]: "
+labels:
+  - documentation
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Documentation location
+      description: Provide a URL or repository path.
+      placeholder: "documentation/compaction/Readme.md"
+    validations:
+      required: true
+  - type: dropdown
+    id: issue-type
+    attributes:
+      label: Issue type
+      options:
+        - Incorrect behavior or example
+        - Missing information
+        - Unclear explanation
+        - Broken link
+        - Typo or formatting
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What needs to change?
+      description: Quote the confusing or incorrect part when practical.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested correction
+      description: Include corrected code or wording when you have it.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Initial checks
+      options:
+        - label: I checked the current source code or tests when reporting behavior.
+          required: true
+        - label: I removed secrets and private data from examples.
+          required: true

@@ -1,0 +1,61 @@
+name: 🌟Feature request
+description: Propose an improvement to RavenADK.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the agent or developer workflow this would improve. Public API changes and new dependencies need maintainer discussion before implementation.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature area
+      options:
+        - ReAct agents
+        - Models or provider integrations
+        - Compaction and context management
+        - Tools, MCP, or HITL
+        - Memory or skills
+        - Graphs, chains, or workflows
+        - RAG or augmented generation
+        - Events and observability
+        - Developer experience or packaging
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What cannot users do today, and who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the user-facing behavior and, when relevant, show a small TypeScript example.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility and operational considerations
+      description: Mention API compatibility, latency, token usage, provider differences, security, and testing implications.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Initial checks
+      options:
+        - label: I searched existing issues, the roadmap, and documentation.
+          required: true
+        - label: This request is about RavenADK itself rather than general LLM usage.
+          required: true

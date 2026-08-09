@@ -8,7 +8,7 @@ RavenADK is an open-source Agent Development Kit designed to support wild AI-Age
 
 Contributions are welcome in the form of bug fixes, tests, documentation, examples, integrations, and new agent capabilities. A useful contribution usually follows this flow:
 
-1. **Find or open an issue.** Search the [issue tracker](https://github.com/RavenLens/Raven-SDK/issues) first. For a new bug or feature, open an issue with enough context for someone else to reproduce or evaluate it.
+1. **Find or open an issue.** Search the [issue tracker](https://github.com/RavenLens/Raven-ADK/issues) first. For a new bug or feature, open an issue with enough context for someone else to reproduce or evaluate it.
     - **Important:** For Openning New Issue & Resolving Existsing - ensure problem occurs and isn't already resolved by checking out the [codebase](./src/) and [documentation](./documentation/)
 2. **Discuss the scope when needed.** Larger changes, public API changes, new dependencies, and behavior changes should be agreed on in the issue before implementation.
 3. **Fork and create a branch.** Branch from `main` with a focused name such as `fix/tool-timeout` or `feat/memory-adapter`.
@@ -26,13 +26,26 @@ By participating in this project, you are expected to uphold our Code of Conduct
 
 ### Reporting Bugs
 
-* Check the [GitHub Issues](https://github.com/RavenLens/Raven-SDK/issues) to see if the bug has already been reported.
+* Check the [GitHub Issues](https://github.com/RavenLens/Raven-ADK/issues) to see if the bug has already been reported.
 * If not, open a new issue. Include a clear title, a description of the problem, steps to reproduce, and any relevant logs or screenshots.
 
 ### Suggesting Enhancements
 
-* Open a [GitHub Issue](https://github.com/RavenLens/Raven-SDK/issues) with the tag "enhancement".
+* Open a [GitHub Issue](https://github.com/RavenLens/Raven-ADK/issues) with the tag "enhancement".
 * Provide a clear description of the proposed feature and why it would be beneficial.
+
+### Issue Rules
+
+Please use the issue form that best matches the report. GitHub Discussions is the right place for usage questions, agent design advice, and troubleshooting that is not yet a confirmed defect.
+
+* Search existing issues, the roadmap, source code, and documentation before opening a new issue.
+* Use a clear title and describe one problem or proposal per issue.
+* For bugs, provide a minimal reproduction, RavenADK version, Node.js version, operating system, affected area, provider or model, expected behavior, actual behavior, and complete redacted errors or logs.
+* For provider reports, include the provider ADK or API version, capability, relevant request and response shape, compaction mode, and thresholds when applicable.
+* Do not include API keys, access tokens, personal data, proprietary prompts, private conversation history, or hidden model reasoning. Use sanitized placeholders and describe observable behavior instead.
+* Check provider documentation before reporting unsupported model capabilities. Provider behavior may change independently of RavenADK.
+* Report security vulnerabilities privately through [GitHub Security Advisories](https://github.com/RavenLens/Raven-ADK/security/advisories/new), never in a public issue.
+* Maintainers may request a smaller reproduction, label or close duplicates, convert questions to Discussions, and close issues that remain unverifiable or lack requested information.
 
 ### Pull Requests
 
@@ -59,15 +72,15 @@ Keep review discussion focused on correctness, compatibility, maintainability, a
 From a clone of the upstream repository:
 
 ```bash
-git clone https://github.com/RavenLens/Raven-SDK.git
-cd Raven-SDK/ravenone-related/libs/Raven\ ADK
+git clone https://github.com/RavenLens/Raven-ADK.git
+cd Raven-ADK/ravenone-related/libs/Raven\ ADK
 npm install
 ```
 
 On Windows PowerShell, use:
 
 ```powershell
-Set-Location "Raven-SDK/ravenone-related/libs/Raven ADK"
+Set-Location "Raven-ADK/ravenone-related/libs/Raven ADK"
 npm install
 ```
 
