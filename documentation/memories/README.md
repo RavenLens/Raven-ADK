@@ -17,10 +17,100 @@ custom memory with one of two explicit execution models:
 Custom memory uses one of two schemas. Both can be supplied in the same
 `ReActAgent` configuration.
 
+## Persisted Memory Schema
+
+Every memory implementation may describe the data it stores with the generic
+`MemoryDefault<StoredMemory>` contract:
+
+```typescript
+import { z } from "zod";
+import { MemoryDefault } from "@ravenlens/raven-adk/memory";
+
+const projectDecisionSchema = z.object({
+  projectId: z.string(),
+  decisions: z.array(z.object({
+    title: z.string(),
+    decision: z.string()
+  }))
+});
+
+type ProjectDecisionMemory = z.infer<typeof projectDecisionSchema>;
+
+const projectDecisions: MemoryDefault<ProjectDecisionMemory> = {
+  name: "Project decisions",
+  purpose: "Keep confirmed decisions available across runs.",
+  memorySchema: projectDecisionSchema
+};
+```
+
+The fields have separate responsibilities:
+
+* `MemoryDefault<StoredMemory>` provides compile-time type checking for the stored value.
+* `memorySchema` validates the stored value at runtime with Zod.
+
+The schema may represent one object or an array of objects. The memory
+implementation owns the extraction and storage flow. Its normal workflow is:
+
+1. Extract a value from the conversation.
+2. Call `memorySchema.parse(value)` before writing it.
+3. Store the parsed value.
+4. Call `memorySchema.parse(value)` again when reading it back.
+
+This makes the same contract useful for an in-memory map, MongoDB document,
+SQL JSON column, file store, or vector-store metadata. The parsed value is the
+canonical application value. Database IDs, indexes, and query operators belong
+in the adapter unless they are explicitly part of the memory schema.
+
+This contract does not create persistence or tools automatically. It is also
+different from the Zod schemas used for `memoryTools` or deterministic tool
+arguments:
+
+* Tool schemas validate requests sent by the model.
+* `memorySchema` validates the memory entity saved by the implementation.
+
 ## Built-In Memory Systems
 
 All built-in memory systems use deterministic lifecycle hooks, so passing an
 instance to `memory` activates its supported ReAct lifecycle behavior.
+
+The persisted-memory schema can be used with all built-in systems, but each
+system owns a different entity shape. Use the matching exported schema in a
+custom database-backed store:
+
+| System | Persisted entity | Exported schema |
+|---|---|---|
+| Mem0 | Factual record | `mem0MemorySchema` |
+| MemP | Procedure | `memPProcedureSchema` |
+| MemRL | Learned score | `memRLScoreSchema` |
+| MemRL | Trace and feedback history | `memRLTraceSchema` |
+
+```typescript
+import {
+  mem0MemorySchema,
+  memPProcedureSchema,
+  memRLScoreSchema,
+  memRLTraceSchema
+} from "@ravenlens/raven-adk/memory";
+
+async function saveFact(document: unknown) {
+  const fact = mem0MemorySchema.parse(document);
+  await mongo.db.collection("mem0_facts").replaceOne(
+    { id: fact.id, scope: fact.scope },
+    fact,
+    { upsert: true }
+  );
+}
+```
+
+The same pattern applies to MemP procedures and MemRL scores or traces. A
+custom store still has to implement the corresponding store interface; the
+Zod schema only supplies validation and the canonical document shape.
+
+Important boundaries:
+
+* Do not use a Mem0 schema for MemP or MemRL records.
+* Do not assume that a vector-retrieval payload has the same shape as a persisted memory entity.
+* Keep database-specific fields and transformations in the store adapter.
 
 ### Mem0: Factual Memory
 

@@ -1,4 +1,5 @@
 import { DeterministicFunctionInstruction, DeterministicMemoryConfig, DeterministicMemorySchema } from "../schema/deterministicMemorySchema";
+import z from "zod";
 
 const DEFAULT_INITIAL_Q_SCORE = 0.5;
 const DEFAULT_LEARNING_RATE = 0.2;
@@ -30,6 +31,11 @@ export interface MemRLScore extends MemRLResourceReference {
     updatedAt?: number;
 }
 
+export const memRLScoreSchema: z.ZodType<MemRLScore> = z.object({
+    resourceId: z.string(), resourceType: z.enum(["memory", "tool", "skill"]), scope: z.string(),
+    qScore: z.number(), updates: z.number(), updatedAt: z.number().optional()
+});
+
 /** Persistence boundary for learned utility values. */
 export interface MemRLScoreStore {
     get(scope: string, resourceType: MemRLResourceType, resourceId: string): Promise<MemRLScore | undefined>;
@@ -60,6 +66,22 @@ export interface MemRLTrace {
     selectedResources: MemRLResourceReference[];
     feedback: MemRLFeedback[];
 }
+
+const memRLResourceReferenceSchema = z.object({
+    resourceId: z.string(), resourceType: z.enum(["memory", "tool", "skill"])
+});
+const memRLTraceCandidateSchema: z.ZodType<MemRLTraceCandidate> = memRLResourceReferenceSchema.extend({
+    semanticScore: z.number(), qScore: z.number(), utilityScore: z.number(), rank: z.number()
+});
+const memRLFeedbackSchema: z.ZodType<MemRLFeedback> = z.object({
+    source: z.enum(["manual", "automatic"]), reward: z.number(), appliedAt: z.number(),
+    resources: z.array(memRLResourceReferenceSchema), metadata: z.record(z.string(), z.unknown()).optional()
+});
+export const memRLTraceSchema: z.ZodType<MemRLTrace> = z.object({
+    traceId: z.string(), scope: z.string(), createdAt: z.number(),
+    candidates: z.array(memRLTraceCandidateSchema), selectedResources: z.array(memRLResourceReferenceSchema),
+    feedback: z.array(memRLFeedbackSchema)
+});
 
 /** Persistence boundary for feedback targets and their audit trail. */
 export interface MemRLTraceStore {
@@ -161,11 +183,12 @@ export class InMemoryMemRLScoreStore implements MemRLScoreStore {
 
     async get(scope: string, resourceType: MemRLResourceType, resourceId: string): Promise<MemRLScore | undefined> {
         const score = this.scores.get(this.createKey(scope, resourceType, resourceId));
-        return score ? { ...score } : undefined;
+        return score ? { ...memRLScoreSchema.parse(score) } : undefined;
     }
 
     async set(score: MemRLScore): Promise<void> {
-        this.scores.set(this.createKey(score.scope, score.resourceType, score.resourceId), { ...score });
+        const validatedScore = memRLScoreSchema.parse(score);
+        this.scores.set(this.createKey(validatedScore.scope, validatedScore.resourceType, validatedScore.resourceId), { ...validatedScore });
     }
 
     private createKey(scope: string, resourceType: MemRLResourceType, resourceId: string): string {
@@ -179,11 +202,12 @@ export class InMemoryMemRLTraceStore implements MemRLTraceStore {
 
     async get(traceId: string): Promise<MemRLTrace | undefined> {
         const trace = this.traces.get(traceId);
-        return trace ? cloneTrace(trace) : undefined;
+        return trace ? cloneTrace(memRLTraceSchema.parse(trace)) : undefined;
     }
 
     async set(trace: MemRLTrace): Promise<void> {
-        this.traces.set(trace.traceId, cloneTrace(trace));
+        const validatedTrace = memRLTraceSchema.parse(trace);
+        this.traces.set(validatedTrace.traceId, cloneTrace(validatedTrace));
     }
 }
 

@@ -3,6 +3,7 @@ import {
 	DeterministicMemoryConfig,
 	DeterministicMemorySchema
 } from "../schema/deterministicMemorySchema";
+import z from "zod";
 import { LLMAnswer } from "../../../models/mutual";
 import { MessagesVariations } from "../../state";
 
@@ -28,6 +29,12 @@ export interface Mem0Memory {
 	expiresAt?: number;
 	metadata?: Record<string, unknown>;
 }
+
+export const mem0MemorySchema: z.ZodType<Mem0Memory> = z.object({
+	id: z.string(), scope: z.string(), content: z.string(), revision: z.number(),
+	createdAt: z.number(), updatedAt: z.number(), expiresAt: z.number().optional(),
+	metadata: z.record(z.string(), z.unknown()).optional()
+});
 
 export interface Mem0Fact {
 	content: string;
@@ -225,16 +232,17 @@ export class InMemoryMem0MemoryStore implements Mem0MemoryStore {
 	async list(scope: string): Promise<readonly Mem0Memory[]> {
 		return [...this.memories.values()]
 			.filter(memory => memory.scope === scope)
-			.map(memory => cloneMemory(memory));
+			.map(memory => cloneMemory(mem0MemorySchema.parse(memory)));
 	}
 
 	async get(scope: string, memoryId: string): Promise<Mem0Memory | undefined> {
 		const memory = this.memories.get(this.createKey(scope, memoryId));
-		return memory ? cloneMemory(memory) : undefined;
+		return memory ? cloneMemory(mem0MemorySchema.parse(memory)) : undefined;
 	}
 
 	async set(memory: Mem0Memory): Promise<void> {
-		this.memories.set(this.createKey(memory.scope, memory.id), cloneMemory(memory));
+		const validatedMemory = mem0MemorySchema.parse(memory);
+		this.memories.set(this.createKey(validatedMemory.scope, validatedMemory.id), cloneMemory(validatedMemory));
 	}
 
 	async delete(scope: string, memoryId: string): Promise<void> {

@@ -1,4 +1,6 @@
-export interface MemoryDefault {
+import z from "zod";
+
+export interface MemoryDefault<StoredMemory = unknown> {
     name: string;
     /** Describes what memory has to save */
     purpose: string;
@@ -6,4 +8,6 @@ export interface MemoryDefault {
     systemPrompt?: string;
     /** What the agent must remember in this system */
     hasToRemember?: string;
+    /** Runtime schema for the value described by StoredMemory. */
+    memorySchema?: z.ZodType<StoredMemory>;
 }

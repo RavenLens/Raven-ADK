@@ -11,7 +11,11 @@ interface ToolSpec<ToolArgs extends z.ZodObject> {
     toolArguments: ToolArgs;
 }
 
-export interface ToolBasedMemorySchema<FetchToolArgs extends z.ZodObject, UpdateToolArgs extends z.ZodObject> extends MemoryDefault {
+export interface ToolBasedMemorySchema<
+    FetchToolArgs extends z.ZodObject,
+    UpdateToolArgs extends z.ZodObject,
+    StoredMemory = unknown
+> extends MemoryDefault<StoredMemory> {
     typeMemory: "toolBased";
     /**
      * Instruction done by tools to fetch the memory

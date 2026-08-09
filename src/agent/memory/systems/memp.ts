@@ -3,6 +3,7 @@ import {
 	DeterministicMemoryConfig,
 	DeterministicMemorySchema
 } from "../schema/deterministicMemorySchema";
+import z from "zod";
 
 const DEFAULT_SCOPE = "default";
 const DEFAULT_TOP_K = 3;
@@ -35,6 +36,14 @@ export interface MemPProcedure {
 	deprecationReason?: string;
 	metadata?: Record<string, unknown>;
 }
+
+export const memPProcedureSchema: z.ZodType<MemPProcedure> = z.object({
+	id: z.string(), scope: z.string(), key: z.string(), steps: z.array(z.string()),
+	script: z.string(), tags: z.array(z.string()), status: z.enum(["active", "deprecated"]),
+	revision: z.number(), createdAt: z.number(), updatedAt: z.number(),
+	deprecatedAt: z.number().optional(), deprecationReason: z.string().optional(),
+	metadata: z.record(z.string(), z.unknown()).optional()
+});
 
 export interface MemPProcedureDraft {
 	id?: string;
@@ -169,16 +178,17 @@ export class InMemoryMemPProcedureStore implements MemPProcedureStore {
 	async list(scope: string): Promise<readonly MemPProcedure[]> {
 		return [...this.procedures.values()]
 			.filter(procedure => procedure.scope === scope)
-			.map(procedure => cloneProcedure(procedure));
+			.map(procedure => cloneProcedure(memPProcedureSchema.parse(procedure)));
 	}
 
 	async get(scope: string, procedureId: string): Promise<MemPProcedure | undefined> {
 		const procedure = this.procedures.get(this.createKey(scope, procedureId));
-		return procedure ? cloneProcedure(procedure) : undefined;
+		return procedure ? cloneProcedure(memPProcedureSchema.parse(procedure)) : undefined;
 	}
 
 	async set(procedure: MemPProcedure): Promise<void> {
-		this.procedures.set(this.createKey(procedure.scope, procedure.id), cloneProcedure(procedure));
+		const validatedProcedure = memPProcedureSchema.parse(procedure);
+		this.procedures.set(this.createKey(validatedProcedure.scope, validatedProcedure.id), cloneProcedure(validatedProcedure));
 	}
 
 	async delete(scope: string, procedureId: string): Promise<void> {

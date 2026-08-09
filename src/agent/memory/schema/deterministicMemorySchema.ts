@@ -83,7 +83,7 @@ interface MemoryAgentMethods<
     afterSubagentRun?: DeterministicFn;
 }
 
-export interface DeterministicMemoryConfig extends MemoryDefault {
+export interface DeterministicMemoryConfig<StoredMemory = unknown> extends MemoryDefault<StoredMemory> {
     tools: Partial<Record<keyof MemoryAgentMethods, MethodsToolSchema<any, any>>>;
 }
 
@@ -102,7 +102,8 @@ export interface DeterministicMemorySchema<
     BeforeSubagentRunFetchArgs extends z.ZodObject = z.ZodObject,
     BeforeSubagentRunUpdateArgs extends z.ZodObject = z.ZodObject,
     AfterSubagentRunFetchArgs extends z.ZodObject = z.ZodObject,
-    AfterSubagentRunUpdateArgs extends z.ZodObject = z.ZodObject
+    AfterSubagentRunUpdateArgs extends z.ZodObject = z.ZodObject,
+    StoredMemory = unknown
 > extends MemoryAgentMethods<
     AfterConversationEndFetchArgs,
     AfterConversationEndUpdateArgs,
@@ -116,7 +117,7 @@ export interface DeterministicMemorySchema<
     AfterSubagentRunUpdateArgs
 > {
     typeMemory: "deterministic";
-    config: DeterministicMemoryConfig;
+    config: DeterministicMemoryConfig<StoredMemory>;
     // Method for obseravability
     /** Emit memory event */
     // emitEvent(
