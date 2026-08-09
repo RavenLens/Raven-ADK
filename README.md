@@ -3,15 +3,15 @@
 [![npm version](https://img.shields.io/npm/v/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
 [![npm downloads](https://img.shields.io/npm/dm/@ravenlens/raven-adk.svg)](https://www.npmjs.com/package/@ravenlens/raven-adk)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289da?logo=discord&logoColor=white)](https://discord.gg/eFfVjDj7Xd)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Us-7289da?logo=discord&logoColor=white)](https://discord.gg/RYfMkWMdM)
 [![Documentation](https://img.shields.io/badge/documentation-read-informational.svg?logo=read-the-docs&logoColor=white)](https://ravenalliance.gitbook.io/ravenalliance-docs)
 <!-- TODO: Someday point to the dedicated webpage -->
 [![Webpage](https://img.shields.io/badge/webpage-visit-blue.svg?logo=google-chrome&logoColor=white)](https://www.ravenalliance.tech)
 
-> Check documentation: [RavenADK Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
+**RavenADK** is an ultra-fast, lightweight, TypeScript-native **Agentic-AI** framework built-on *event-driven* approach with AI-SOTA patterns on mind.
+<br/>**RavenADK** is designed to help you build high-performance AI agents with minimal dependencies; OpenSource in definition
 
-
-Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor.
+<!-- Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor. -->
 
 #### RavenADK as default supports these SOTA Agentic patterns:
 - ReAct Agent - Design for high performance with **parallel tools** and **parallel subagents** support
@@ -47,6 +47,9 @@ npm install @ravenlens/raven-adk
 - [Overview](./documentation/Overview.md)
 - [Quickstart](./documentation/Quickstart.md)
 - [ReAct Agent](./documentation/ReAct-Agent.md)
+- [Workflows](./documentation/Workflows.md)
+    - [Graph](./documentation/Graph.md)
+    - [SequentialRunner](./documentation/SequentialRunner.md)
 - [Tree-of-Thoughts (ToT)](./documentation/chains/Tree-of-Thoughts%20(ToT).md)
 - [RLMs](./documentation/RLMs.md)
 - [Graph Based Workflows](./documentation/Graph.md)
@@ -55,10 +58,12 @@ npm install @ravenlens/raven-adk
 - [HITL Support](./documentation/HITL.md)
 - [GACP (Agent Communication)](./documentation/gacp/GACP.md)
 - [Skills System](./documentation/Skills.md)
+    - If enabled - overtime agent learns new skills
 - [Self-Improvement](./documentation/Self-Improvement.md)
+    - Agent learns new skills and keeps memories
 - [Secure Sandboxes](./documentation/Sandbox.md)
 - [Supported Models](./documentation/Models.md)
-    - [Models comes with Compaction](./documentation/compaction/Readme.md#model-support)
+    - [Models come with Compaction](./documentation/compaction/Readme.md#model-support)
 
 ## GraphBased
 Use graph with this style to make your own workflow
@@ -261,7 +266,7 @@ RavenADK allows agents to evolve through interaction. By leveraging the **CASCAD
 [Check Documentation](https://ravenalliance.gitbook.io/ravenalliance-docs)
 
 ## Contribution
-If you would like to become official contributor contact with one of bellow channels
+If you would like to become official contributor [Check Guide](./CONTRIBUTION.md) contact with one of bellow channels
 
 * [Discord](https://discord.gg/eFfVjDj7Xd)
 * [email](mailto:official@ravenlens.io)

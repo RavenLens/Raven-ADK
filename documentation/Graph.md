@@ -1,4 +1,11 @@
-### Graph Modes
+# Graph Modes
+
+## Usability
+List of things for that Graph can be used
+- **Agents and Handoffs**: Build agents and handoffs with Graph. In fact [ReActAgent](./ReAct-Agent.md) is build base on the Graph
+- **Workflows**: Build complex workflows with multiple step task delegation back and forth with Graph
+
+## Execution Approaches
 #### Synchronous One-to-One
 
 ```typescript

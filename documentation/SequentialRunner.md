@@ -5,7 +5,7 @@ The `SequentialRunner` is a core utility designed to chain multiple asynchronous
 
 ## Purpose
 
-The primary goal of `SequentialRunner` is to manage complex workflows where each step depends on the output of the previous one. It is particularly useful for AI-driven pipelines where outputs might be non-deterministic and require multiple attempts to meet quality gates.
+The primary goal of `SequentialRunner` is to *build and manage **workflows*** where each step depends on the output of the previous one. It is particularly useful for AI-driven pipelines where outputs might be non-deterministic and require multiple attempts to meet *quality gates*.
 
 ## Key Features
 
