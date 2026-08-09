@@ -100,6 +100,26 @@
     - i automatic (v)
     - for LLM Class
     - for ReAct Agent (v)
+12.5. Telemetry
+    - Merge with branches
+        - RealtimeVoiceagent
+            - To get the new events set for react agent
+                - Record the subagents events with telemetry
+                    - invoking
+                    - result
+                    - tool execution
+        - Podcasts
+    - Test how does telemetry work with some opensource OLTP compatible provider on real tasks with
+        - ReActAgent
+        - RealTimeVoiceAgent
+        - Models
+            - LLMs
+            - Embeddings
+            - TTS's
+            - STT's
+        - Coding Agents
+            - CodeActAgent
+            - CodeActSupervisedAgent
 13. RavenHub
 14. TODO tools and events
     - ReAct agent once executes todo tool communicates the updation state and events base on this tools

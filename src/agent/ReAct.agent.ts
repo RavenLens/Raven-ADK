@@ -440,7 +440,7 @@ export class ReActAgent
         }
 
         // Registers config
-        tracer.startActiveSpan("agent.config_constructor_details", (span) => {
+        tracer.startActiveSpan("agent.config_constructor_details", (span: any) => {
             const safeConfig = { ...this.agentConfig, model: this.agentConfig.model.config.model };
             span.setAttribute("config.body", JSON.stringify(safeConfig, (key, value) => {
                 if (key === 'memory') return '[Memory]';
@@ -2163,7 +2163,7 @@ ${memoryConclusionSystemPrompt || "No prior conclusion available. Use tools to s
                     span?.setAttribute("agent.reasoning_path", reasoningPathStr);
                 }
 
-                tracer.startActiveSpan("agent.finalize", (finalizeSpan) => {
+                tracer.startActiveSpan("agent.finalize", (finalizeSpan: any) => {
                     finalizeSpan.setAttribute("agent.total_tokens_input", this.usedTokens.input);
                     finalizeSpan.setAttribute("agent.total_tokens_output", this.usedTokens.output);
                     finalizeSpan.setAttribute("agent.total_tokens_reasoning", this.usedTokens.reasoning);

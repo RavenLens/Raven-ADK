@@ -2,6 +2,8 @@
 
 RavenADK provides native **OpenTelemetry (OTel)** support, establishing it as the project's observability standard. This allows you to monitor agent performance, track token usage in real-time, and debug complex reasoning paths using industry-standard tools like Jaeger, Honeycomb, or Prometheus.
 
+<!-- TODO: Telemetry branch has to add the trace records each agent movement to display it then
+ -->
 ## Why OpenTelemetry?
 - **Universal Standard**: Compatible with almost all modern monitoring platforms.
 - **Deep Insights**: Track everything from high-level token costs to low-level internal reasoning recalls.
