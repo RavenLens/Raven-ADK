@@ -10,6 +10,7 @@ export interface SpeechToTextOptions {
     language?: string;
     prompt?: string;
     mimeType?: string;
+    filename?: string;
     signal?: AbortSignal;
     [key: string]: unknown;
 }

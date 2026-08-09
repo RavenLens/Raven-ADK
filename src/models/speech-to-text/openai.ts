@@ -1,4 +1,5 @@
 import { OpenAI as OpenAIStandalone } from "openai";
+import { toFile } from "openai/uploads";
 import { SpeechToTextConfig, SpeechToTextModel, SpeechToTextOptions } from "./stt.mutual";
 
 export class OpenAISTT implements SpeechToTextModel {
@@ -13,12 +14,17 @@ export class OpenAISTT implements SpeechToTextModel {
     }
 
     async transcribe(speechFile: Blob | File | Buffer, options: SpeechToTextOptions = {}): Promise<string> {
+        const file = await toFile(
+            speechFile,
+            options.filename ?? "speech.wav",
+            { type: options.mimeType ?? "audio/wav" }
+        );
         const response = await this.client.audio.transcriptions.create({
-            file: speechFile as File,
+            file,
             model: this.config.model,
             language: options.language ?? this.config.language,
             prompt: options.prompt,
-        });
+        }, { signal: options.signal });
         return response.text;
     }
 
