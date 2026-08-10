@@ -149,6 +149,26 @@
       "import": "./dist/models/video/providers/lip-sync/index.js",
       "require": "./dist/models/video/providers/lip-sync/index.js"
     },
+    "./models/video/providers/lip-sync/replicate": {
+      "types": "./dist/models/video/providers/lip-sync/replicate.d.ts",
+      "import": "./dist/models/video/providers/lip-sync/replicate.js",
+      "require": "./dist/models/video/providers/lip-sync/replicate.js"
+    },
+    "./models/video/providers/one-stage/heygen": {
+      "types": "./dist/models/video/providers/one-stage/heygen.d.ts",
+      "import": "./dist/models/video/providers/one-stage/heygen.js",
+      "require": "./dist/models/video/providers/one-stage/heygen.js"
+    },
+    "./models/video/providers/ordinary": {
+      "types": "./dist/models/video/providers/ordinary/index.d.ts",
+      "import": "./dist/models/video/providers/ordinary/index.js",
+      "require": "./dist/models/video/providers/ordinary/index.js"
+    },
+    "./models/video/providers/ordinary/vertex-veo": {
+      "types": "./dist/models/video/providers/ordinary/vertex-veo.d.ts",
+      "import": "./dist/models/video/providers/ordinary/vertex-veo.js",
+      "require": "./dist/models/video/providers/ordinary/vertex-veo.js"
+    },
     "./models/video/providers/index": {
       "types": "./dist/models/video/providers/index.d.ts",
       "import": "./dist/models/video/providers/index.js",
@@ -268,6 +288,26 @@
       "types": "./dist/models/video/providers/lip-sync/index.d.ts",
       "import": "./dist/models/video/providers/lip-sync/index.js",
       "require": "./dist/models/video/providers/lip-sync/index.js"
+    },
+    "./video/providers/lip-sync/replicate": {
+      "types": "./dist/models/video/providers/lip-sync/replicate.d.ts",
+      "import": "./dist/models/video/providers/lip-sync/replicate.js",
+      "require": "./dist/models/video/providers/lip-sync/replicate.js"
+    },
+    "./video/providers/one-stage/heygen": {
+      "types": "./dist/models/video/providers/one-stage/heygen.d.ts",
+      "import": "./dist/models/video/providers/one-stage/heygen.js",
+      "require": "./dist/models/video/providers/one-stage/heygen.js"
+    },
+    "./video/providers/ordinary": {
+      "types": "./dist/models/video/providers/ordinary/index.d.ts",
+      "import": "./dist/models/video/providers/ordinary/index.js",
+      "require": "./dist/models/video/providers/ordinary/index.js"
+    },
+    "./video/providers/ordinary/vertex-veo": {
+      "types": "./dist/models/video/providers/ordinary/vertex-veo.d.ts",
+      "import": "./dist/models/video/providers/ordinary/vertex-veo.js",
+      "require": "./dist/models/video/providers/ordinary/vertex-veo.js"
     },
     "./tools": {
       "types": "./dist/agent/tools/index.d.ts",

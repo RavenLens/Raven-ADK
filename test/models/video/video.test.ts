@@ -10,7 +10,7 @@ import {
     type VideoGenerationResult,
     type VideoLipSyncModel,
     type VideoModel
-} from "../../src/models/video";
+} from "../../../src/models/video";
 
 const output: VideoGenerationResult = {
     video: {

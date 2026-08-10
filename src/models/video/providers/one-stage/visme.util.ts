@@ -3,8 +3,8 @@ import {
     createOneStageVideoModel,
     type OneStageVideoProviderCapabilities,
     type OneStageVideoProviderTransport
-} from "./provider";
-import type { OneStageVideoProviderConfig } from "./provider";
+} from "./provider.util";
+import type { OneStageVideoProviderConfig } from "./provider.util";
 
 export interface VismeOneStageConfig extends OneStageVideoProviderConfig {
     provider: "visme";

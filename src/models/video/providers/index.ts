@@ -6,3 +6,5 @@ export * from "./two-stage";
 export * as TwoStage from "./two-stage";
 export * from "./lip-sync";
 export * as LipSync from "./lip-sync";
+export * from "./ordinary/vertex-veo";
+export * as Ordinary from "./ordinary";

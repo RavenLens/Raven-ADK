@@ -30,10 +30,9 @@ import type {
 } from "@ravenlens/raven-adk/models";
 import type { SpeechAlignment } from "@ravenlens/raven-adk/models/video/schemas/audio.schema";
 import {
-    createLatentSyncModel,
-    createMuseTalkModel,
-    createTwoStageVideoModel,
-    createVismeOneStageModel
+    createHeyGenOneStageModel,
+    createReplicateLipSyncModel,
+    createVertexVeoModel
 } from "@ravenlens/raven-adk/models/video/providers";
 import {
     Audio,
@@ -430,22 +429,32 @@ and refinement stages. `generateStream` and `generateRealtime` accept the same o
 
 ## Provider and adapter choices
 
-The current video directory defines contracts and compatibility checks; it does not ship concrete
-video or lip-sync provider classes. A provider adapter implements `VideoModel.generate`, optionally
-`generateStream` or `generateRealtime`, and translates `VideoGenerationOptions.signal` to the
-provider's cancellation mechanism.
+The video directory ships concrete HTTP integrations as well as generic transport factories. Every
+integration uses `fetch`, forwards `VideoGenerationOptions.signal`, supports bounded polling for
+asynchronous jobs, and normalizes the provider's media URL into `VideoGenerationResult`.
+
+### Supported integrations
+
+| Provider | Contract | Implementation | Notes |
+| --- | --- | --- | --- |
+| Google Vertex AI Veo | Ordinary provider-native Stage 1 | `createVertexVeoModel` | Requires a Google Cloud project, regional endpoint, OAuth access token, and public or resolvable output URI. It does not claim lip-sync or external-audio synchronization. |
+| HeyGen | One-stage avatar video | `createHeyGenOneStageModel` | Supports text speech and URL-backed audio for the first scene avatar. Dialogue arrays and realtime generation are not implemented by this adapter. |
+| Replicate | Cascaded lip-sync refinement | `createReplicateLipSyncModel` | Runs a selected Replicate model version with URL-backed base video and audio, then polls the prediction. The model version determines face and alignment behavior. |
+
+Native two-stage audio-timeline generation has no built-in vendor adapter yet. Use
+`createTwoStageVideoModel` with a provider transport only after verifying that the vendor accepts
+authoritative external audio tracks and documents its synchronization guarantees.
 
 | Contract | Adapter targets | Required verification |
 | --- | --- | --- |
-| One-stage unified avatar | Hosted avatar or interactive-video APIs such as HeyGen LiveAvatar, Tavus, D-ID, or a custom audio-driven endpoint | The selected endpoint must accept the declared text/audio/reference inputs and genuinely guarantee the synchronization values it advertises. |
-| Stage 1 general video | Provider-native text/image-to-video APIs such as Google Veo, Runway, Luma, Kling, OpenAI Sora, or a custom video endpoint | Verify prompt, reference-image/video, audio, duration, output format, job polling, and cancellation support for the exact model. |
-| Lip-sync refinement | Sync Labs/Sync.so, hosted Replicate or fal.ai deployments, RunPod, Hugging Face Inference Endpoints, or a self-hosted LatentSync, MuseTalk, or Wav2Lip service | Verify base-video input, exact audio input, alignment support, face tracking, multi-face behavior, background preservation, and cancellation. |
+| One-stage unified avatar | HeyGen adapter above; other hosted avatar APIs remain adapter targets | Verify the selected endpoint's exact text/audio/reference contract and synchronization guarantees. |
+| Stage 1 general video | Vertex AI Veo adapter above; Runway, Luma, Kling, OpenAI Sora, and custom endpoints remain targets | Verify prompt, reference media, output format, job polling, and cancellation for the exact model. |
+| Lip-sync refinement | Replicate adapter above; Sync.so, fal.ai, RunPod, Hugging Face, and self-hosted services remain targets | Verify base-video input, audio input, alignment, face tracking, background preservation, and cancellation. |
 | TTS for the authoritative audio | OpenAI, Google, Cartesia, or ElevenLabs adapters documented in [Text-to-speech models](text-to-speech.md) | Verify voice cloning consent, output format, and alignment metadata before constructing the audio timeline. |
 
-These names are integration targets, not built-in provider support or capability guarantees. A
+Unlisted names are integration targets, not built-in provider support or capability guarantees. A
 provider can be represented with `apiName: { custom: "..." }` and provider-specific values in
-`config` or `providerOptions`. LatentSync and MuseTalk are model implementations; the service
-hosting them is the provider that the adapter calls.
+`config` or `providerOptions`.
 
 ## Provider schemas and adapter boundaries
 
@@ -453,80 +462,56 @@ The provider folders separate the three implementation roles:
 
 ```text
 video/providers/
+    http.util.ts          # fetch, cancellation, polling, and URL normalization
     one-stage/
-        provider.ts       # one-stage transport and capability adapter
-        visme.ts          # Visme-specific configuration boundary
+        provider.util.ts  # one-stage transport and capability adapter
+        heygen.ts         # HeyGen HTTP integration
+    ordinary/
+        vertex-veo.ts     # Vertex AI Veo HTTP integration
     two-stage/
-        provider.ts       # native audio-timeline transport and capability adapter
+        provider.util.ts  # native audio-timeline transport and capability adapter
     lip-sync/
-        latentsync.ts     # LatentSync-specific configuration boundary
-        musetalk.ts       # MuseTalk-specific configuration boundary
+        replicate.ts      # Replicate prediction integration
     ../schemas/
         audio.schema.ts
         lips-sync.schema.ts
         video-provider.schema.ts
 ```
 
-The factory functions accept a provider-specific transport. RavenADK owns request and capability
-validation, but it does not invent a vendor HTTP API, polling protocol, or cancellation endpoint.
-The application or provider integration supplies that transport and must forward
-`VideoGenerationOptions.signal`.
+The generic factory functions still accept provider-specific transports when a vendor is not yet
+implemented. The concrete adapters below own their documented HTTP paths and polling behavior.
 
 ```typescript
-const visme = createVismeOneStageModel({
+const heygen = createHeyGenOneStageModel({
     config: {
-        provider: "visme",
-        model: "avatar-model",
-        apiKey: process.env.VISME_API_KEY,
-        baseURL: process.env.VISME_BASE_URL
+        provider: "heygen",
+        apiKey: process.env.HEYGEN_API_KEY!
     },
-    capabilities: oneStageCapabilities,
-    transport: {
-        generate: (request, options) => vismeClient.generate(request, options)
-    }
+    capabilities: oneStageCapabilities
 });
 
-const nativeTwoStage = createTwoStageVideoModel({
+const lipSync = createReplicateLipSyncModel({
     config: {
-        provider: "my-two-stage-provider",
-        model: "dialogue-model",
-        apiKey: process.env.VIDEO_API_KEY
+        provider: "replicate",
+        version: process.env.REPLICATE_MODEL_VERSION!,
+        apiKey: process.env.REPLICATE_API_TOKEN!
     },
-    capabilities: twoStageCapabilities,
-    transport: {
-        generate: (request, options) => twoStageClient.generate(request, options)
-    }
+    capabilities: lipSyncCapabilities
 });
 
-const lipSync = createLatentSyncModel({
+const veo = createVertexVeoModel({
     config: {
-        provider: "latentsync",
-        model: "refiner-model",
-        apiKey: process.env.LIPSYNC_API_KEY
+        provider: "vertex-veo",
+        model: "veo-3.0-generate-001",
+        projectId: process.env.GOOGLE_CLOUD_PROJECT!,
+        accessToken: process.env.GOOGLE_ACCESS_TOKEN!
     },
-    capabilities: lipSyncCapabilities,
-    transport: {
-        refine: (request, options) => lipSyncClient.refine(request, options)
-    }
-});
-
-const museTalk = createMuseTalkModel({
-    config: {
-        provider: "musetalk",
-        model: "refiner-model",
-        apiKey: process.env.LIPSYNC_API_KEY
-    },
-    capabilities: lipSyncCapabilities,
-    transport: {
-        refine: (request, options) => museTalkClient.refine(request, options)
-    }
+    capabilities: providerCapabilities
 });
 ```
 
-`createVismeOneStageModel` and `createTwoStageVideoModel` return `VideoModel` instances. Their
-transport functions accept only their declared pipeline, while the returned model still satisfies
-the aggregate `VideoModel` contract used by compatibility helpers. `createLatentSyncModel` and
-`createMuseTalkModel` return `VideoLipSyncModel` instances with `refine`, not general video
+`createHeyGenOneStageModel` and `createVertexVeoModel` return `VideoModel` instances.
+`createReplicateLipSyncModel` returns a `VideoLipSyncModel` with `refine`, not general video
 generation. This keeps a cascaded Stage 1 plus lip-sync workflow explicit:
 
 ```text
