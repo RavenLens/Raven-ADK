@@ -79,6 +79,91 @@
       "import": "./dist/models/video/index.js",
       "require": "./dist/models/video/index.js"
     },
+    "./models/video/schemas/audio.schema": {
+      "types": "./dist/models/video/schemas/audio.schema.d.ts",
+      "import": "./dist/models/video/schemas/audio.schema.js",
+      "require": "./dist/models/video/schemas/audio.schema.js"
+    },
+    "./models/video/schemas/lips-sync.schema": {
+      "types": "./dist/models/video/schemas/lips-sync.schema.d.ts",
+      "import": "./dist/models/video/schemas/lips-sync.schema.js",
+      "require": "./dist/models/video/schemas/lips-sync.schema.js"
+    },
+    "./models/video/schemas/stages/one-stage.schema": {
+      "types": "./dist/models/video/schemas/stages/one-stage.schema.d.ts",
+      "import": "./dist/models/video/schemas/stages/one-stage.schema.js",
+      "require": "./dist/models/video/schemas/stages/one-stage.schema.js"
+    },
+    "./models/video/schemas/stages/two-stage.schema": {
+      "types": "./dist/models/video/schemas/stages/two-stage.schema.d.ts",
+      "import": "./dist/models/video/schemas/stages/two-stage.schema.js",
+      "require": "./dist/models/video/schemas/stages/two-stage.schema.js"
+    },
+    "./models/video/schemas/video-provider.schema": {
+      "types": "./dist/models/video/schemas/video-provider.schema.d.ts",
+      "import": "./dist/models/video/schemas/video-provider.schema.js",
+      "require": "./dist/models/video/schemas/video-provider.schema.js"
+    },
+    "./models/video/mutual": {
+      "types": "./dist/models/video/video.mutual.d.ts",
+      "import": "./dist/models/video/video.mutual.js",
+      "require": "./dist/models/video/video.mutual.js"
+    },
+    "./models/video/video.mutual": {
+      "types": "./dist/models/video/video.mutual.d.ts",
+      "import": "./dist/models/video/video.mutual.js",
+      "require": "./dist/models/video/video.mutual.js"
+    },
+    "./models/video/providers": {
+      "types": "./dist/models/video/providers/index.d.ts",
+      "import": "./dist/models/video/providers/index.js",
+      "require": "./dist/models/video/providers/index.js"
+    },
+    "./models/video/providers/one-stage": {
+      "types": "./dist/models/video/providers/one-stage/index.d.ts",
+      "import": "./dist/models/video/providers/one-stage/index.js",
+      "require": "./dist/models/video/providers/one-stage/index.js"
+    },
+    "./models/video/providers/one-stage/provider": {
+      "types": "./dist/models/video/providers/one-stage/provider.d.ts",
+      "import": "./dist/models/video/providers/one-stage/provider.js",
+      "require": "./dist/models/video/providers/one-stage/provider.js"
+    },
+    "./models/video/providers/one-stage/visme": {
+      "types": "./dist/models/video/providers/one-stage/visme.d.ts",
+      "import": "./dist/models/video/providers/one-stage/visme.js",
+      "require": "./dist/models/video/providers/one-stage/visme.js"
+    },
+    "./models/video/providers/two-stage": {
+      "types": "./dist/models/video/providers/two-stage/index.d.ts",
+      "import": "./dist/models/video/providers/two-stage/index.js",
+      "require": "./dist/models/video/providers/two-stage/index.js"
+    },
+    "./models/video/providers/two-stage/provider": {
+      "types": "./dist/models/video/providers/two-stage/provider.d.ts",
+      "import": "./dist/models/video/providers/two-stage/provider.js",
+      "require": "./dist/models/video/providers/two-stage/provider.js"
+    },
+    "./models/video/providers/lip-sync": {
+      "types": "./dist/models/video/providers/lip-sync/index.d.ts",
+      "import": "./dist/models/video/providers/lip-sync/index.js",
+      "require": "./dist/models/video/providers/lip-sync/index.js"
+    },
+    "./models/video/providers/index": {
+      "types": "./dist/models/video/providers/index.d.ts",
+      "import": "./dist/models/video/providers/index.js",
+      "require": "./dist/models/video/providers/index.js"
+    },
+    "./models/video/providers/lip-sync/latentsync": {
+      "types": "./dist/models/video/providers/lip-sync/latentsync.d.ts",
+      "import": "./dist/models/video/providers/lip-sync/latentsync.js",
+      "require": "./dist/models/video/providers/lip-sync/latentsync.js"
+    },
+    "./models/video/providers/lip-sync/musetalk": {
+      "types": "./dist/models/video/providers/lip-sync/musetalk.d.ts",
+      "import": "./dist/models/video/providers/lip-sync/musetalk.js",
+      "require": "./dist/models/video/providers/lip-sync/musetalk.js"
+    },
     "./models/text-to-text": {
       "types": "./dist/models/text-to-text/index.d.ts",
       "import": "./dist/models/text-to-text/index.js",
@@ -113,6 +198,76 @@
       "types": "./dist/models/video/index.d.ts",
       "import": "./dist/models/video/index.js",
       "require": "./dist/models/video/index.js"
+    },
+    "./video/schemas/audio.schema": {
+      "types": "./dist/models/video/schemas/audio.schema.d.ts",
+      "import": "./dist/models/video/schemas/audio.schema.js",
+      "require": "./dist/models/video/schemas/audio.schema.js"
+    },
+    "./video/schemas/lips-sync.schema": {
+      "types": "./dist/models/video/schemas/lips-sync.schema.d.ts",
+      "import": "./dist/models/video/schemas/lips-sync.schema.js",
+      "require": "./dist/models/video/schemas/lips-sync.schema.js"
+    },
+    "./video/schemas/stages/one-stage.schema": {
+      "types": "./dist/models/video/schemas/stages/one-stage.schema.d.ts",
+      "import": "./dist/models/video/schemas/stages/one-stage.schema.js",
+      "require": "./dist/models/video/schemas/stages/one-stage.schema.js"
+    },
+    "./video/schemas/stages/two-stage.schema": {
+      "types": "./dist/models/video/schemas/stages/two-stage.schema.d.ts",
+      "import": "./dist/models/video/schemas/stages/two-stage.schema.js",
+      "require": "./dist/models/video/schemas/stages/two-stage.schema.js"
+    },
+    "./video/schemas/video-provider.schema": {
+      "types": "./dist/models/video/schemas/video-provider.schema.d.ts",
+      "import": "./dist/models/video/schemas/video-provider.schema.js",
+      "require": "./dist/models/video/schemas/video-provider.schema.js"
+    },
+    "./video/mutual": {
+      "types": "./dist/models/video/video.mutual.d.ts",
+      "import": "./dist/models/video/video.mutual.js",
+      "require": "./dist/models/video/video.mutual.js"
+    },
+    "./video/video.mutual": {
+      "types": "./dist/models/video/video.mutual.d.ts",
+      "import": "./dist/models/video/video.mutual.js",
+      "require": "./dist/models/video/video.mutual.js"
+    },
+    "./video/providers": {
+      "types": "./dist/models/video/providers/index.d.ts",
+      "import": "./dist/models/video/providers/index.js",
+      "require": "./dist/models/video/providers/index.js"
+    },
+    "./video/providers/one-stage": {
+      "types": "./dist/models/video/providers/one-stage/index.d.ts",
+      "import": "./dist/models/video/providers/one-stage/index.js",
+      "require": "./dist/models/video/providers/one-stage/index.js"
+    },
+    "./video/providers/one-stage/provider": {
+      "types": "./dist/models/video/providers/one-stage/provider.d.ts",
+      "import": "./dist/models/video/providers/one-stage/provider.js",
+      "require": "./dist/models/video/providers/one-stage/provider.js"
+    },
+    "./video/providers/one-stage/visme": {
+      "types": "./dist/models/video/providers/one-stage/visme.d.ts",
+      "import": "./dist/models/video/providers/one-stage/visme.js",
+      "require": "./dist/models/video/providers/one-stage/visme.js"
+    },
+    "./video/providers/two-stage": {
+      "types": "./dist/models/video/providers/two-stage/index.d.ts",
+      "import": "./dist/models/video/providers/two-stage/index.js",
+      "require": "./dist/models/video/providers/two-stage/index.js"
+    },
+    "./video/providers/two-stage/provider": {
+      "types": "./dist/models/video/providers/two-stage/provider.d.ts",
+      "import": "./dist/models/video/providers/two-stage/provider.js",
+      "require": "./dist/models/video/providers/two-stage/provider.js"
+    },
+    "./video/providers/lip-sync": {
+      "types": "./dist/models/video/providers/lip-sync/index.d.ts",
+      "import": "./dist/models/video/providers/lip-sync/index.js",
+      "require": "./dist/models/video/providers/lip-sync/index.js"
     },
     "./tools": {
       "types": "./dist/agent/tools/index.d.ts",

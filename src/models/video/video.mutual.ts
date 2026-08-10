@@ -1,29 +1,37 @@
 import { LLMConfig } from "../mutual";
-import type { OneStagePipeline } from "./one-stage";
-import type { ProviderVideoCapabilities, ProviderVideoGenerationRequest } from "./provider";
-import type { TwoStagePipeline } from "./two-stage";
+import type { SpeechAlignment } from "./schemas/audio.schema";
+import type { OneStagePipeline } from "./schemas/stages/one-stage.schema";
+import type { ProviderVideoCapabilities, ProviderVideoGenerationRequest } from "./schemas/video-provider.schema";
+import type { TwoStagePipeline } from "./schemas/stages/two-stage.schema";
 
 export type {
     DialogueLine,
     OneStagePipeline,
     OneStageSpeechInput
-} from "./one-stage";
+} from "./schemas/stages/one-stage.schema";
+export type {
+    SpeechAlignment,
+    SpeechPhonemeAlignment,
+    SpeechVisemeAlignment,
+    SpeechWordAlignment
+} from "./schemas/audio.schema";
+export type {
+    LipSyncRefinementRequest,
+    TwoStageLipSyncConfiguration,
+    VideoLipSyncCapabilities,
+    VideoLipSyncModel
+} from "./schemas/lips-sync.schema";
 export type {
     AudioTimeline,
     AudioTrack,
-    LipSyncRefinementRequest,
-    SpeechAlignment,
-    TwoStageLipSyncConfiguration,
-    TwoStagePipeline,
-    VideoLipSyncCapabilities,
-    VideoLipSyncModel
-} from "./two-stage";
+    TwoStagePipeline
+} from "./schemas/stages/two-stage.schema";
 export type {
     ProviderVideoCapabilities,
     ProviderVideoGenerationRequest,
     ProviderVideoInputCapabilities,
     ProviderVideoOutputCapabilities
-} from "./provider";
+} from "./schemas/video-provider.schema";
 
 export type VideoPipelineKind = "one-stage" | "two-stage";
 export type VideoCapability = "native" | "best-effort" | "unsupported";

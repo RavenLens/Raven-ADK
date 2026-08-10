@@ -5,8 +5,8 @@ import type {
     VideoScene,
     VideoSyncRequest,
     VoiceReference
-} from "./video.mutual";
-import type { SpeechAlignment } from "./two-stage";
+} from "../../video.mutual";
+import type { SpeechAlignment } from "../audio.schema";
 
 export interface DialogueLine {
     id: string;
