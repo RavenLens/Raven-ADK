@@ -26,8 +26,18 @@ export { CartesiaSTT } from "./speech-to-text/cartesia";
 export { ElevenLabsSTT } from "./speech-to-text/elevenlabs";
 export { CartesiaTTS } from "./text-to-speech/cartesia";
 export { ElevenLabsTTS } from "./text-to-speech/elevenlabs";
+export {
+	assertPodcastVideoCompatibility,
+	assertRealtimeVideoCompatibility,
+	assertVideoCompatibility,
+	getPodcastVideoCompatibilityIssues,
+	getRealtimeVideoCompatibilityIssues,
+	getVideoCompatibilityIssues,
+	supportsVideoRequest
+} from "./video";
 export type * from "./speech-to-text/stt.mutual";
 export type * from "./text-to-speech/tts.mutual";
+export type * from "./video/video.mutual";
 
 export const Providers = {
 	OpenAI: {

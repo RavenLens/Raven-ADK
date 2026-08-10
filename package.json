@@ -74,6 +74,11 @@
       "import": "./dist/models/text-to-speech/index.js",
       "require": "./dist/models/text-to-speech/index.js"
     },
+    "./models/video": {
+      "types": "./dist/models/video/index.d.ts",
+      "import": "./dist/models/video/index.js",
+      "require": "./dist/models/video/index.js"
+    },
     "./models/text-to-text": {
       "types": "./dist/models/text-to-text/index.d.ts",
       "import": "./dist/models/text-to-text/index.js",
@@ -103,6 +108,11 @@
       "types": "./dist/models/embeddings/index.d.ts",
       "import": "./dist/models/embeddings/index.js",
       "require": "./dist/models/embeddings/index.js"
+    },
+    "./video": {
+      "types": "./dist/models/video/index.d.ts",
+      "import": "./dist/models/video/index.js",
+      "require": "./dist/models/video/index.js"
     },
     "./tools": {
       "types": "./dist/agent/tools/index.d.ts",
