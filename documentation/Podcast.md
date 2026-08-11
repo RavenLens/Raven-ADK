@@ -5,6 +5,7 @@
 - [Overview](#overview)
 - [How the workflow works](#how-the-workflow-works)
 - [Configuration](#configuration)
+- [Telemetry](#telemetry)
 - [Methods](#methods)
   - [constructor](#constructor)
   - [generateTranscript](#generatetranscript)
@@ -107,6 +108,19 @@ const workflow = new PodcastWorkflow({
 ```
 
 For MP4 output, video audio composition is enabled by default, so `generatePodcast()` returns the provider video with the generated speech soundtrack. Set `composeVideoAudio: false` only when the provider already returns the complete audio-video result. The composition uses local `ffmpeg` and `ffprobe` unless custom executable paths are supplied.
+
+## Telemetry
+
+`PodcastWorkflow` can record workflow progress through Raven ADK's OpenTelemetry integration. The workflow creates `podcast.generate` and `podcast.generate_transcript` spans and records stage events on the active span when an OpenTelemetry tracer provider is configured. Provider spans created by the text, speech, avatar, and media adapters can appear as child spans in the same trace.
+
+Recorded progress includes:
+
+- Transcript selection or generation, including segment counts and whether fact checking changed the transcript.
+- Fact-check completion, including pass/fail status, correction state, and issue count.
+- Each completed speech and lip-sync segment, with its index, speaker label, format, and count metadata.
+- Real-time avatar startup, batch avatar completion, output start, and output completion.
+
+Telemetry records workflow metadata such as output format, segment counts, character counts, text lengths, and status flags. It does not add transcript text, speech audio, images, video, or other media payloads to telemetry events. No `telemetry` property is required on `PodcastWorkflowConfig`; without an active tracer provider, the instrumentation remains a no-op. Configure the application's OpenTelemetry provider before calling `generateTranscript()` or `generatePodcast()` when the workflow lifecycle should be included in application traces.
 
 ### The `models` object
 

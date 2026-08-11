@@ -7,6 +7,7 @@ import type { ReActAgent } from "../../ReAct.agent";
 import type { MessagesVariations } from "../../state";
 import type { StandardLLMShema } from "../../../models/mutual";
 import type { TextToSpeechModel, TextToSpeechOptions } from "../../../models/text-to-speech/tts.mutual";
+import { recordEventWithData, withTelemetry } from "../../../telemetry/telemetry";
 
 const execFileAsync = promisify(execFile);
 
@@ -362,7 +363,7 @@ export class PodcastWorkflow {
         const characters = this.config.characters ?? [];
 
         const speech: PodcastSpeechSegment[] = [];
-        for (const segment of transcript.segments) {
+        for (const [index, segment] of transcript.segments.entries()) {
             this.throwIfAborted(options.signal);
 
             const character = characters.find(({ name }) => name === segment.speaker);
@@ -391,6 +392,13 @@ export class PodcastWorkflow {
                 endTime: segment.endTime
             };
             await options.onSegment?.(speechSegment);
+            recordEventWithData("podcast.speech.segment_completed", {
+                index,
+                segment_count: transcript.segments.length,
+                speaker: segment.speaker,
+                text_length: segment.text.length,
+                audio_format: audioFormat
+            });
             speech.push(speechSegment);
         }
 
@@ -399,6 +407,17 @@ export class PodcastWorkflow {
 
     /** Generates a complete podcast from a transcript or subject. */
     async generatePodcast(
+        request: PodcastGenerationRequest = {}
+    ): Promise<PodcastGenerationResult> {
+        return withTelemetry("podcast.generate", {
+            format: this.config.output.format,
+            transcript_provided: Boolean(request.transcript),
+            fact_checking: request.factChecking !== false,
+            character_count: this.config.characters?.length ?? 0
+        }, async () => this.generatePodcastInternal(request));
+    }
+
+    private async generatePodcastInternal(
         request: PodcastGenerationRequest = {}
     ): Promise<PodcastGenerationResult> {
         this.throwIfAborted(request.signal);
@@ -421,6 +440,12 @@ export class PodcastWorkflow {
         const finalTranscript = transcriptWasGenerated
             ? this.validateConfiguredSpeakers(factCheckedTranscript)
             : factCheckedTranscript;
+        recordEventWithData("podcast.transcript.ready", {
+            generated: transcriptWasGenerated,
+            fact_checked: factChecking,
+            corrected: factCheckedTranscript !== transcript,
+            segment_count: finalTranscript.segments.length
+        });
         const realtimeAvatarSession = await this.startRealtimeAvatar(finalTranscript, request.signal);
         let generationError: unknown;
         try {
@@ -436,6 +461,13 @@ export class PodcastWorkflow {
                 request.signal,
                 realtimeAvatarSession
             );
+            recordEventWithData("podcast.output.completed", {
+                format: this.config.output.format,
+                speech_segment_count: speech.length,
+                has_asset: Boolean(pipeline.output.asset),
+                output_segment_count: pipeline.output.segments?.length ?? 0,
+                has_lip_sync: Boolean(pipeline.lipSync?.length)
+            });
 
             return {
                 transcript: finalTranscript,
@@ -595,6 +627,27 @@ export class PodcastWorkflow {
             signal?: AbortSignal;
         }
     ): Promise<PodcastTranscript> {
+        return withTelemetry("podcast.generate_transcript", {
+            fact_checking: config.factChecking !== false,
+            character_count: this.config.characters?.length ?? 0,
+            subject_length: config.subject?.trim().length ?? 0,
+            description_length: config.description?.trim().length ?? 0
+        }, async () => this.generateTranscriptInternal(config));
+    }
+
+    private async generateTranscriptInternal(
+        config: {
+            /** Subject to generate content */
+            subject?: string;
+            /** Gennerated content description */
+            description?: string;
+            /** Instruction to generate content */
+            instruction?: string;
+            /** Fact-check the generated transcript unless explicitly disabled. */
+            factChecking?: boolean;
+            signal?: AbortSignal;
+        }
+    ): Promise<PodcastTranscript> {
         const subject = config.subject?.trim();
         const description = config.description?.trim();
         if (!subject || !description) {
@@ -643,8 +696,13 @@ export class PodcastWorkflow {
         const checkedTranscript = config.factChecking === false
             ? transcript
             : await this.factCheckTranscript(transcript, config.signal);
+        const result = this.validateConfiguredSpeakers(checkedTranscript);
+        recordEventWithData("podcast.transcript.generated", {
+            fact_checked: config.factChecking !== false,
+            segment_count: result.segments.length
+        });
 
-        return this.validateConfiguredSpeakers(checkedTranscript);
+        return result;
     }
 
     /** Validates a transcript and applies any fact-check corrections. */
@@ -673,6 +731,12 @@ export class PodcastWorkflow {
         const refinedTranscript = result.correctedTranscript ?? transcript;
 
         this.validateTranscript(refinedTranscript);
+        recordEventWithData("podcast.fact_check.completed", {
+            passed: result.passed,
+            corrected: Boolean(result.correctedTranscript),
+            issue_count: result.issues?.length ?? 0,
+            segment_count: refinedTranscript.segments.length
+        });
         if (!result.passed && !result.correctedTranscript) {
             const issues = result.issues?.filter(Boolean).join("; ") || "No corrected transcript was returned.";
             throw new Error(`Podcast transcript failed fact checking: ${issues}`);
@@ -692,6 +756,11 @@ export class PodcastWorkflow {
         lipSync?: PodcastLipSyncSegment[];
     }> {
         const { format } = this.config.output;
+        recordEventWithData("podcast.output.started", {
+            format,
+            speech_segment_count: speech.length,
+            realtime_avatar: Boolean(realtimeAvatarSession)
+        });
         if (format === "mp3" || format === "wav") {
             let asset: PodcastMedia | undefined;
             if (speech.length === 1) {
@@ -756,6 +825,11 @@ export class PodcastWorkflow {
             avatarRequest.speech = speech;
         }
         const avatar = await avatarVideos(avatarRequest, { signal });
+        recordEventWithData("podcast.avatar.completed", {
+            format,
+            character_count: characters.length,
+            lip_sync: Boolean(lipSync?.length)
+        });
         const outputAsset = this.shouldComposeVideoAudio(speech)
             ? await this.composeVideoAudio(avatar, speech)
             : avatar;
@@ -791,6 +865,11 @@ export class PodcastWorkflow {
                 "Podcast realtimeAvatar model must return a session with sendSpeech() and capture()."
             );
         }
+
+        recordEventWithData("podcast.realtime_avatar.started", {
+            format: this.config.output.format,
+            character_count: characters.length
+        });
 
         return resolvedSession;
     }
@@ -831,7 +910,7 @@ export class PodcastWorkflow {
         }
 
         const lipSyncedSegments: PodcastLipSyncSegment[] = [];
-        for (const speechSegment of speech) {
+        for (const [index, speechSegment] of speech.entries()) {
             this.throwIfAborted(signal);
             const character = characters.find(({ name }) => name === speechSegment.speaker);
             if (!character) {
@@ -852,6 +931,11 @@ export class PodcastWorkflow {
             lipSyncedSegments.push({
                 ...speechSegment,
                 representation
+            });
+            recordEventWithData("podcast.lip_sync.segment_completed", {
+                index,
+                segment_count: speech.length,
+                speaker: speechSegment.speaker
             });
         }
 
