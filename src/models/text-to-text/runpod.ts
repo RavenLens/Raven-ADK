@@ -1,0 +1,643 @@
+import runpodSdk from "runpod-sdk";
+import * as z from "zod";
+import { AIMessage, ResponseInputVideo } from "../../agent/state";
+import { CompactOptions, InvokeOptions, LLMAnswer, LLMConfig, StandardLLMShema } from "../mutual";
+import { invokeStructuredOutputWithRetries } from "./structuredOutput";
+import { compactMessagesWithStructuredOutput } from "./structuredOutput";
+import { withTelemetry, RecordTracker, RecordTrackerType, recordLog } from "../../telemetry/telemetry";
+import { TelemetryProviderSchema } from "../../telemetry/providers/schema";
+
+export interface RunPodConfig extends LLMConfig {
+	endpointId: string;
+	/**
+	 * Controls how the RunPod payload is sent to the vLLM worker.
+	 * Defaults to "auto".
+	 */
+	inputMode?: "auto" | "messages" | "prompt";
+	/**
+	 * Timeout in milliseconds for the RunPod enqueue/runSync call.
+	 */
+	requestTimeout?: number;
+	/**
+	 * Timeout in milliseconds for streaming polling.
+	 */
+	streamTimeout?: number;
+	telemetry?: TelemetryProviderSchema;
+}
+
+type RunPodChatMessage = {
+	role: "system" | "user" | "assistant";
+	content: string;
+};
+
+type RunPodPayload = {
+	model: string;
+	stream: boolean;
+	messages?: RunPodChatMessage[];
+	prompt?: string;
+	[key: string]: unknown;
+};
+
+type RunPodSdkInstance = ReturnType<typeof runpodSdk>;
+type RunPodEndpoint = NonNullable<ReturnType<RunPodSdkInstance["endpoint"]>>;
+
+/**
+ * Wrapper for RunPod Serverless vLLM endpoints.
+ */
+export class RunPod implements StandardLLMShema {
+	typeAPI: "model" = "model";
+	apiName = { custom: "RunPod" } as const;
+	config: RunPodConfig;
+	telemetry?: TelemetryProviderSchema;
+	baseURL?: string;
+	compactionMode: "manual" = "manual";
+
+	private endpoint: RunPodEndpoint;
+	private Tracker: RecordTracker<RunPodConfig>;
+
+	constructor(config: RunPodConfig, baseURL?: string) {
+		this.config = config;
+		this.telemetry = config.telemetry;
+		this.baseURL = config.baseURL ?? baseURL;
+
+		if (!this.config.apiKey) {
+			throw new Error("RunPod API key is required.");
+		}
+
+		if (!this.config.endpointId) {
+			throw new Error("RunPod endpointId is required.");
+		}
+
+		const runpod = runpodSdk(
+			this.config.apiKey,
+			this.baseURL ? { baseUrl: this.baseURL } : undefined
+		);
+
+		const endpoint = runpod.endpoint(this.config.endpointId);
+
+		if (!endpoint) {
+			throw new Error(`Unable to resolve RunPod endpoint "${this.config.endpointId}".`);
+		}
+
+		this.endpoint = endpoint;
+
+		this.Tracker = new RecordTracker(this.config, RecordTrackerType.LLM, "runpod");
+	}
+
+	private getInputMode(): "messages" | "prompt" {
+		if (this.config.inputMode === "messages" || this.config.inputMode === "prompt") {
+			return this.config.inputMode;
+		}
+
+		const requiresStructuredMessages = this.config.messages?.some((message) => {
+			return message.type === "ai" || message.type === "thinking" || message.type === "tool" || message.type === "compaction";
+		});
+
+		return requiresStructuredMessages ? "messages" : "prompt";
+	}
+
+	private prepareChatMessages(): RunPodChatMessage[] {
+		return this.config.messages?.map((message) => {
+			switch (message.type) {
+				case "system":
+					return {
+						role: "system",
+						content: message.content
+					};
+				case "user":
+					let content = message.content;
+					if (message.imageInput) {
+						content += `\n[Image Input: ${message.imageInput.image_url ? message.imageInput.image_url.substring(0, 100) : "base64"}]`;
+					}
+					if (message.audioInput) {
+						content += `\n[Audio Input: format=${message.audioInput.input_audio?.format || "unknown"}]`;
+					}
+					if (message.fileInput) {
+						content += `\n[File Input: ${message.fileInput.filename || "file"}]`;
+					}
+					if (message.videoInput) {
+						content += `\n[Video Input: ${message.videoInput.video_url || "video data"}]`;
+					}
+					return {
+						role: "user",
+						content
+					};
+				case "ai":
+					return {
+						role: "assistant",
+						content: message.content ?? ""
+					};
+				case "thinking":
+					return {
+						role: "assistant",
+						content: `Assistant thoughts: ${message.content}`
+					};
+				case "compaction":
+					return {
+						role: "assistant",
+						content: `Conversation summary: ${message.content ?? ""}`
+					};
+				case "tool":
+					const runpodToolContent = message.toolOutput ?? message.content;
+					const truncatedRunpodToolContent = runpodToolContent.length > 60000
+						? runpodToolContent.slice(0, 60000) + "... [Truncated due to size limits]"
+						: runpodToolContent;
+					return {
+						role: "user",
+						content: [
+							`Tool response from ${message.tool_name ?? message.tool_id}:`,
+							truncatedRunpodToolContent
+						].join("\n")
+					};
+			}
+		}) ?? [];
+	}
+
+	private preparePrompt(): string {
+		return this.config.messages?.map((message) => {
+			switch (message.type) {
+				case "system":
+					return `System: ${message.content}`;
+				case "user":
+					let userPrompt = `User: ${message.content}`;
+					if (message.imageInput) {
+						userPrompt += `\n[Image Input: ${message.imageInput.image_url ? message.imageInput.image_url.substring(0, 100) : "base64"}]`;
+					}
+					if (message.audioInput) {
+						userPrompt += `\n[Audio Input: format=${message.audioInput.input_audio?.format || "unknown"}]`;
+					}
+					if (message.fileInput) {
+						userPrompt += `\n[File Input: ${message.fileInput.filename || "file"}]`;
+					}
+					if (message.videoInput) {
+						userPrompt += `\n[Video Input: ${message.videoInput.video_url || "video data"}]`;
+					}
+					return userPrompt;
+				case "ai":
+					return `Assistant: ${message.content ?? ""}`;
+				case "thinking":
+					return `Assistant thoughts: ${message.content}`;
+				case "compaction":
+					return `Conversation summary: ${message.content ?? ""}`;
+				case "tool":
+					const toolText = message.toolOutput ?? message.content;
+					const truncatedToolText = toolText.length > 60000
+						? toolText.slice(0, 60000) + "... [Truncated due to size limits]"
+						: toolText;
+					return `Tool ${message.tool_name ?? message.tool_id}: ${truncatedToolText}`;
+			}
+		})
+		.join("\n\n")
+		.trim() ?? "";
+	}
+
+	private buildInput(stream: boolean): RunPodPayload {
+		const input: RunPodPayload = {
+			model: this.config.model,
+			stream
+		};
+
+		if (this.getInputMode() === "messages") {
+			input.messages = this.prepareChatMessages();
+		} else {
+			input.prompt = this.preparePrompt();
+		}
+
+		return input;
+	}
+
+	private stringifyValue(value: unknown): string {
+		if (typeof value === "string") {
+			return value;
+		}
+
+		if (value === null || value === undefined) {
+			return "";
+		}
+
+		if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+			return String(value);
+		}
+
+		try {
+			return JSON.stringify(value);
+		} catch {
+			return String(value);
+		}
+	}
+
+	private extractText(value: unknown): string {
+		if (value === null || value === undefined) {
+			return "";
+		}
+
+		if (typeof value === "string") {
+			return value;
+		}
+
+		if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+			return String(value);
+		}
+
+		if (Array.isArray(value)) {
+			const textParts = value
+				.map((item) => this.extractText(item))
+				.filter((part) => part.trim().length > 0);
+
+			return textParts.join("\n").trim();
+		}
+
+		const record = value as Record<string, unknown>;
+
+		if (typeof record.text === "string") {
+			return record.text;
+		}
+
+		if (typeof record.content === "string") {
+			return record.content;
+		}
+
+		if (typeof record.output === "string") {
+			return record.output;
+		}
+
+		if (typeof record.response === "string") {
+			return record.response;
+		}
+
+		if (typeof record.generated_text === "string") {
+			return record.generated_text;
+		}
+
+		if (typeof record.message === "object" && record.message !== null) {
+			const messageRecord = record.message as Record<string, unknown>;
+
+			if (typeof messageRecord.content === "string") {
+				return messageRecord.content;
+			}
+		}
+
+		if (Array.isArray(record.choices) && record.choices.length > 0) {
+			const choice = record.choices[0] as Record<string, unknown>;
+
+			if (typeof choice.text === "string") {
+				return choice.text;
+			}
+
+			if (typeof choice.message === "object" && choice.message !== null) {
+				const choiceMessage = choice.message as Record<string, unknown>;
+
+				if (typeof choiceMessage.content === "string") {
+					return choiceMessage.content;
+				}
+			}
+
+			if (Array.isArray(choice.tokens)) {
+				const tokens = choice.tokens as unknown[];
+				return tokens.map((t) => (typeof t === "string" ? t : JSON.stringify(t))).join("");
+			}
+		}
+
+		for (const nestedKey of ["output", "data", "result", "completion", "response", "stream"] as const) {
+			const nestedValue = record[nestedKey];
+			const nestedText = this.extractText(nestedValue);
+
+			if (nestedText.trim().length > 0) {
+				return nestedText;
+			}
+		}
+
+		return this.stringifyValue(value);
+	}
+
+	private extractTokens(result: unknown): LLMAnswer["tokens"] {
+		const resultRecord = result as Record<string, unknown>;
+		const usageRecord = this.extractUsageRecord(resultRecord);
+
+		return {
+			input: this.readNumericValue(
+				usageRecord?.input_tokens ??
+					usageRecord?.prompt_tokens ??
+					usageRecord?.input
+			),
+			output: this.readNumericValue(
+				usageRecord?.output_tokens ??
+					usageRecord?.completion_tokens ??
+					usageRecord?.output
+			),
+			reasoning: this.readNumericValue(
+				usageRecord?.reasoning_tokens ??
+					this.readNestedReasoningTokens(usageRecord)
+			)
+		};
+	}
+
+	private extractUsageRecord(result: Record<string, unknown> | null): Record<string, unknown> | null {
+		if (!result) {
+			return null;
+		}
+
+		const directUsage = result.usage;
+
+		if (directUsage && typeof directUsage === "object") {
+			return directUsage as Record<string, unknown>;
+		}
+
+		const nestedOutput = result.output;
+
+		if (nestedOutput && typeof nestedOutput === "object") {
+			const nestedUsage = (nestedOutput as Record<string, unknown>).usage;
+
+			if (nestedUsage && typeof nestedUsage === "object") {
+				return nestedUsage as Record<string, unknown>;
+			}
+		}
+
+		return null;
+	}
+
+	private readNestedReasoningTokens(value: Record<string, unknown> | null | undefined): unknown {
+		if (!value) {
+			return 0;
+		}
+
+		const outputDetails = value.output_tokens_details;
+
+		if (outputDetails && typeof outputDetails === "object") {
+			return (outputDetails as Record<string, unknown>).reasoning_tokens ?? 0;
+		}
+
+		return 0;
+	}
+
+	private readNumericValue(value: unknown): number {
+		if (typeof value === "number" && Number.isFinite(value)) {
+			return value;
+		}
+
+		if (typeof value === "string") {
+			const parsedValue = Number(value);
+
+			if (Number.isFinite(parsedValue)) {
+				return parsedValue;
+			}
+		}
+
+		return 0;
+	}
+
+	private parseResponseToAnswer(response: unknown): LLMAnswer {
+		const responseRecord = response as Record<string, unknown>;
+		const output = responseRecord.output ?? response;
+		const answerText = this.extractText(output).trim();
+
+		let fileInput: any = null;
+		let audioOutput: any = null;
+
+		if (output && typeof output === "object") {
+			const outputRecord = output as Record<string, any>;
+			if (outputRecord.audio) {
+				audioOutput = {
+					type: "output_audio",
+					data: typeof outputRecord.audio === "string" ? outputRecord.audio : (outputRecord.audio.data || ""),
+					transcript: outputRecord.audio.transcript || ""
+				};
+			}
+			if (outputRecord.file) {
+				fileInput = {
+					type: "input_file",
+					file_data: typeof outputRecord.file === "string" ? outputRecord.file : (outputRecord.file.data || ""),
+					filename: outputRecord.file.filename || "file"
+				};
+			}
+		}
+
+		const aiAnswer: AIMessage = {
+			type: "ai",
+			content: answerText.length > 0 ? answerText : this.stringifyValue(output)
+		};
+
+		if (fileInput) aiAnswer.fileInput = fileInput;
+		if (audioOutput) aiAnswer.audioOutput = audioOutput;
+
+		return {
+			messages: [
+				...(this.config.messages ?? []),
+				aiAnswer
+			],
+			answer: [aiAnswer],
+			tokens: this.extractTokens(responseRecord)
+		};
+	}
+
+	async *stream(options?: InvokeOptions): AsyncGenerator<unknown, LLMAnswer | undefined, unknown> {
+		if (options?.abort?.aborted) {
+			return;
+		}
+		if (options?.messages) {
+			this.config.messages = options.messages;
+		}
+
+		const payload = {
+			input: this.buildInput(true)
+		};
+		const request = await this.endpoint.run(payload, this.config.requestTimeout);
+		let finalChunk: any = null;
+		let firstTokenTracked = false;
+
+		for await (const chunk of this.endpoint.stream(request.id, this.config.streamTimeout)) {
+			if (options?.abort?.aborted) {
+				return;
+			}
+
+			if (!firstTokenTracked) {
+				this.Tracker.registerTTFT();
+				firstTokenTracked = true;
+			}
+			finalChunk = chunk;
+			yield chunk;
+		}
+
+		// Try to extract usage from final results if available in the stream
+		let answer: LLMAnswer | undefined = undefined;
+		try {
+			// Some vLLM deployments return the final response as the last chunk
+			if (finalChunk && (finalChunk.output || finalChunk.usage)) {
+				answer = this.parseResponseToAnswer(finalChunk);
+			}
+		} catch (e) {
+			// Ignore errors for telemetry
+		}
+
+		if (answer) {
+			this.Tracker
+				.setAnswerActiveSpanAttribute(answer)
+				.finishTimeTracker()
+				.setUsage(answer.tokens);
+			return answer;
+		}
+
+		this.Tracker.finishTimeTracker();
+	}
+
+	async invoke(): Promise<LLMAnswer>;
+	async invoke(options?: InvokeOptions & { stream?: false }): Promise<LLMAnswer>;
+	async invoke(options: InvokeOptions & { stream: true }): Promise<AsyncIterable<unknown>>;
+	async invoke(options?: InvokeOptions): Promise<LLMAnswer | AsyncIterable<unknown>> {
+		if (options?.messages) {
+			this.config.messages = options.messages;
+		}
+
+		return await withTelemetry(
+			`llm.run.runpod.${options?.stream ? "stream" : "invoke"}`,
+			{
+				"llm.provider": "runpod",
+				"llm.model": this.config.model,
+				"runpod.endpoint": this.config.endpointId,
+				"llm.stream": !!options?.stream
+			},
+			async () => {
+				try {
+					this.Tracker
+						.registerConfig()
+						.setUserQueryActiveSpanAttribute()
+						.registerTimeTracker();
+
+					if (options?.stream) {
+						return this.stream(options);
+					}
+
+					const payload = {
+						input: this.buildInput(false)
+					};
+					const response = await this.endpoint.runSync(payload, this.config.requestTimeout);
+					const answer = this.parseResponseToAnswer(response);
+
+					this.Tracker
+						.registerTTFT()
+						.setAnswerActiveSpanAttribute(answer)
+						.finishTimeTracker()
+						.setUsage(answer.tokens);
+					
+					recordLog({
+						event: "llm_invoke_success",
+						model: this.config.model,
+						tokens: answer.tokens
+					});
+
+					return answer;
+				} catch (error: any) {
+					recordLog({
+						event: "llm_invoke_error",
+						model: this.config.model,
+						error: error.message || error,
+						stack: error.stack
+					});
+					throw error;
+				} finally {
+					if (this.telemetry) {
+						await this.telemetry.send();
+					}
+				}
+			}
+		);
+	}
+
+	async invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer> {
+		return await withTelemetry(`llm.run.runpod.structured_output`, {
+			model: this.config.model,
+			schema: (schema as any).name || "unnamed_schema"
+		}, async () => {
+			try {
+				const result = await invokeStructuredOutputWithRetries({
+					schema,
+					maxRecallTries,
+					messages: this.config.messages,
+					getTools: () => this.config.tools,
+					setMessages: (messages) => {
+						this.config.messages = messages;
+					},
+					setTools: (tools) => {
+						this.config.tools = tools;
+					},
+					invoke: (opts) => this.invoke({ ...(opts ?? {}), stream: false } as any) as Promise<LLMAnswer>,
+					options
+				});
+
+				recordLog({
+					event: "llm_structured_output_success",
+					model: this.config.model,
+					tokens: result.tokens
+				});
+
+				return result;
+			} catch (error: any) {
+				recordLog({
+					event: "llm_structured_output_error",
+					model: this.config.model,
+					error: error.message || error,
+					stack: error.stack
+				});
+				throw error;
+			} finally {
+				if (this.telemetry) {
+					await this.telemetry.send();
+				}
+			}
+		});
+	}
+
+	async compact(options?: CompactOptions) {
+		return compactMessagesWithStructuredOutput({
+			messages: options?.messages ?? this.config.messages ?? [],
+			abort: options?.abort,
+			invokeStructuredOutput: (schema, maxRecallTries, invokeOptions) => {
+				return this.invokeStructuredOutput(schema, maxRecallTries, invokeOptions);
+			}
+		});
+	}
+
+    async tts(text: string): Promise<Buffer> {
+        return await withTelemetry(`llm.run.runpod.tts`, {
+			model: this.config.model
+		}, async () => {
+			try {
+				this.Tracker.registerTimeTracker();
+				throw new Error("TTS is not supported by RunPod provider in Raven ADK.");
+			} catch (error: any) {
+				recordLog({
+					event: "llm_tts_error",
+					model: this.config.model,
+					error: error.message || error
+				});
+				throw error;
+			} finally {
+				if (this.telemetry) {
+					await this.telemetry.send();
+				}
+			}
+		});
+    }
+
+    async stt(speechFile: File, options?: any): Promise<string> {
+        return await withTelemetry(`llm.run.runpod.stt`, {
+			model: this.config.model
+		}, async () => {
+			try {
+				this.Tracker.registerTimeTracker();
+				throw new Error("STT is not supported by RunPod provider in Raven ADK.");
+			} catch (error: any) {
+				recordLog({
+					event: "llm_stt_error",
+					model: this.config.model,
+					error: error.message || error
+				});
+				throw error;
+			} finally {
+				if (this.telemetry) {
+					await this.telemetry.send();
+				}
+			}
+		});
+    }
+}

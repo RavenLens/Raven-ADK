@@ -4,3 +4,4 @@ node_modules
 *.env
 .npmrc
 publishing_strategy
+test/podcast/artifacts/

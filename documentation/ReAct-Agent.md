@@ -14,7 +14,7 @@ The `ReActAgent` is a standalone agent in RavenADK designed to follow the ReAct 
 - **Subagents**: Capability to delegate complex tasks to specialized subagents. Supports **parallel subagents execution** with multi-agent orchestration. [Checkout subagents documentation](./Subagents.md) for more
 - **Structured Output**: Capability to retrive the output follows specified `zod (v4) schema`. [Checkout structured-output documentation](./StructuredOutput.md) for more
 - **Optimized Execution**: Features internal reasoning recalls and optimized tool resolution to minimize unnecessary turns.
-- **Plugins**: Use [Chat-Compaction Plugin](./compression/Compression.md) and/or [TODO Plugin](./Todo-Plugin.md) and make your own/use community plugins to extend how does model behave
+- **Plugins**: Use [Chat-Compaction Plugin](./compaction/Readme.md) and/or [TODO Plugin](./Todo-Plugin.md) and make your own/use community plugins to extend how does model behave
 
 ## Execution Flow
 
@@ -37,6 +37,7 @@ The `ReActAgent` follows a sophisticated execution flow designed for efficiency:
 // Subagent Delegation
 [[RAVEN_CALL_SUBAGENT]] Researcher | Find recent breakthroughs in quantum computing.
 ```
+- This is how ReActAgent calls the subagents and delegates the task from the subagent to the main agent back then
 
 ## Events
 
@@ -67,7 +68,7 @@ import { HITLSocketIo } from "@ravenlens/raven-adk/tools/hitl";
 
 const reactAgent = new ReActAgent({
     model: new OpenAI({
-        model: "gpt-4",
+        model: "gpt-5.6-sol",
         apiKey: "your-api-key",
     }),
     systemPrompt: "You are a helpful assistant.",

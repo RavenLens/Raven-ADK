@@ -1,6 +1,6 @@
 {
   "name": "@ravenlens/raven-adk",
-  "version": "0.0.6",
+  "version": "0.0.10",
   "description": "AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightful UI assemblies gorgeous UX. Made by RavenAlliance",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -22,12 +22,12 @@
   "license": "Apache-2.0",
   "type": "commonjs",
   "bugs": {
-    "url": "https://github.com/RavenLens/Raven-SDK/issues"
+    "url": "https://github.com/RavenLens/Raven-ADK/issues"
   },
-  "homepage": "https://github.com/RavenLens/Raven-SDK#readme",
+  "homepage": "https://github.com/RavenLens/Raven-ADK#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RavenLens/Raven-SDK.git",
+    "url": "git+https://github.com/RavenLens/Raven-ADK.git",
     "directory": "ravenone-related/libs/Raven ADK"
   },
   "publishConfig": {
@@ -64,6 +64,46 @@
       "import": "./dist/models/index.js",
       "require": "./dist/models/index.js"
     },
+    "./models/speech-to-text": {
+      "types": "./dist/models/speech-to-text/index.d.ts",
+      "import": "./dist/models/speech-to-text/index.js",
+      "require": "./dist/models/speech-to-text/index.js"
+    },
+    "./models/text-to-speech": {
+      "types": "./dist/models/text-to-speech/index.d.ts",
+      "import": "./dist/models/text-to-speech/index.js",
+      "require": "./dist/models/text-to-speech/index.js"
+    },
+    "./models/text-to-text": {
+      "types": "./dist/models/text-to-text/index.d.ts",
+      "import": "./dist/models/text-to-text/index.js",
+      "require": "./dist/models/text-to-text/index.js"
+    },
+    "./models/embeddings": {
+      "types": "./dist/models/embeddings/index.d.ts",
+      "import": "./dist/models/embeddings/index.js",
+      "require": "./dist/models/embeddings/index.js"
+    },
+    "./speech-to-text": {
+      "types": "./dist/models/speech-to-text/index.d.ts",
+      "import": "./dist/models/speech-to-text/index.js",
+      "require": "./dist/models/speech-to-text/index.js"
+    },
+    "./text-to-speech": {
+      "types": "./dist/models/text-to-speech/index.d.ts",
+      "import": "./dist/models/text-to-speech/index.js",
+      "require": "./dist/models/text-to-speech/index.js"
+    },
+    "./text-to-text": {
+      "types": "./dist/models/text-to-text/index.d.ts",
+      "import": "./dist/models/text-to-text/index.js",
+      "require": "./dist/models/text-to-text/index.js"
+    },
+    "./embeddings": {
+      "types": "./dist/models/embeddings/index.d.ts",
+      "import": "./dist/models/embeddings/index.js",
+      "require": "./dist/models/embeddings/index.js"
+    },
     "./tools": {
       "types": "./dist/agent/tools/index.d.ts",
       "import": "./dist/agent/tools/index.js",
@@ -88,6 +128,11 @@
       "types": "./dist/agent/skills/index.d.ts",
       "import": "./dist/agent/skills/index.js",
       "require": "./dist/agent/skills/index.js"
+    },
+    "./podcasts": {
+      "types": "./dist/agent/abstract/podcast/index.d.ts",
+      "import": "./dist/agent/abstract/podcast/index.js",
+      "require": "./dist/agent/abstract/podcast/index.js"
     },
     "./skills/store": {
       "types": "./dist/agent/skills/stores/index.d.ts",
@@ -186,6 +231,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@fal-ai/client": "^1.10.1",
     "@types/node": "^25.6.2",
     "vitest": "^4.1.5"
   }

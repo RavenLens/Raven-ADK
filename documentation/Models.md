@@ -1,6 +1,90 @@
 # Models
 RavenADK provides support for several model providers, allowing you to easily switch between them using a standard interface.
 
+## Model groups
+
+Models are organized into four independent groups:
+
+* **ttt**: text-to-text models such as OpenAI, Google, Anthropic, and RunPod.
+* **stt**: speech-to-text models from OpenAI, Google, Cartesia, and ElevenLabs.
+* **tts**: text-to-speech models from OpenAI, Google, Cartesia, and ElevenLabs.
+* **embeddings**: vector embedding models from OpenAI, Google, and VoyageAI.
+
+The dedicated speech groups expose the same small contract for every provider:
+
+```typescript
+import type { SpeechToTextModel, TextToSpeechModel } from "@ravenlens/raven-adk/models";
+
+async function transcribe(model: SpeechToTextModel, file: File) {
+    return model.transcribe(file);
+}
+
+async function speak(model: TextToSpeechModel, text: string) {
+    return model.synthesize(text); // Buffer containing the provider audio format
+}
+```
+
+Provider classes are also grouped under `Providers`, so related models can be discovered together:
+
+```typescript
+import { Providers } from "@ravenlens/raven-adk/models";
+
+const openAITranscriber = new Providers.OpenAI.speechToText({
+    model: "gpt-4o-transcribe",
+    apiKey: process.env.OPENAI_API_KEY
+});
+```
+
+Dedicated imports are available from `@ravenlens/raven-adk/models/speech-to-text`,
+`@ravenlens/raven-adk/models/text-to-speech`, `@ravenlens/raven-adk/models/text-to-text`,
+and `@ravenlens/raven-adk/models/embeddings`.
+
+### Custom models
+
+Implement the schema for the group your provider belongs to. A custom adapter should preserve the
+group method names and return types; provider-specific options can be added through the options index signature.
+
+```typescript
+import type { SpeechToTextModel, TextToSpeechModel } from "@ravenlens/raven-adk/models";
+
+const customSTT: SpeechToTextModel = {
+    typeAPI: "model",
+    apiName: { custom: "My STT" },
+    config: { model: "my-transcriber", apiKey: process.env.MY_API_KEY },
+    transcribe: async (file, options) => "transcription",
+    stt: async (file, options) => "transcription"
+};
+
+const customTTS: TextToSpeechModel = {
+    typeAPI: "model",
+    apiName: { custom: "My TTS" },
+    config: { model: "my-voice", apiKey: process.env.MY_API_KEY },
+    synthesize: async (text, options) => Buffer.from([]),
+    tts: async (text, options) => Buffer.from([])
+};
+```
+
+The other groups use their own schemas rather than the speech contracts:
+
+```typescript
+import { Mutual } from "@ravenlens/raven-adk/models";
+
+const customTTT: Mutual.StandardLLMShema = {
+    typeAPI: "model",
+    apiName: { custom: "My text model" },
+    config: { model: "my-chat-model" },
+    invoke: async (options) => ({ messages: [], answer: [], tokens: { input: 0, output: 0, reasoning: 0 } }),
+    invokeStructuredOutput: async (schema, maxRecallTries, options) => ({ messages: [], answer: [], tokens: { input: 0, output: 0, reasoning: 0 } })
+};
+
+const customEmbedding: Mutual.EmbeddingModel = {
+    typeAPI: "model",
+    apiName: { custom: "My embeddings" },
+    config: { model: "my-embedding-model" },
+    embed: async (text) => Array.isArray(text) ? text.map(() => []) : [[]]
+};
+```
+
 ## Supported Providers
 
 * [OpenAI](#openai)
@@ -191,7 +275,7 @@ Combine your models with RAG for better outcomes check more at [RAG Documentatio
 
 
 ## Embedding models
-RavenADK as default support these embedding model families:
+RavenADK supports these embedding model families:
 
 > Always use the same embedding model as you've used to compose the RAG database in order to always get the similar documents.
 

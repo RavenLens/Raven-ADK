@@ -75,7 +75,19 @@ export interface ToolMessage {
     toolError?: string
 }
 
-export type MessagesVariations = SystemMessage | ReasoningMessage | UserMessage | AIMessage | ToolMessage;
+/** Provider-specific compacted context that must be replayed on later requests. */
+export interface CompactionMessage {
+    type: "compaction";
+    provider: "anthropic" | "openai" | "summary";
+    /** Human-readable summary returned by Anthropic or a structured-summary fallback. */
+    content?: string | null;
+    /** Opaque provider state that must be sent back unchanged. */
+    encryptedContent?: string;
+    /** Canonical OpenAI compact endpoint output items. */
+    items?: unknown[];
+}
+
+export type MessagesVariations = SystemMessage | ReasoningMessage | UserMessage | AIMessage | ToolMessage | CompactionMessage;
 
 export interface AgentMessagesGraphState {
     /** Includes order to call the tools for the `tools_node` */

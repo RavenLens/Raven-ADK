@@ -1,0 +1,92 @@
+name: 🐛Bug report
+description: Report a reproducible defect in RavenADK.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first. Do not include API keys, private data, or hidden model reasoning.
+  - type: input
+    id: package-version
+    attributes:
+      label: RavenADK version
+      description: Provide the package version from package.json or npm.
+      placeholder: "@ravenlens/raven-adk@0.0.9"
+    validations:
+      required: true
+  - type: input
+    id: runtime
+    attributes:
+      label: Runtime and operating system
+      placeholder: "Node.js 22.14.0, Windows 11"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - ReAct agent
+        - Models and providers
+        - Compaction and context management
+        - Tools, MCP, or HITL
+        - Memory or skills
+        - Graphs, chains, or workflows
+        - RAG or augmented generation
+        - Events or state
+        - Build, packaging, or types
+        - Documentation
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider or model
+      description: Use N/A when the issue is provider-independent.
+      placeholder: "OpenAI gpt-5.3-codex, N/A"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Include the smallest code or repository that demonstrates the issue. Remove secrets and private data.
+      render: typescript
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the complete error message and relevant logs, with secrets redacted.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Configure ...
+        2. Invoke ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Initial checks
+      options:
+        - label: I searched existing issues and documentation.
+          required: true
+        - label: I can reproduce this with a supported Node.js version.
+          required: true
+        - label: I removed secrets, credentials, and private user data.
+          required: true

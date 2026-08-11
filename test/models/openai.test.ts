@@ -4,8 +4,9 @@ import { z } from "zod";
 import { tool } from "../../src/agent/tools/tools";
 import { OpenAI } from "../../src/models/openai";
 
-const { openaiResponsesCreateMock, openaiChatCreateMock, openaiCompletionsCreateMock, openaiCtorMock } = vi.hoisted(() => ({
+const { openaiResponsesCreateMock, openaiResponsesCompactMock, openaiChatCreateMock, openaiCompletionsCreateMock, openaiCtorMock } = vi.hoisted(() => ({
     openaiResponsesCreateMock: vi.fn(),
+    openaiResponsesCompactMock: vi.fn(),
     openaiChatCreateMock: vi.fn(),
     openaiCompletionsCreateMock: vi.fn(),
     openaiCtorMock: vi.fn()
@@ -14,7 +15,8 @@ const { openaiResponsesCreateMock, openaiChatCreateMock, openaiCompletionsCreate
 vi.mock("openai", () => ({
     OpenAI: class {
         responses = {
-            create: openaiResponsesCreateMock
+            create: openaiResponsesCreateMock,
+            compact: openaiResponsesCompactMock
         };
         chat = {
             completions: {
@@ -34,6 +36,7 @@ vi.mock("openai", () => ({
 describe("OpenAI model wrapper", () => {
     beforeEach(() => {
         openaiResponsesCreateMock.mockReset();
+        openaiResponsesCompactMock.mockReset();
         openaiChatCreateMock.mockReset();
         openaiCompletionsCreateMock.mockReset();
         openaiCtorMock.mockReset();
@@ -103,7 +106,7 @@ describe("OpenAI model wrapper", () => {
             messages: [
                 { type: "user", content: "What is weather in Paris?" },
                 { type: "ai", content: "Let me check that for you." },
-                { type: "tool", tool_id: "call_0", content: "{}", arguments: {} }
+                { type: "tool", tool_id: "call_0", content: "{}", arguments: {}, toolOutput: "{}" }
             ]
         });
 
@@ -120,17 +123,20 @@ describe("OpenAI model wrapper", () => {
                 input: [
                     { role: "user", content: "What is weather in Paris?" },
                     { role: "assistant", content: "Let me check that for you." },
+                    { type: "custom_tool_call", call_id: "call_0", name: "", input: "{}" },
                     { type: "custom_tool_call_output", call_id: "call_0", output: "{}" }
                 ],
                 tools: [
-                    {
-                        type: "custom",
+                    expect.objectContaining({
+                        type: "function",
                         name: "get_weather",
-                        description: expect.stringContaining("Get weather data for a city")
-                    }
+                        description: expect.stringContaining("Get weather data for a city"),
+                        parameters: expect.objectContaining({ type: "object" })
+                    })
                 ],
                 stream: false
-            })
+            }),
+            expect.objectContaining({ signal: undefined })
         );
 
         expect(result.tokens).toStrictEqual({
@@ -151,16 +157,9 @@ describe("OpenAI model wrapper", () => {
                         arguments: { location: "Paris" }
                     }
                 ]
-            },
-            {
-                type: "tool",
-                tool_id: "call_1",
-                tool_name: "get_weather",
-                content: '{"location":"Paris"}',
-                arguments: { location: "Paris" }
             }
         ]);
-        expect(result.messages).toHaveLength(5);
+        expect(result.messages).toHaveLength(4);
     });
 
     it("returns a stream when invoke is called with stream: true and emits stream events", async () => {
@@ -220,10 +219,47 @@ describe("OpenAI model wrapper", () => {
                     }
                 ],
                 stream: true
-            })
+            }),
+            expect.objectContaining({ signal: undefined })
         );
         expect(iteratedEvents).toStrictEqual(streamEvents);
         expect(emittedEvents).toStrictEqual(streamEvents);
+    });
+
+    it("stops forwarding stream events after abort", async () => {
+        const streamEvents = [
+            { type: "response.created", sequence_number: 1 },
+            { type: "response.completed", sequence_number: 2 }
+        ];
+
+        openaiResponsesCreateMock.mockResolvedValueOnce({
+            async *[Symbol.asyncIterator]() {
+                for (const event of streamEvents) {
+                    yield event;
+                }
+            }
+        });
+
+        const controller = new AbortController();
+        const model = new OpenAI({ model: "gpt-5.5", apiKey: "test-key" });
+        const emittedEvents: unknown[] = [];
+        model.onEvent("stream", (event) => {
+            emittedEvents.push(event);
+            controller.abort();
+        });
+
+        const stream = await model.invoke({ stream: true, abort: controller.signal });
+        const iteratedEvents: unknown[] = [];
+        for await (const event of stream) {
+            iteratedEvents.push(event);
+        }
+
+        expect(openaiResponsesCreateMock).toHaveBeenCalledWith(
+            expect.anything(),
+            { signal: controller.signal }
+        );
+        expect(iteratedEvents).toStrictEqual([streamEvents[0]]);
+        expect(emittedEvents).toStrictEqual([streamEvents[0]]);
     });
 
     it("retries invokeStructuredOutput until the response matches the schema", async () => {
@@ -335,6 +371,74 @@ describe("OpenAI model wrapper", () => {
         });
     });
 
+    it("enables OpenAI server-side compaction and retains its opaque output item", async () => {
+        openaiResponsesCreateMock.mockResolvedValueOnce({
+            output_text: "Continued.",
+            output: [{
+                type: "compaction",
+                id: "cmp_1",
+                encrypted_content: "opaque-compaction-state"
+            }],
+            usage: {
+                input_tokens: 12,
+                output_tokens: 2,
+                output_tokens_details: { reasoning_tokens: 0 }
+            }
+        });
+
+        const model = new OpenAI({
+            model: "gpt-5.3-codex",
+            apiKey: "test-key",
+            compaction: { compactThreshold: 200000 },
+            messages: [{ type: "user", content: "Continue a long task." }]
+        });
+
+        const result = await model.invoke();
+
+        expect(openaiResponsesCreateMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                context_management: [{ type: "compaction", compact_threshold: 200000 }]
+            }),
+            expect.objectContaining({ signal: undefined })
+        );
+        expect(result.messages).toContainEqual({
+            type: "compaction",
+            provider: "openai",
+            encryptedContent: "opaque-compaction-state",
+            items: [{
+                type: "compaction",
+                id: "cmp_1",
+                encrypted_content: "opaque-compaction-state"
+            }]
+        });
+    });
+
+    it("uses the standalone Responses compact endpoint and preserves its full output window", async () => {
+        const compactedWindow = [
+            { role: "user", content: "Start the task." },
+            { type: "compaction", id: "cmp_1", encrypted_content: "opaque-compaction-state" }
+        ];
+        openaiResponsesCompactMock.mockResolvedValueOnce({ output: compactedWindow });
+
+        const model = new OpenAI({
+            model: "gpt-5.6",
+            apiKey: "test-key",
+            messages: [{ type: "user", content: "Start the task." }]
+        });
+
+        const result = await model.compact();
+
+        expect(openaiResponsesCompactMock).toHaveBeenCalledWith({
+            model: "gpt-5.6",
+            input: [{ role: "user", content: "Start the task." }]
+        }, { signal: undefined });
+        expect(result).toStrictEqual([{
+            type: "compaction",
+            provider: "openai",
+            items: compactedWindow
+        }]);
+    });
+
     it("falls back to legacy chat completions for non-OpenAI baseURL", async () => {
         openaiChatCreateMock.mockResolvedValueOnce({
             id: "chat_1",
@@ -359,11 +463,14 @@ describe("OpenAI model wrapper", () => {
         const result = await model.invoke();
 
         expect(openaiChatCreateMock).toHaveBeenCalledTimes(1);
-        expect(openaiChatCreateMock).toHaveBeenCalledWith(expect.objectContaining({
-            model: "other-model",
-            messages: [{ role: "user", content: "Hi" }],
-            stream: false
-        }));
+        expect(openaiChatCreateMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: "other-model",
+                messages: [{ role: "user", content: "Hi" }],
+                stream: false
+            }),
+            expect.objectContaining({ signal: undefined })
+        );
         expect(result.answer[0].content).toBe("Chat response");
     });
 
@@ -391,11 +498,14 @@ describe("OpenAI model wrapper", () => {
         const result = await model.invoke();
 
         expect(openaiCompletionsCreateMock).toHaveBeenCalledTimes(1);
-        expect(openaiCompletionsCreateMock).toHaveBeenCalledWith(expect.objectContaining({
-            model: "llama-3-base",
-            prompt: "User: Hi",
-            stream: false
-        }));
+        expect(openaiCompletionsCreateMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+                model: "llama-3-base",
+                prompt: "User: Hi",
+                stream: false
+            }),
+            expect.objectContaining({ signal: undefined })
+        );
         expect(result.answer[0].content).toBe("Completion response");
     });
 });

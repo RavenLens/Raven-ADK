@@ -34,6 +34,7 @@ export interface InvokeOptions {
     messages?: MessagesVariations[];
     /** Model will override his tools called in initialization with the specified here tools */
     tools?: Tool<any, any>[];
+    abort?: AbortSignal;
     /** 
      * Reasoning configuration.
      * When provided, it enables reasoning for the model call.
@@ -52,19 +53,27 @@ export interface InvokeOptions {
     };
 }
 
+export interface CompactOptions {
+    /** The conversation slice to compact. Defaults to the model's configured messages. */
+    messages?: MessagesVariations[];
+    abort?: AbortSignal;
+}
+
 export interface StandardLLMShema {
     typeAPI: "model";
     apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
     config: LLMConfig;
     telemetry?: TelemetryProviderSchema;
-    invoke(): Promise<LLMAnswer>;
-    invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number): Promise<LLMAnswer>;
-    tts(text: string, options?: any): Promise<Buffer | undefined>;
-    stt(speechFile: File, options?: any): Promise<string>;
+    invoke(options?: InvokeOptions): Promise<LLMAnswer>;
+    invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer>;
+    /** Whether the provider compacts inside a normal invocation or through `compact`. */
+    compactionMode?: "automatic" | "manual";
+    /** Compacts a conversation slice into provider-replayable context when supported. */
+    compact?(options?: CompactOptions): Promise<MessagesVariations[]>;
+    /** We recomend to use dedicated model instead */
+    tts?: (text: string, options?: any) => Promise<Buffer | undefined>;
+    /** We recomend to use dedicated model instead */
+    stt?: (speechFile: File, options?: any) => Promise<string>;
 }
 
-/** Extension of StandardLLMShema for RAG */
-export interface EmbeddingModel 
-    extends Omit<StandardLLMShema, "invoke" | "invokeStructuredOutput" | "tts" | "stt"> {
-    embed(text: string | string[]): Promise<number[][]>;
-}
+export type { EmbeddingModel } from "./embeddings/embedding.mutual";

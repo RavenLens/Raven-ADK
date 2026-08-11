@@ -1,6 +1,7 @@
 import { CodeExecutionSandboxSchema, ReActAgent } from "../../agent";
-import { SchemaMemoryStore } from "../../agent/memory/stores/schema";
 import { AgentModel } from "../../agent/ReAct.agent";
+import { DeterministicMemorySchema } from "../../agent/memory/schema/deterministicMemorySchema";
+import { ToolBasedMemorySchema } from "../../agent/memory/schema/toolMemorySchema";
 import { SchemaSkillStore } from "../../agent/skills/stores/schema";
 import { HITLTransportSchema } from "../../agent/tools/hitl/hitlToolSchema";
 import { Mutual } from "../../models";
@@ -52,7 +53,7 @@ export class ResourceAugmentedGeneration
     RAGDb extends RAGDbSchema,
     RAGModel extends Mutual.EmbeddingModel,
     Skills extends SchemaSkillStore,
-    Memory extends SchemaMemoryStore,
+    Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>,
     HITL extends HITLTransportSchema,
     SkillsSandbox extends CodeExecutionSandboxSchema,
     Target extends ReActAgent<Skills, Memory, HITL, SkillsSandbox> | StandardLLMShema = StandardLLMShema

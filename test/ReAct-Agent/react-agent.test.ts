@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
-import { ReActAgent } from "../../src/agent/ReAct.agent";
+import { ReActAgent, ReActAgentPluginSpec, SubAgentAsFn } from "../../src/agent/ReAct.agent";
 import { OpenAI } from "../../src/models/openai";
 import { tool } from "../../src/agent/tools/tools";
 import { AIMessage } from "../../src/agent/state";
@@ -308,6 +308,99 @@ describe("ReActAgent parallel subagents", () => {
         // subagent: 2 * (20, 10) = (40, 20)
         expect(agent.usedTokens.input).toBe(60);
         expect(agent.usedTokens.output).toBe(30);
+    });
+
+    it("can run a function subagent in parallel", async () => {
+        const mainModel = new OpenAI({
+            model: "gpt-5-mini",
+            apiKey: openaiApiKey!
+        });
+
+        let mainCallCount = 0;
+        vi.spyOn(mainModel, "invoke").mockImplementation(async (options) => {
+            const currentMessages = options?.messages || mainModel.config.messages || [];
+            mainCallCount++;
+            if (mainCallCount === 1) {
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "[[RAVEN_CALL_SUBAGENT]] FunctionWorker | Do custom work"
+                };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            } else {
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "Done."
+                };
+                return {
+                    messages: [...currentMessages, aiMessage],
+                    answer: [aiMessage],
+                    tokens: { input: 10, output: 5, reasoning: 0 }
+                };
+            }
+        });
+
+        const pluginCalls: string[] = [];
+        const testPlugin: ReActAgentPluginSpec = {
+            name: "test-plugin",
+            executionWay: ["before_model_call", "after_model_call"],
+            execute: async (executionFrom) => {
+                pluginCalls.push(`${executionFrom.way}:${executionFrom.nodeType}:${executionFrom.nodeName}`);
+                return { status: true };
+            }
+        };
+
+        let eventEmitted = false;
+        const functionSubagent: SubAgentAsFn<"llm_result"> = {
+            role: "FunctionWorker",
+            roleDescription: "Executes custom logic",
+            fn: (state, utils) => {
+                const aiMessage = {
+                    type: "ai" as const,
+                    content: "Custom function result."
+                };
+                const newMessages = [...state.messages, aiMessage];
+                utils?.emitEvent("llm_result", {
+                    messages: newMessages,
+                    answer: [aiMessage],
+                    tokens: { input: 15, output: 8, reasoning: 0 }
+                });
+                eventEmitted = true;
+                return {
+                    messages: newMessages,
+                    state: {}
+                };
+            }
+        };
+
+        const agent = new ReActAgent({
+            model: mainModel,
+            systemPrompt: "Main",
+            messages: [{ type: "user", content: "Go" }],
+            tools: [],
+            withConclusion: false,
+            parallelizeSubagents: true,
+            plugins: [testPlugin],
+            subagents: [functionSubagent]
+        });
+
+        const result = await agent.invoke();
+
+        expect(mainModel.invoke).toHaveBeenCalledTimes(2);
+        expect(eventEmitted).toBe(true);
+        expect(result.messages.some(m => m.type === "user" && m.content === "[CALLING SUBAGENT: FunctionWorker] Task: Do custom work")).toBe(true);
+        expect(result.messages.some(m => m.type === "ai" && m.content === "Custom function result.")).toBe(true);
+
+        // Plugins should run for the function subagent (before/after model_call)
+        expect(pluginCalls).toContain("before_model_call:subagent:FunctionWorker");
+        expect(pluginCalls).toContain("after_model_call:subagent:FunctionWorker");
+
+        // Tokens: main model 2 * (10, 5) + function subagent (15, 8)
+        expect(agent.usedTokens.input).toBe(35);
+        expect(agent.usedTokens.output).toBe(18);
     });
 });
 

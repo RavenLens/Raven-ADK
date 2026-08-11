@@ -4,44 +4,87 @@ First off, thank you for considering contributing to RavenADK! It's people like 
 
 RavenADK is an open-source Agent Development Kit designed to support wild AI-Agent initiatives, with a strong focus on event-driven architectures and delightful UI/UX.
 
+## How to Become a Contributor
+
+Contributions are welcome in the form of bug fixes, tests, documentation, examples, integrations, and new agent capabilities. A useful contribution usually follows this flow:
+
+1. **Find or open an issue.** Search the [issue tracker](https://github.com/RavenLens/Raven-ADK/issues) first. For a new bug or feature, open an issue with enough context for someone else to reproduce or evaluate it.
+    - **Important:** For Openning New Issue & Resolving Existsing - ensure problem occurs and isn't already resolved by checking out the [codebase](./src/) and [documentation](./documentation/)
+2. **Discuss the scope when needed.** Larger changes, public API changes, new dependencies, and behavior changes should be agreed on in the issue before implementation.
+3. **Fork and create a branch.** Branch from `main` with a focused name such as `fix/tool-timeout` or `feat/memory-adapter`.
+4. **Make a focused change.** Follow the existing TypeScript structure and preserve public APIs unless the change requires an intentional breaking change.
+5. **Add or update tests.** Cover new behavior and regression cases in `test/`. Keep tests deterministic and avoid committing credentials or provider-specific secrets.
+6. **Update documentation.** Changes to public behavior should include the relevant documentation or examples under `documentation/` and, when appropriate, `README.md`.
+7. **Run the checks locally.** Run `npm run build` and `npm test` from this package directory before opening the pull request.
+8. **Open a pull request.** Summarize the problem, the solution, tests run, documentation changes, and any compatibility or follow-up considerations. Link the related issue.
+
 ## Code of Conduct
 
 By participating in this project, you are expected to uphold our Code of Conduct. Please be respectful and professional in all interactions.
 
-## How Can I Contribute?
+## Contribution Areas
 
 ### Reporting Bugs
 
-- Check the [GitHub Issues](https://github.com/RavenLens/Raven-SDK/issues) to see if the bug has already been reported.
-- If not, open a new issue. Include a clear title, a description of the problem, steps to reproduce, and any relevant logs or screenshots.
+* Check the [GitHub Issues](https://github.com/RavenLens/Raven-ADK/issues) to see if the bug has already been reported.
+* If not, open a new issue. Include a clear title, a description of the problem, steps to reproduce, and any relevant logs or screenshots.
 
 ### Suggesting Enhancements
 
-- Open a [GitHub Issue](https://github.com/RavenLens/Raven-SDK/issues) with the tag "enhancement".
-- Provide a clear description of the proposed feature and why it would be beneficial.
+* Open a [GitHub Issue](https://github.com/RavenLens/Raven-ADK/issues) with the tag "enhancement".
+* Provide a clear description of the proposed feature and why it would be beneficial.
+
+### Issue Rules
+
+Please use the issue form that best matches the report. GitHub Discussions is the right place for usage questions, agent design advice, and troubleshooting that is not yet a confirmed defect.
+
+* Search existing issues, the roadmap, source code, and documentation before opening a new issue.
+* Use a clear title and describe one problem or proposal per issue.
+* For bugs, provide a minimal reproduction, RavenADK version, Node.js version, operating system, affected area, provider or model, expected behavior, actual behavior, and complete redacted errors or logs.
+* For provider reports, include the provider ADK or API version, capability, relevant request and response shape, compaction mode, and thresholds when applicable.
+* Do not include API keys, access tokens, personal data, proprietary prompts, private conversation history, or hidden model reasoning. Use sanitized placeholders and describe observable behavior instead.
+* Check provider documentation before reporting unsupported model capabilities. Provider behavior may change independently of RavenADK.
+* Report security vulnerabilities privately through [GitHub Security Advisories](https://github.com/RavenLens/Raven-ADK/security/advisories/new), never in a public issue.
+* Maintainers may request a smaller reproduction, label or close duplicates, convert questions to Discussions, and close issues that remain unverifiable or lack requested information.
 
 ### Pull Requests
 
-1. **Fork** the repository and create your branch from `main`.
-2. **Setup** the development environment (see below).
-3. **Draft** your changes.
-4. **Test** your changes to ensure they don't break existing functionality.
-5. **Submit** a Pull Request with a clear description of the changes and references to any related issues.
+Before opening a pull request, confirm that:
+
+* The change has a clear purpose and is limited to the relevant files.
+* Public API or behavior changes are documented.
+* Tests cover the changed behavior and pass locally.
+* `npm run build` succeeds.
+* The pull request description explains the motivation, implementation, validation, and any remaining limitations.
+* Breaking changes and changes to generated or published output are called out clearly.
+
+Keep review discussion focused on correctness, compatibility, maintainability, and the user-facing behavior of RavenADK.
 
 ## Development Setup
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (Latest LTS recommended)
-- [npm](https://www.npmjs.com/)
+* [Node.js](https://nodejs.org/) (Latest LTS recommended)
+* [npm](https://www.npmjs.com/)
 
 ### Installation
 
+From a clone of the upstream repository:
+
 ```bash
-git clone https://github.com/RavenLens/Raven-SDK.git
-cd ravenone-related/libs/Raven%20ADK
+git clone https://github.com/RavenLens/Raven-ADK.git
+cd Raven-ADK/ravenone-related/libs/Raven\ ADK
 npm install
 ```
+
+On Windows PowerShell, use:
+
+```powershell
+Set-Location "Raven-ADK/ravenone-related/libs/Raven ADK"
+npm install
+```
+
+If you are already working in this package directory, run `npm install` directly.
 
 ### Building
 
@@ -53,27 +96,31 @@ npm run build
 
 ### Running Tests
 
-We use [Vitest](https://vitest.dev/) for testing. Although the `package.json` script might be currently minimal, you can run tests using:
+We use [Vitest](https://vitest.dev/) for testing. Run the package script:
 
 ```bash
-npx vitest
+npm test
 ```
 
-Please ensure all tests pass before submitting a Pull Request. If you add new functionality, please add corresponding tests in the `test/` directory.
+To run a focused test file or pass Vitest options, use `npx vitest` followed by the desired arguments. Please ensure all relevant tests pass before submitting a pull request. If you add new functionality, add corresponding tests in the `test/` directory.
 
 ## Coding Guidelines
 
-- **TypeScript**: Use TypeScript for all new code. Ensure types are properly defined.
-- **Style**: Follow the existing code style. We aim for clean, readable, and well-documented code.
-- **Events**: Since RavenADK is strongly based on events, ensure new features properly emit events where appropriate to support UI/UX integrations.
-- **Documentation**: If you change or add functionality, update the relevant documentation in the `documentation/` folder.
+* **TypeScript**: Use TypeScript for new library code and keep public types explicit and stable.
+* **Style**: Follow the existing code style. Keep changes focused, readable, and free of unrelated formatting churn.
+* **Tests**: Add regression coverage for bug fixes and behavior coverage for new functionality.
+* **Events**: RavenADK is event-driven. Emit relevant events when a new observable operation needs to be available to UI or other integrations.
+* **Dependencies**: Add a dependency only when it is necessary and compatible with the package's supported runtime. Explain meaningful dependency or bundle-size changes in the pull request.
+* **Documentation**: If you change public behavior, update the relevant documentation in `documentation/` and examples where appropriate.
+* **Security**: Do not commit API keys, credentials, private data, or unreviewed code-execution paths. Report security issues privately rather than opening a public issue.
 
 ## Commit Messages
 
-- Use clear and descriptive commit messages.
-- Reference issues if applicable (e.g., `fix: #123 resolve memory leak in ChromaDB store`).
-- Follow [Conventional Commits](https://www.conventionalcommits.org/) if possible.
+* Use clear and descriptive commit messages.
+* Prefer [Conventional Commits](https://www.conventionalcommits.org/), for example `fix: handle tool timeout` or `docs: clarify memory configuration`.
+* Reference issues when applicable, for example `fix: handle tool timeout (#123)`.
+* Keep commits focused so they are easy to review and revert.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the [Apache-2.0 License](./LICENSE).
+By contributing, you agree that your contributions will be licensed under the [Apache-2.0 License](https://github.com/RavenLens/Raven-ADK/blob/main/documentation/LICENSE/README.md).

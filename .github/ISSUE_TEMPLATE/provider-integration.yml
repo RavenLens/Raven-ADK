@@ -1,0 +1,95 @@
+name: 🤖Provider or model integration
+description: Report a provider compatibility issue or propose support for a model API.
+title: "[Provider]: "
+labels:
+  - provider
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for model wrappers, provider APIs, request or response translation, streaming, structured output, or provider-specific compaction.
+  - type: input
+    id: provider
+    attributes:
+      label: Provider and model
+      placeholder: "Google Gemini, gemini-3.6-flash"
+    validations:
+      required: true
+  - type: input
+    id: sdk-version
+    attributes:
+      label: Provider SDK or API version
+      placeholder: "openai npm package version or API date"
+    validations:
+      required: true
+  - type: dropdown
+    id: capability
+    attributes:
+      label: Affected capability
+      options:
+        - Basic invoke
+        - Streaming
+        - Structured output
+        - Tool calling
+        - Compaction
+        - Embeddings
+        - Transcription
+        - Authentication or request configuration
+        - Response parsing
+    validations:
+      required: true
+  - type: dropdown
+    id: compaction-mode
+    attributes:
+      label: Compaction mode
+      description: Select N/A when compaction is unrelated.
+      options:
+        - N/A
+        - Automatic provider compaction
+        - Manual model.compact()
+        - ReAct compaction plugin
+        - Fallback truncation
+    validations:
+      required: true
+  - type: input
+    id: thresholds
+    attributes:
+      label: Relevant thresholds or options
+      description: Include compactThreshold, triggerTokens, contextWindowTokens, percentage, forceTruncate, or truncateSize when applicable.
+      placeholder: "compactThreshold=200000; forceTruncate=false"
+  - type: textarea
+    id: request-response
+    attributes:
+      label: Sanitized request and response shape
+      description: Include provider error codes or message types. Preserve opaque provider state exactly, but redact credentials and private content.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      render: typescript
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Initial checks
+      options:
+        - label: I confirmed the provider API and model support the capability being reported.
+          required: true
+        - label: I removed API keys, tokens, personal data, and hidden model reasoning.
+          required: true
