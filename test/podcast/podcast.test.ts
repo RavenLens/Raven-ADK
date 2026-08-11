@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
@@ -7,6 +7,8 @@ import {
     PodcastAvatarRequest,
     PodcastFactCheckRequest,
     PodcastLipSyncRequest,
+    PodcastRealtimeAvatarRequest,
+    PodcastRealtimeAvatarSession,
     PodcastTextToSpeechRequest,
     PodcastTextToTextRequest,
     PodcastWorkflow
@@ -214,6 +216,139 @@ describe("PodcastWorkflow", () => {
         }
     });
 
+    it("streams speech into a real-time avatar and saves its captured video", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "raven-podcast-"));
+        try {
+            const events: string[] = [];
+            const textToSpeech = vi.fn(async ({ text }: PodcastTextToSpeechRequest) => (
+                new Uint8Array([text.length])
+            ));
+            const session: PodcastRealtimeAvatarSession = {
+                sendSpeech: vi.fn(async ({ text }) => {
+                    events.push(`speech:${text}`);
+                }),
+                capture: vi.fn(async ({ format }) => {
+                    events.push(`capture:${format}`);
+                    return new Uint8Array([4, 5, 6]);
+                }),
+                close: vi.fn(async () => {
+                    events.push("close");
+                })
+            };
+            const realtimeAvatar = vi.fn(async ({
+                transcript,
+                characters
+            }: PodcastRealtimeAvatarRequest) => {
+                expect(transcript.segments.map(({ speaker }) => speaker)).toStrictEqual(["Host", "Guest"]);
+                expect(characters.map(({ name }) => name)).toStrictEqual(["Host", "Guest"]);
+                events.push("start");
+                return session;
+            });
+            const filePath = join(directory, "nested", "live-podcast.mp4");
+            const workflow = new PodcastWorkflow({
+                models: { textToSpeech, realtimeAvatar },
+                characters: [
+                    { name: "Host", voice: "host-voice", avatarImage: "host.png" },
+                    { name: "Guest", voice: "guest-voice", avatarImage: "guest.png" }
+                ],
+                output: {
+                    format: "mp4",
+                    composeVideoAudio: false,
+                    filePath
+                }
+            });
+
+            const result = await workflow.generatePodcast({
+                transcript: {
+                    segments: [
+                        { speaker: "Host", text: "Welcome." },
+                        { speaker: "Guest", text: "Thanks." }
+                    ]
+                },
+                factChecking: false
+            });
+
+            expect(realtimeAvatar).toHaveBeenCalledOnce();
+            expect(session.sendSpeech).toHaveBeenCalledTimes(2);
+            expect(session.capture).toHaveBeenCalledOnce();
+            expect(session.close).toHaveBeenCalledOnce();
+            expect(events).toStrictEqual([
+                "start",
+                "speech:Welcome.",
+                "speech:Thanks.",
+                "capture:mp4",
+                "close"
+            ]);
+            expect(result.output.filePath).toBe(filePath);
+            expect(new Uint8Array(await readFile(filePath))).toEqual(new Uint8Array([4, 5, 6]));
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    it("returns the muxed video asset when video audio composition is enabled", async () => {
+        const textToSpeech = vi.fn(async (_request: PodcastTextToSpeechRequest) => (
+            new Uint8Array([1, 2, 3])
+        ));
+        const avatarVideos = vi.fn(async (_request: PodcastAvatarRequest) => (
+            new Uint8Array([4, 5, 6])
+        ));
+        const workflow = new PodcastWorkflow({
+            models: { textToSpeech, avatarVideos },
+            characters: [{ name: "Host", voice: "host-voice", avatarImage: "host.png" }],
+            output: { format: "mp4" }
+        });
+        const generateSoundtrack = vi.spyOn(workflow, "generateSoundtrack")
+            .mockImplementation(async (_speech, outputPath) => {
+                await writeFile(outputPath, new Uint8Array([7, 8, 9]));
+                return outputPath;
+            });
+        const combineVideoWithAudio = vi.spyOn(workflow, "combineVideoWithAudio")
+            .mockImplementation(async (_video, _soundtrack, outputPath) => {
+                await writeFile(outputPath, new Uint8Array([10, 11, 12]));
+                return outputPath;
+            });
+
+        const result = await workflow.generatePodcast({
+            transcript: {
+                segments: [{ speaker: "Host", text: "The final video has sound." }]
+            },
+            factChecking: false
+        });
+
+        expect(generateSoundtrack).toHaveBeenCalledOnce();
+        expect(combineVideoWithAudio).toHaveBeenCalledOnce();
+        expect(result.output.asset?.media).toEqual(new Uint8Array([10, 11, 12]));
+    });
+
+    it("uses the supplied soundtrack when combining a direct avatar video", async () => {
+        const workflow = new PodcastWorkflow({
+            models: {},
+            mediaTools: { ffmpegPath: "ffmpeg", ffprobePath: "ffprobe" },
+            output: { format: "mp4" }
+        });
+        const privateWorkflow = workflow as unknown as {
+            inspectMedia: (filePath: string) => Promise<{ audio: boolean; video: boolean }>;
+            runMediaTool: (command: string, argumentsList: string[]) => Promise<string>;
+        };
+        vi.spyOn(privateWorkflow, "inspectMedia").mockResolvedValue({ audio: true, video: true });
+        const runMediaTool = vi.spyOn(privateWorkflow, "runMediaTool").mockResolvedValue("");
+        const directory = await mkdtemp(join(tmpdir(), "raven-podcast-"));
+        try {
+            await workflow.combineVideoWithAudio(
+                new Uint8Array([1]),
+                new Uint8Array([2]),
+                join(directory, "episode.mp4")
+            );
+
+            const ffmpegArguments = runMediaTool.mock.calls[0][1];
+            expect(ffmpegArguments).toContain("1:a:0");
+            expect(ffmpegArguments).not.toContain("0:a:0");
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
     it("runs optional lip sync as a second stage before avatar video generation", async () => {
         const textToSpeech = vi.fn(async ({ text }: PodcastTextToSpeechRequest) => (
             new Uint8Array([text.length])
@@ -247,7 +382,7 @@ describe("PodcastWorkflow", () => {
                 { name: "Host", voice: "host-voice", avatarImage: "host.png" },
                 { name: "Guest", voice: "guest-voice", avatarImage: "guest.png" }
             ],
-            output: { format: "mp4" }
+            output: { format: "mp4", composeVideoAudio: false }
         });
 
         const result = await workflow.generatePodcast({

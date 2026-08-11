@@ -11,6 +11,7 @@
   - [generatePodcast](#generatepodcast)
   - [Private pipeline methods](#private-pipeline-methods)
 - [Usage recipes](#usage-recipes)
+- [Fast avatar providers](#fast-avatar-providers)
 - [fal.ai configuration](#falai-configuration)
 - [Output behavior and requirements](#output-behavior-and-requirements)
 	- [Saving generated assets](#saving-generated-assets)
@@ -25,8 +26,10 @@
 - Text-to-speech generation for every transcript segment.
 - Optional character image generation.
 - Optional per-segment lip-sync generation from speech audio and character images.
+- Optional real-time avatar sessions that receive speech as it is synthesized.
 - Avatar video generation for video output.
 - Optional audio composition for a single multi-speaker audio file.
+- Automatic speech soundtrack composition for MP4 video output when enabled.
 - Optional materialization of the generated media to a local file.
 
 The workflow does not call fal.ai, OpenAI, or another provider directly. Each provider is supplied as a callback or an existing Raven ADK model object. This keeps the workflow independent from provider-specific request and response formats.
@@ -50,13 +53,14 @@ The complete `generatePodcast()` path is:
 1. Check the optional `AbortSignal` before starting generation.
 2. Select the source transcript: validate `request.transcript` when one is supplied, or call `generateTranscript()` with `factChecking: false` when the transcript must be generated from `subject` and `description`.
 3. Fact-check the selected transcript unless `request.factChecking` is exactly `false`; use a returned `correctedTranscript` for all remaining stages.
-4. Convert each transcript segment to speech sequentially with `transcriptToSpeech()`, matching each speaker to its configured character and voice.
-5. For video output, optionally call `models.lipSync` once per speech segment to convert the generated voice audio into a provider-defined facial-motion representation.
-6. Build the configured output with `createOutput()`.
-7. For `mp3` or `wav`, use the one speech asset directly or call `composeAudio` to combine multiple ordered speech segments.
-8. For `mp4` or `webm`, resolve character images, pass the optional Stage 1 motion representations to `avatarVideos`, and use its returned Stage 2 video asset.
-9. Wrap the final provider asset in a saveable `PodcastGeneratedAsset`. When `output.filePath` is configured, also materialize the asset to bytes, create the parent directory, and write the file; otherwise keep the asset or ordered speech segments in memory.
-10. Return a `PodcastGenerationResult` containing the transcript, ordered speech segments, optional lip-sync segments, and output metadata.
+4. For video output with `models.realtimeAvatar`, resolve character images and start the live avatar session before speech synthesis begins.
+5. Convert each transcript segment to speech sequentially with `transcriptToSpeech()`, matching each speaker to its configured character and voice. When a real-time session is active, deliver each completed speech segment to it immediately in transcript order.
+6. For batch video output without `models.realtimeAvatar`, optionally call `models.lipSync` once per speech segment to convert the generated voice audio into a provider-defined facial-motion representation.
+7. Build the configured output with `createOutput()`. A real-time session is captured after the final speech segment; otherwise the configured batch avatar model is invoked.
+8. For `mp3` or `wav`, use the one speech asset directly or call `composeAudio` to combine multiple ordered speech segments.
+9. For `mp4` or `webm`, save the captured real-time or batch video asset. For MP4, when `output.composeVideoAudio` is enabled, concatenate the ordered speech assets and mux the soundtrack into video that does not already contain the required audio.
+10. Wrap the final asset in a saveable `PodcastGeneratedAsset`. When `output.filePath` is configured, also materialize the asset to bytes, create the parent directory, and write the file; otherwise keep the asset or ordered speech segments in memory.
+11. Return a `PodcastGenerationResult` containing the transcript, ordered speech segments, optional lip-sync segments, and output metadata.
 
 There are two important fact-checking rules:
 
@@ -93,12 +97,16 @@ const workflow = new PodcastWorkflow({
 		}
 	],
 	backgroundImage: "https://example.com/studio-background.png",
+	mediaTools: {},
 	output: {
 		format: "mp4",
+		composeVideoAudio: true,
 		filePath: "./output/podcast.mp4"
 	}
 });
 ```
+
+For MP4 output, video audio composition is enabled by default, so `generatePodcast()` returns the provider video with the generated speech soundtrack. Set `composeVideoAudio: false` only when the provider already returns the complete audio-video result. The composition uses local `ffmpeg` and `ffprobe` unless custom executable paths are supplied.
 
 ### The `models` object
 
@@ -107,6 +115,7 @@ const workflow = new PodcastWorkflow({
 | `textToText` | `generateTranscript()` when `transcript.generator` is not set | Generate transcript text or a `PodcastTranscript`. It may be a callback, `StandardLLMShema`, or `ReActAgent`. |
 | `textToSpeech` | Every podcast generation | Synthesize one transcript segment at a time. It may be a callback or a Raven ADK `TextToSpeechModel`. |
 | `textToImage` | Video output when a character has no `avatarImage` | Generate one image asset for a character. |
+| `realtimeAvatar` | `mp4` and `webm` output when configured | Start a live avatar session, receive each generated speech segment through `sendSpeech()`, and return a captured video through `capture()`. It takes precedence over batch `avatarVideos`. |
 | `lipSync` | Video output when configured. Some video models do not consume voice audio | Stage 1: convert one generated speech segment into provider-defined facial motion, such as landmarks, 3DMM coefficients, or latent embeddings. |
 | `avatarVideos` | `mp4` and `webm` output | Stage 2: render or assemble the final avatar video from the transcript, characters, motion representations, and optional background. Direct avatar paths without `lipSync` may also receive speech. |
 
@@ -275,13 +284,15 @@ await workflow.generatePodcast({
 3. Otherwise, call `generateTranscript()` with the subject, description, and instruction. Internal transcript fact checking is disabled at this step so the complete method can perform one top-level check.
 4. Fact-check the source transcript unless `factChecking` is exactly `false`.
 5. Use the corrected transcript, if the checker returned one, for every following stage.
-6. Convert the transcript segments to speech sequentially. The exact speaker name selects the matching character and voice.
-7. For video output with `models.lipSync`, generate one Stage 1 motion representation per speech segment.
-8. Select the output path based on `output.format`:
+6. For video output with `models.realtimeAvatar`, start a live avatar session before speech synthesis and send each generated speech segment to it as soon as that segment is ready.
+7. Convert the transcript segments to speech sequentially. The exact speaker name selects the matching character and voice.
+8. For batch video output with `models.lipSync`, generate one Stage 1 motion representation per speech segment.
+9. Select the output path based on `output.format`:
    - `mp3` or `wav`: use one segment directly or call `composeAudio` for multiple segments.
 	- `mp4` or `webm`: resolve character images, pass optional motion representations to `avatarVideos`, and invoke it for Stage 2 video generation or assembly.
-9. If `output.filePath` is configured, resolve the final asset to bytes, create its parent directory, and write the file.
-10. Return the corrected or original transcript, ordered speech segments, optional lip-sync segments, and generated output metadata. When a single final asset exists, `output.asset` exposes the provider media through `media` and can save it with `save(filePath)`.
+10. For MP4 with video audio composition enabled, generate a normalized soundtrack from the ordered speech and mux it into video that does not already contain the desired soundtrack.
+11. If `output.filePath` is configured, resolve the final asset to bytes, create its parent directory, and write the file.
+12. Return the corrected or original transcript, ordered speech segments, optional lip-sync segments, and generated output metadata. When a single final asset exists, `output.asset` exposes the final media through `media` and can save it with `save(filePath)`.
 
 #### When to use it
 
@@ -331,7 +342,7 @@ The returned result has this shape:
 }
 ```
 
-`PodcastGeneratedAsset.media` is the original provider media, such as a URL, local path, binary value, or stream. Use `save()` when the generated result was kept in memory:
+`PodcastGeneratedAsset.media` is the final media. For MP4 workflows with video audio composition enabled, it is the muxed audio-video result; otherwise it is the provider media, such as a URL, local path, binary value, or stream. Use `save()` when the generated result was kept in memory:
 
 ```typescript
 const result = await workflow.generatePodcast({
@@ -364,6 +375,20 @@ These methods are implementation details and cannot be called directly. They are
 7. Append the result with the original speaker and timing metadata.
 
 Calls are intentionally sequential. This preserves speech order and prevents overlapping provider calls from changing the order in which segments are produced.
+
+When `models.realtimeAvatar` is configured for video output, the workflow starts its session before this method runs. Each completed `PodcastSpeechSegment` is sent to the session before the next transcript segment is synthesized, so the provider can render and capture the live avatar continuously.
+
+#### `startRealtimeAvatar`
+
+**Role:** Start a provider-owned live avatar session before the first TTS segment.
+
+The callback receives a `PodcastRealtimeAvatarRequest` containing the validated transcript, resolved characters, and optional background image. It must return a `PodcastRealtimeAvatarSession` with:
+
+- `sendSpeech(segment, options?)` for ordered generated speech segments.
+- `capture({ format, signal })` for the completed MP4 or WebM recording.
+- Optional `close()` for releasing the provider session.
+
+The workflow calls `capture()` after the final speech segment, sends the captured asset through the normal output completion path, and calls `close()` even when speech synthesis or capture fails. Configure `output.filePath` or call `result.output.asset.save(...)` to persist the captured video.
 
 #### `factCheckTranscript`
 
@@ -412,11 +437,12 @@ The workflow calls the model sequentially in transcript order and returns the re
 
 **Video steps (`mp4` and `webm`):**
 
-1. Require `models.avatarVideos`.
-2. Resolve one character for every unique transcript speaker.
-3. If `models.lipSync` is configured, generate one Stage 1 motion representation per speech segment.
+1. Prefer `models.realtimeAvatar` when it is configured.
+2. For a real-time session, capture the provider recording after all speech segments have been sent.
+3. Otherwise require `models.avatarVideos`, resolve one character for every unique transcript speaker, and optionally generate Stage 1 motion representations with `models.lipSync`.
 4. Pass the transcript, resolved characters, optional motion representations, and background image to the Stage 2 avatar provider. When representations are present, omit speech audio so the video model remains voice-independent.
-5. Complete the output as an asset or local file.
+5. When MP4 video audio composition is enabled, generate the ordered soundtrack and mux it into video that does not already contain the desired soundtrack.
+6. Complete the final output as an asset or local file.
 
 #### `resolveAvatarCharacters`
 
@@ -439,7 +465,7 @@ Use `avatarImage` when you already have stable character art. Configure `textToI
 
 **Steps:**
 
-1. Return a `PodcastGeneratedAsset` containing the provider asset and content type immediately when no `filePath` is configured.
+1. Return a `PodcastGeneratedAsset` containing the final asset and content type immediately when no `filePath` is configured.
 2. Materialize the asset to `Uint8Array` when a path is configured.
 3. Create the parent directory recursively.
 4. Write the bytes to the requested path.
@@ -564,6 +590,55 @@ const workflow = new PodcastWorkflow({
 
 Without `composeAudio`, a multi-segment audio request returns `output.segments`. It does not return a single `output.asset` because concatenating independent MP3 or WAV files as raw bytes does not reliably produce a valid file.
 
+### Soundtrack and video composition
+
+For MP4 output, enable automatic composition to make `generatePodcast()` return the playable audio-video result:
+
+```typescript
+const workflow = new PodcastWorkflow({
+	models: {
+		textToSpeech: generateSpeech,
+		avatarVideos: generateAvatar
+	},
+	mediaTools: {},
+	output: {
+		format: "mp4",
+		composeVideoAudio: true,
+		filePath: "./output/episode.mp4"
+	}
+});
+
+const result = await workflow.generatePodcast({
+	transcript,
+	factChecking: false
+});
+
+await result.output.asset?.save("./output/episode.mp4");
+```
+
+The standalone methods remain available when the provider video and soundtrack need to be persisted or recomposed separately. They materialize URLs, local paths, binary assets, and streams before invoking the local `ffmpeg` and `ffprobe` executables:
+
+```typescript
+const result = await workflow.generatePodcast({
+	transcript,
+	factChecking: false
+});
+
+if (!result.output.asset) {
+	throw new Error("The avatar provider did not return a video asset.");
+}
+
+const providerVideoPath = "./output/provider-video.mp4";
+const soundtrackPath = "./output/soundtrack.mp3";
+const finalVideoPath = "./output/episode.mp4";
+
+await result.output.asset.save(providerVideoPath);
+await workflow.generateSoundtrack(result.speech, soundtrackPath);
+await workflow.combineVideoWithAudio(providerVideoPath, soundtrackPath, finalVideoPath);
+```
+
+Both executables default to `ffmpeg` and `ffprobe`. Set `mediaTools.ffmpegPath` and `mediaTools.ffprobePath` in `PodcastWorkflowConfig` when they are installed elsewhere. The generated soundtrack is normalized to 48 kHz stereo MP3 and is always used as the final audio input, including when the provider video already contains an audio track. This keeps the output audio tied to the TTS segments used to drive the avatar. The final video uses a default 48 kHz stereo AAC track for broad player compatibility. The composition methods return the output path and verify that the soundtrack has an audio stream and the final video has both audio and video streams.
+
 ### Two-stage lip-sync video
 
 Configure `models.lipSync` when the Stage 2 video model does not consume voice audio directly. The workflow separates audio-to-motion alignment from video synthesis:
@@ -645,6 +720,58 @@ const workflow = new PodcastWorkflow({
 
 Omit a character's `avatarImage` and configure `models.textToImage`. The workflow generates a portrait prompt for that character, then passes the resolved image to `avatarVideos`.
 
+## Fast avatar providers
+
+When time to first frame matters, prefer a real-time avatar stream over a batch video-generation endpoint. Batch endpoints normally wait until the complete MP4 has rendered before returning an asset.
+
+The following providers and implementation paths are recommended for low-latency avatar experiences:
+
+| Provider or path | Best fit | Integration note |
+| --- | --- | --- |
+| [Simli](https://docs.simli.com/) | Lowest-latency conversational avatar experiences | Audio-driven, lip-synced avatar streaming through real-time transports such as WebRTC, LiveKit, or Pipecat. |
+| [HeyGen LiveAvatar](https://docs.liveavatar.com/) | Managed, realistic real-time avatars | Use LITE Mode when Raven ADK owns the LLM and TTS pipeline; the avatar is delivered as a real-time video stream. |
+| [Tavus](https://docs.tavus.io/) | Managed conversational video agents | Use its Conversational Video Interface when the application needs an interactive avatar rather than a pre-rendered podcast file. |
+| [Azure Speech Avatar](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/text-to-speech-avatar/real-time-synthesis-avatar) | Azure-hosted or enterprise deployments | Provides real-time avatar synthesis and is a natural option for applications already using Azure Speech. |
+| Self-hosted [MuseTalk](https://github.com/TMElyralab/MuseTalk) or [Wav2Lip](https://github.com/Rudrabha/Wav2Lip) | Fast downloadable MP4 generation with GPU control | Run the lip-sync renderer on a provisioned GPU when the final deliverable must be a file and provider queue time is unacceptable. |
+
+For a quick default choice, use **Simli** for an interactive avatar and **HeyGen LiveAvatar LITE Mode** when managed avatar quality is more important. For a downloadable MP4 podcast, a self-hosted GPU renderer or recording a real-time session is usually a better fit than replacing fal.ai with another batch endpoint.
+
+Real-time providers integrate through `models.realtimeAvatar`, not the batch `models.avatarVideos` callback. The adapter owns the provider's WebRTC, LiveKit, or recording implementation and exposes the small Raven ADK session contract:
+
+```typescript
+import type {
+	PodcastRealtimeAvatarModel,
+	PodcastSpeechSegment
+} from "@ravenlens/raven-adk";
+
+const realtimeAvatar: PodcastRealtimeAvatarModel = async ({
+	transcript,
+	characters,
+	backgroundImage
+}, { signal }) => {
+	const liveSession = await provider.startSession({
+		transcript,
+		characters,
+		backgroundImage,
+		signal
+	});
+
+	return {
+		sendSpeech: (segment: PodcastSpeechSegment, options) =>
+			liveSession.sendAudio(segment.audio, {
+				speaker: segment.speaker,
+				text: segment.text,
+				signal: options?.signal
+			}),
+		capture: ({ format, signal: captureSignal }) =>
+			liveSession.capture({ format, signal: captureSignal }),
+		close: () => liveSession.close()
+	};
+};
+```
+
+When this model is configured, `PodcastWorkflow` starts the live session before TTS, sends each generated speech segment immediately in transcript order, captures after the last segment, and closes the provider session. The captured asset uses the same output flow as batch video: set `output.filePath` for automatic persistence or call `result.output.asset.save(...)`. Set `composeVideoAudio: false` when the provider recording already includes the synchronized audio; leave it enabled when the captured video is video-only and Raven ADK should mux the generated soundtrack.
+
 ## fal.ai configuration
 
 The podcast contracts are provider agnostic, so fal.ai is connected by wrapping each fal endpoint in a callback. Run this code in a server-side process or job. Do not expose `FAL_KEY` in browser code.
@@ -663,9 +790,10 @@ The example below follows the fal.ai configuration from `src/podcast/README.md`:
 
 | Podcast stage | fal.ai endpoint | Output used by the workflow |
 | --- | --- | --- |
-| Transcript and fact checking | [`fal-ai/any-llm`](https://fal.ai/models/fal-ai/any-llm) with a Google or other supported model | Text |
-| Text to speech | [`fal-ai/kling-video/v1/tts`](https://fal.ai/models/fal-ai/kling-video/v1/tts) | MP3 URL |
-| Character image | [`fal-ai/flux/schnell`](https://fal.ai/models/fal-ai/flux/schnell) | Image URL |
+| Transcript and fact checking | [`fal-ai/bytedance/seed/v2/mini`](https://fal.ai/models/fal-ai/bytedance/seed/v2/mini) | Text; $0.0001 per 1,000 input units, with output tokens weighted at 4 units |
+| Text to speech | [`fal-ai/inworld-tts`](https://fal.ai/models/fal-ai/inworld-tts) | Audio file; $0.01 per 1,000 characters |
+| Character image | [`fal-ai/flux/schnell`](https://fal.ai/models/fal-ai/flux/schnell) | Image URL; billed by megapixel |
+| Direct avatar video | [`fal-ai/sadtalker`](https://fal.ai/models/fal-ai/sadtalker) | Video file |
 | Stage 1 audio-to-motion | Provider-specific adapter | Facial-motion representation |
 | Stage 2 motion-to-video | Provider-specific conditioned video adapter | MP4 URL |
 
@@ -721,10 +849,13 @@ function transcriptText(transcript: PodcastTranscript): string {
 }
 
 async function generateText({ prompt }: PodcastTextToTextRequest): Promise<string> {
-	const result = await fal.subscribe("fal-ai/any-llm", {
+	const result = await fal.subscribe("fal-ai/bytedance/seed/v2/mini", {
 		input: {
-			model: "google/gemini-pro-1.5",
-			prompt
+			prompt,
+			system_prompt: "Return only the requested JSON. Do not use Markdown fences.",
+			temperature: 0,
+			max_completion_tokens: 700,
+			thinking: "disabled"
 		}
 	});
 
@@ -732,34 +863,33 @@ async function generateText({ prompt }: PodcastTextToTextRequest): Promise<strin
 }
 
 async function checkFacts({ transcript }: PodcastFactCheckRequest): Promise<PodcastFactCheckResult> {
-	const result = await fal.subscribe("fal-ai/any-llm", {
+	const result = await fal.subscribe("fal-ai/bytedance/seed/v2/mini", {
 		input: {
-			model: "google/gemini-pro-1.5",
 			prompt: [
 				"Check the following podcast transcript for factual claims.",
 				"Return only JSON matching { passed: boolean, issues?: string[] }.",
 				transcriptText(transcript)
-			].join("\n\n")
+			].join("\n\n"),
+			system_prompt: "Return only the requested JSON. Do not use Markdown fences.",
+			temperature: 0,
+			max_completion_tokens: 700,
+			thinking: "disabled"
 		}
 	});
 
 	return JSON.parse((result.data as FalTextResult).output) as PodcastFactCheckResult;
 }
 
-async function synthesizeAudioUrl({ text, character }: PodcastTextToSpeechRequest): Promise<string> {
-	const result = await fal.subscribe("fal-ai/kling-video/v1/tts", {
+async function generateSpeech({ text, character }: PodcastTextToSpeechRequest): Promise<Uint8Array> {
+	const result = await fal.subscribe("fal-ai/inworld-tts", {
 		input: {
 			text,
-			voice_id: character?.voice ?? "reader_en_m-v1",
-			voice_speed: 1
+			voice: character?.voice ?? "Sarah (en)",
+			sample_rate_hertz: 24000
 		}
 	});
 
-	return (result.data as FalAudioResult).audio.url;
-}
-
-async function generateSpeech(request: PodcastTextToSpeechRequest): Promise<Uint8Array> {
-	const response = await fetch(await synthesizeAudioUrl(request));
+	const response = await fetch((result.data as FalAudioResult).audio.url);
 	if (!response.ok) {
 		throw new Error(`Unable to download generated audio: ${response.status}`);
 	}
@@ -772,7 +902,7 @@ async function generateCharacterImage({ prompt }: PodcastImageRequest): Promise<
 		input: {
 			prompt,
 			image_size: "portrait_4_3",
-			output_format: "png"
+			output_format: "jpeg"
 		}
 	});
 	const image = (result.data as FalImageResult).images[0];
@@ -838,7 +968,7 @@ async function createPodcastWorkflow(): Promise<PodcastWorkflow> {
 		characters: [
 			{
 				name: "Host",
-				voice: "reader_en_m-v1",
+				voice: "Sarah (en)",
 				avatarImage: hostImage
 			}
 		],
@@ -868,14 +998,13 @@ void main();
 
 The adapter uses the following sequence:
 
-1. `generateText` calls `fal-ai/any-llm` to generate transcript text.
+1. `generateText` calls Bytedance Seed 2.0 Mini to generate transcript text.
 2. `checkFacts` calls the same endpoint and converts its JSON text into `PodcastFactCheckResult`.
-3. `synthesizeAudioUrl` calls Kling TTS and returns the hosted MP3 URL.
-4. `generateSpeech` downloads that URL because the workflow's TTS callback returns binary audio.
-5. `generateCharacterImage` calls FLUX and returns one image URL.
-6. `generateLipSync` uploads the generated audio and calls the provider-specific Stage 1 audio-to-motion adapter.
-7. `generateAvatar` passes each character image and Stage 1 representation to the provider-specific Stage 2 video adapter.
-8. `generatePodcast` writes the returned MP4 bytes to `./output/podcast.mp4` because `filePath` is configured.
+3. `generateSpeech` calls Inworld TTS and converts the returned audio file to binary audio.
+4. `generateCharacterImage` calls FLUX and returns one image URL.
+5. `generateLipSync` uploads the generated audio and calls the provider-specific Stage 1 audio-to-motion adapter.
+6. `generateAvatar` passes each character image and Stage 1 representation to the provider-specific Stage 2 video adapter.
+7. `generatePodcast` writes the returned MP4 bytes to `./output/podcast.mp4` because `filePath` is configured.
 
 For a production adapter, keep a hosted URL when the next provider accepts a URL, or upload binary data to provider storage before passing it to another endpoint. For multiple characters, keep one entry per speaker in `characters` and adapt `generateAvatar` to render each character or transcript segment from its base image and Stage 1 representation. The workflow does not assume that the Stage 2 video model accepts voice audio.
 
@@ -896,7 +1025,7 @@ The workflow requests MP3 speech for `mp3`, `mp4`, and `webm` configurations, an
 
 Use `mp4` or `webm` when the result should contain avatar video.
 
-The configuration must provide `models.avatarVideos`. Every unique speaker must have a character with a voice and either an existing `avatarImage` or a usable `models.textToImage` model. Add `models.lipSync` when the Stage 2 video model needs separate audio-driven motion representations. The staged representations are returned in `result.lipSync` and passed to `avatarVideos`.
+The configuration must provide either `models.realtimeAvatar` or `models.avatarVideos`. Every unique speaker must have a character with a voice and either an existing `avatarImage` or a usable `models.textToImage` model. `realtimeAvatar` starts before TTS, receives each speech segment, captures the live recording, and takes precedence when both avatar models are configured. Add `models.lipSync` only when the batch Stage 2 video model needs separate audio-driven motion representations. The staged representations are returned in `result.lipSync` and passed to `avatarVideos`.
 
 ### Local files and remote assets
 
@@ -952,9 +1081,9 @@ Add `transcript.generator` or `models.textToText` before calling `generateTransc
 
 Add `models.textToSpeech`. Speech is required for both audio and avatar video output.
 
-### `Podcast avatarVideos model is required for ... output.`
+### `Podcast avatar provider is required for ... output.`
 
-The configured output is `mp4` or `webm`. Add `models.avatarVideos`, or change the output format to `mp3` or `wav` when video is not needed.
+The configured output is `mp4` or `webm`. Add `models.realtimeAvatar` for a live captured avatar, add `models.avatarVideos` for batch rendering, or change the output format to `mp3` or `wav` when video is not needed.
 
 ### Lip-sync representations are missing from the avatar request
 

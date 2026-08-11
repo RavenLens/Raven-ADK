@@ -61,9 +61,10 @@ The following example uses these fal.ai endpoints:
 
 | Podcast stage | fal.ai endpoint | Output used by the workflow |
 | --- | --- | --- |
-| Transcript and fact checking | [`fal-ai/any-llm`](https://fal.ai/models/fal-ai/any-llm) with a Google or other supported model | Text |
-| Text to speech | [`fal-ai/kling-video/v1/tts`](https://fal.ai/models/fal-ai/kling-video/v1/tts) | MP3 URL |
-| Character image | [`fal-ai/flux/schnell`](https://fal.ai/models/fal-ai/flux/schnell) | Image URL |
+| Transcript and fact checking | [`fal-ai/bytedance/seed/v2/mini`](https://fal.ai/models/fal-ai/bytedance/seed/v2/mini) | Text; $0.0001 per 1,000 input units, with output tokens weighted at 4 units |
+| Text to speech | [`fal-ai/inworld-tts`](https://fal.ai/models/fal-ai/inworld-tts) | Audio file; $0.01 per 1,000 characters |
+| Character image | [`fal-ai/flux/schnell`](https://fal.ai/models/fal-ai/flux/schnell) | Image URL; billed by megapixel |
+| Direct avatar video | [`fal-ai/sadtalker`](https://fal.ai/models/fal-ai/sadtalker) | Video file |
 | Stage 1 lip-sync representation | Provider-specific audio-to-motion adapter | Landmarks, 3DMM coefficients, or latent facial-motion embeddings |
 | Stage 2 talking avatar | Provider-specific conditioned video adapter | MP4 URL |
 | Google video alternative | [`fal-ai/veo3.1`](https://fal.ai/models/fal-ai/veo3.1) | Video with generated audio |
@@ -118,10 +119,13 @@ function transcriptText(transcript: PodcastTranscript): string {
 }
 
 async function generateText({ prompt }: PodcastTextToTextRequest): Promise<string> {
-    const result = await fal.subscribe("fal-ai/any-llm", {
+    const result = await fal.subscribe("fal-ai/bytedance/seed/v2/mini", {
         input: {
-            model: "google/gemini-pro-1.5",
-            prompt
+            prompt,
+            system_prompt: "Return only the requested JSON. Do not use Markdown fences.",
+            temperature: 0,
+            max_completion_tokens: 700,
+            thinking: "disabled"
         }
     });
 
@@ -129,34 +133,33 @@ async function generateText({ prompt }: PodcastTextToTextRequest): Promise<strin
 }
 
 async function checkFacts({ transcript }: PodcastFactCheckRequest): Promise<PodcastFactCheckResult> {
-    const result = await fal.subscribe("fal-ai/any-llm", {
+    const result = await fal.subscribe("fal-ai/bytedance/seed/v2/mini", {
         input: {
-            model: "google/gemini-pro-1.5",
             prompt: [
                 "Check the following podcast transcript for factual claims.",
                 "Return only JSON matching { passed: boolean, issues?: string[] }.",
                 transcriptText(transcript)
-            ].join("\n\n")
+            ].join("\n\n"),
+            system_prompt: "Return only the requested JSON. Do not use Markdown fences.",
+            temperature: 0,
+            max_completion_tokens: 700,
+            thinking: "disabled"
         }
     });
 
     return JSON.parse((result.data as FalTextResult).output) as PodcastFactCheckResult;
 }
 
-async function synthesizeAudioUrl({ text, character }: PodcastTextToSpeechRequest): Promise<string> {
-    const result = await fal.subscribe("fal-ai/kling-video/v1/tts", {
+async function generateSpeech({ text, character }: PodcastTextToSpeechRequest): Promise<Uint8Array> {
+    const result = await fal.subscribe("fal-ai/inworld-tts", {
         input: {
             text,
-            voice_id: character?.voice ?? "reader_en_m-v1",
-            voice_speed: 1
+            voice: character?.voice ?? "Sarah (en)",
+            sample_rate_hertz: 24000
         }
     });
 
-    return (result.data as FalAudioResult).audio.url;
-}
-
-async function generateSpeech(request: PodcastTextToSpeechRequest): Promise<Uint8Array> {
-    const response = await fetch(await synthesizeAudioUrl(request));
+    const response = await fetch((result.data as FalAudioResult).audio.url);
     if (!response.ok) {
         throw new Error(`Unable to download generated audio: ${response.status}`);
     }
@@ -169,7 +172,7 @@ async function generateCharacterImage({ prompt }: PodcastImageRequest): Promise<
         input: {
             prompt,
             image_size: "portrait_4_3",
-            output_format: "png"
+            output_format: "jpeg"
         }
     });
     const image = (result.data as FalImageResult).images[0];
@@ -236,7 +239,7 @@ async function createPodcastWorkflow(): Promise<PodcastWorkflow> {
         characters: [
             {
                 name: "Host",
-                voice: "reader_en_m-v1",
+                voice: "Sarah (en)",
                 avatarImage: hostImage
             }
         ],

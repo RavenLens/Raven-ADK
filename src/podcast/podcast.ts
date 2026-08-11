@@ -1,9 +1,14 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 import type { ReActAgent } from "../agent/ReAct.agent";
 import type { MessagesVariations } from "../agent/state";
 import type { StandardLLMShema } from "../models/mutual";
 import type { TextToSpeechModel, TextToSpeechOptions } from "../models/text-to-speech/tts.mutual";
+
+const execFileAsync = promisify(execFile);
 
 export type PodcastOutputFormat = "mp4" | "wav" | "webm" | "mp3";
 export type PodcastAsset = string | Uint8Array;
@@ -111,6 +116,39 @@ export interface PodcastAvatarRequest {
 /** Stage 2 provider model that turns motion representations and character assets into the final video. */
 export type PodcastAvatarModel = PodcastModel<PodcastAvatarRequest, PodcastAsset>;
 
+/** Request used to start a real-time avatar session before speech synthesis begins. */
+export interface PodcastRealtimeAvatarRequest {
+    /** Complete transcript used to preserve dialogue, speaker order, and timing. */
+    transcript: PodcastTranscript;
+    /** Characters resolved for the transcript speakers, including voices and avatar images. */
+    characters: PodcastCharacter[];
+    /** Optional image used as the shared background for the live avatar session. */
+    backgroundImage?: PodcastAsset;
+}
+
+/** Provider-owned live avatar session that receives speech and produces a captured video asset. */
+export interface PodcastRealtimeAvatarSession {
+    /** Sends one already synthesized speech segment to the live avatar in transcript order. */
+    sendSpeech(
+        segment: PodcastSpeechSegment,
+        options?: { signal?: AbortSignal }
+    ): Promise<void>;
+    /** Stops or finalizes the provider recording and returns the captured video asset. */
+    capture(options?: {
+        format: Extract<PodcastOutputFormat, "mp4" | "webm">;
+        signal?: AbortSignal;
+    }): PodcastMedia | Promise<PodcastMedia>;
+    /** Releases provider resources after capture or a failed generation. */
+    close?(): void | Promise<void>;
+}
+
+/** Stage that streams generated speech into a real-time avatar and captures the live result. */
+export type PodcastRealtimeAvatarModel = PodcastModel<
+    PodcastRealtimeAvatarRequest,
+    PodcastRealtimeAvatarSession,
+    { signal?: AbortSignal }
+>;
+
 /** Input passed to the Stage 1 audio-to-motion lip-sync model. */
 export interface PodcastLipSyncRequest {
     /** Complete transcript used to preserve the episode context and segment order. */
@@ -175,6 +213,15 @@ export interface PodcastOutputConfig {
     format: PodcastOutputFormat;
     filePath?: string;
     composeAudio?: PodcastAudioComposer;
+    /** Mux generated speech into MP4 video; enabled by default for MP4 output. */
+    composeVideoAudio?: boolean;
+}
+
+export interface PodcastMediaToolsConfig {
+    /** Executable used to encode and mux media. */
+    ffmpegPath?: string;
+    /** Executable used to verify generated media streams. */
+    ffprobePath?: string;
 }
 
 export interface PodcastGenerationRequest {
@@ -188,7 +235,7 @@ export interface PodcastGenerationRequest {
 }
 
 export interface PodcastGeneratedAsset {
-    /** Original media returned by the configured provider. */
+    /** Final media returned by the workflow, including a muxed soundtrack when video composition is enabled. */
     readonly media: PodcastMedia;
 
     
@@ -261,6 +308,8 @@ export interface PodcastWorkflowConfig {
         textToImage?: PodcastImageModel;
         /** Model used to generate avatars. */
         avatarVideos?: PodcastAvatarModel;
+        /** Optional real-time avatar session used instead of batch avatar rendering for video output. */
+        realtimeAvatar?: PodcastRealtimeAvatarModel;
         /** Optional model used to lip-sync each speech segment to its character. */
         lipSync?: PodcastLipSyncModel;
     };
@@ -279,6 +328,8 @@ export interface PodcastWorkflowConfig {
     characters?: PodcastCharacter[];
     /** Optional background image for the podcast. */
     backgroundImage?: PodcastAsset;
+    /** Optional executables used by the media composition methods. */
+    mediaTools?: PodcastMediaToolsConfig;
     /** Output format and destination configuration. */
     output: PodcastOutputConfig;
 }
@@ -295,7 +346,10 @@ export class PodcastWorkflow {
     /** Synthesizes transcript segments into ordered speech assets. */
     private async transcriptToSpeech(
         transcript: PodcastTranscript,
-        options: { signal?: AbortSignal } = {}
+        options: {
+            signal?: AbortSignal;
+            onSegment?: (segment: PodcastSpeechSegment) => void | Promise<void>;
+        } = {}
     ): Promise<PodcastSpeechSegment[]> {
         this.validateTranscript(transcript);
 
@@ -329,13 +383,15 @@ export class PodcastWorkflow {
                 audio = await textToSpeech.synthesize(segment.text, speechOptions);
             }
 
-            speech.push({
+            const speechSegment: PodcastSpeechSegment = {
                 speaker: segment.speaker,
                 text: segment.text,
                 audio,
                 startTime: segment.startTime,
                 endTime: segment.endTime
-            });
+            };
+            await options.onSegment?.(speechSegment);
+            speech.push(speechSegment);
         }
 
         return speech;
@@ -365,17 +421,164 @@ export class PodcastWorkflow {
         const finalTranscript = transcriptWasGenerated
             ? this.validateConfiguredSpeakers(factCheckedTranscript)
             : factCheckedTranscript;
-        const speech = await this.transcriptToSpeech(finalTranscript, {
-            signal: request.signal
-        });
-        const pipeline = await this.createOutput(finalTranscript, speech, request.signal);
+        const realtimeAvatarSession = await this.startRealtimeAvatar(finalTranscript, request.signal);
+        let generationError: unknown;
+        try {
+            const speech = await this.transcriptToSpeech(finalTranscript, {
+                signal: request.signal,
+                onSegment: realtimeAvatarSession
+                    ? (segment) => realtimeAvatarSession.sendSpeech(segment, { signal: request.signal })
+                    : undefined
+            });
+            const pipeline = await this.createOutput(
+                finalTranscript,
+                speech,
+                request.signal,
+                realtimeAvatarSession
+            );
 
-        return {
-            transcript: finalTranscript,
-            speech,
-            lipSync: pipeline.lipSync,
-            output: pipeline.output
-        };
+            return {
+                transcript: finalTranscript,
+                speech,
+                lipSync: pipeline.lipSync,
+                output: pipeline.output
+            };
+        } catch (error) {
+            generationError = error;
+            throw error;
+        } finally {
+            if (realtimeAvatarSession) {
+                try {
+                    await realtimeAvatarSession.close?.();
+                } catch (error) {
+                    if (generationError === undefined) {
+                        throw error;
+                    }
+                }
+            }
+        }
+    }
+
+    /** Concatenates ordered speech assets into one playback-compatible MP3 soundtrack file. */
+    async generateSoundtrack(
+        speech: readonly PodcastSpeechSegment[],
+        outputPath: string
+    ): Promise<string> {
+        if (speech.length === 0) {
+            throw new Error("Cannot generate a soundtrack without speech segments.");
+        }
+
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "raven-podcast-"));
+        try {
+            const inputPaths: string[] = [];
+            for (const [index, segment] of speech.entries()) {
+                const inputPath = join(
+                    temporaryDirectory,
+                    `soundtrack-input-${String(index + 1).padStart(3, "0")}.mp3`
+                );
+                await writeFile(inputPath, await this.materializeMedia(segment.audio));
+                inputPaths.push(inputPath);
+            }
+
+            await mkdir(dirname(outputPath), { recursive: true });
+            const inputArguments = inputPaths.flatMap((inputPath) => ["-i", inputPath]);
+            const audioLabels = inputPaths.map((_inputPath, index) => `[${index}:a:0]`).join("");
+            const ffmpegArguments = [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                ...inputArguments
+            ];
+            if (inputPaths.length === 1) {
+                ffmpegArguments.push("-map", "0:a:0");
+            } else {
+                ffmpegArguments.push(
+                    "-filter_complex",
+                    `${audioLabels}concat=n=${inputPaths.length}:v=0:a=1[outa]`,
+                    "-map",
+                    "[outa]"
+                );
+            }
+            ffmpegArguments.push(
+                "-vn",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-c:a",
+                "libmp3lame",
+                "-q:a",
+                "2",
+                outputPath
+            );
+
+            await this.runMediaTool(this.config.mediaTools?.ffmpegPath ?? "ffmpeg", ffmpegArguments);
+            const streams = await this.inspectMedia(outputPath);
+            if (!streams.audio) {
+                throw new Error(`FFmpeg did not produce an audio soundtrack at ${outputPath}.`);
+            }
+            return outputPath;
+        } finally {
+            await rm(temporaryDirectory, { recursive: true, force: true });
+        }
+    }
+
+    /** Muxes video with the supplied soundtrack as normalized AAC audio. */
+    async combineVideoWithAudio(
+        video: PodcastMedia,
+        soundtrack: PodcastMedia,
+        outputPath: string
+    ): Promise<string> {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "raven-podcast-"));
+        try {
+            const videoPath = join(temporaryDirectory, "video-input.mp4");
+            const soundtrackPath = join(temporaryDirectory, "soundtrack-input.mp3");
+            await writeFile(videoPath, await this.materializeMedia(video));
+            await writeFile(soundtrackPath, await this.materializeMedia(soundtrack));
+            await mkdir(dirname(outputPath), { recursive: true });
+
+            await this.runMediaTool(this.config.mediaTools?.ffmpegPath ?? "ffmpeg", [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                videoPath,
+                "-i",
+                soundtrackPath,
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-profile:a",
+                "aac_low",
+                "-b:a",
+                "192k",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "-disposition:a:0",
+                "default",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                outputPath
+            ]);
+
+            const streams = await this.inspectMedia(outputPath);
+            if (!streams.video || !streams.audio) {
+                throw new Error(`FFmpeg did not produce an audio-video outcome at ${outputPath}.`);
+            }
+            return outputPath;
+        } finally {
+            await rm(temporaryDirectory, { recursive: true, force: true });
+        }
     }
 
     /** Generates and optionally fact-checks a podcast transcript. */
@@ -482,7 +685,8 @@ export class PodcastWorkflow {
     private async createOutput(
         transcript: PodcastTranscript,
         speech: PodcastSpeechSegment[],
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        realtimeAvatarSession?: PodcastRealtimeAvatarSession
     ): Promise<{
         output: PodcastGeneratedOutput;
         lipSync?: PodcastLipSyncSegment[];
@@ -519,6 +723,20 @@ export class PodcastWorkflow {
             };
         }
 
+        if (realtimeAvatarSession) {
+            const avatar = await realtimeAvatarSession.capture({
+                format,
+                signal
+            });
+            const outputAsset = this.shouldComposeVideoAudio(speech)
+                ? await this.composeVideoAudio(avatar, speech)
+                : avatar;
+
+            return {
+                output: await this.completeOutput(outputAsset)
+            };
+        }
+
         const avatarVideos = this.config.models.avatarVideos;
         if (!avatarVideos) {
             throw new Error(`Podcast avatarVideos model is required for ${format} output.`);
@@ -538,11 +756,66 @@ export class PodcastWorkflow {
             avatarRequest.speech = speech;
         }
         const avatar = await avatarVideos(avatarRequest, { signal });
+        const outputAsset = this.shouldComposeVideoAudio(speech)
+            ? await this.composeVideoAudio(avatar, speech)
+            : avatar;
 
         return {
             lipSync,
-            output: await this.completeOutput(avatar)
+            output: await this.completeOutput(outputAsset)
         };
+    }
+
+    private async startRealtimeAvatar(
+        transcript: PodcastTranscript,
+        signal?: AbortSignal
+    ): Promise<PodcastRealtimeAvatarSession | undefined> {
+        if (this.config.output.format !== "mp4" && this.config.output.format !== "webm") {
+            return undefined;
+        }
+
+        const realtimeAvatar = this.config.models.realtimeAvatar;
+        if (!realtimeAvatar) {
+            return undefined;
+        }
+
+        const characters = await this.resolveAvatarCharacters(transcript, signal);
+        const session = await realtimeAvatar({
+            transcript,
+            characters,
+            backgroundImage: this.config.backgroundImage
+        }, { signal });
+        const resolvedSession = await this.resolveModelValue(session);
+        if (!isPodcastRealtimeAvatarSession(resolvedSession)) {
+            throw new Error(
+                "Podcast realtimeAvatar model must return a session with sendSpeech() and capture()."
+            );
+        }
+
+        return resolvedSession;
+    }
+
+    private shouldComposeVideoAudio(speech: readonly PodcastSpeechSegment[]): boolean {
+        const composeVideoAudio = this.config.output.composeVideoAudio;
+        return this.config.output.format === "mp4"
+            && speech.length > 0
+            && composeVideoAudio !== false;
+    }
+
+    private async composeVideoAudio(
+        video: PodcastMedia,
+        speech: readonly PodcastSpeechSegment[]
+    ): Promise<PodcastMedia> {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "raven-podcast-"));
+        try {
+            const soundtrackPath = join(temporaryDirectory, "podcast-soundtrack.mp3");
+            const outputPath = join(temporaryDirectory, "podcast-outcome.mp4");
+            await this.generateSoundtrack(speech, soundtrackPath);
+            await this.combineVideoWithAudio(video, soundtrackPath, outputPath);
+            return new Uint8Array(await readFile(outputPath));
+        } finally {
+            await rm(temporaryDirectory, { recursive: true, force: true });
+        }
     }
 
     /** Generates Stage 1 lip-sync representations from ordered speech and characters. */
@@ -653,6 +926,40 @@ export class PodcastWorkflow {
             ),
             filePath
         };
+    }
+
+    private async inspectMedia(filePath: string): Promise<{ audio: boolean; video: boolean }> {
+        const output = await this.runMediaTool(this.config.mediaTools?.ffprobePath ?? "ffprobe", [
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "json",
+            filePath
+        ]);
+        const parsed = JSON.parse(output) as {
+            streams?: Array<{ codec_type?: unknown }>;
+        };
+        const streamTypes = parsed.streams?.map(({ codec_type }) => codec_type) ?? [];
+        return {
+            audio: streamTypes.includes("audio"),
+            video: streamTypes.includes("video")
+        };
+    }
+
+    private async runMediaTool(command: string, argumentsList: string[]): Promise<string> {
+        try {
+            const result = await execFileAsync(command, argumentsList, { windowsHide: true });
+            return result.stdout;
+        } catch (error) {
+            const stderr = isRecord(error) && typeof error.stderr === "string"
+                ? error.stderr.trim()
+                : error instanceof Error
+                    ? error.message
+                    : String(error);
+            throw new Error(`Media command "${command}" failed: ${stderr}`, { cause: error });
+        }
     }
 
     /** Converts a media asset or stream into file bytes. */
@@ -853,6 +1160,12 @@ function isPodcastLipSyncRepresentation(value: unknown): value is PodcastLipSync
     return typeof value === "string"
         || value instanceof Uint8Array
         || (typeof value === "object" && value !== null);
+}
+
+function isPodcastRealtimeAvatarSession(value: unknown): value is PodcastRealtimeAvatarSession {
+    return isRecord(value)
+        && typeof value.sendSpeech === "function"
+        && typeof value.capture === "function";
 }
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
