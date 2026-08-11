@@ -1,6 +1,7 @@
 # Table of contents
 
 * [AEval](README.md)
+* [FactChecker](FactChecker.md)
 * [Contributing to RavenADK](CONTRIBUTION.md)
 * [Graph Modes](Graph.md)
 * [Human-In-The-Loop](HITL.md)

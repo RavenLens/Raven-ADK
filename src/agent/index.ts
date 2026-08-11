@@ -19,6 +19,8 @@ export * from "./abstract/sequential/index.js";
 export * as Sequential from "./abstract/sequential/index.js";
 export * from "./abstract/podcast/index.js";
 export * as Podcast from "./abstract/podcast/index.js";
+export * from "./abstract/factchecker/factchecker.js";
+export * as FactChecker from "./abstract/factchecker/factchecker.js"
 
 export * as HITL from "./tools/hitl/index.js";
 export * as MCP from "./tools/mcp/index.js";
