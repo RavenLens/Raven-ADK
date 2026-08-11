@@ -786,7 +786,7 @@ npm install @fal-ai/client
 $env:FAL_KEY = "your-fal-key"
 ```
 
-The example below follows the fal.ai configuration from `src/podcast/README.md`:
+The example below follows the fal.ai configuration from `src/agent/abstract/podcast/README.md`:
 
 | Podcast stage | fal.ai endpoint | Output used by the workflow |
 | --- | --- | --- |

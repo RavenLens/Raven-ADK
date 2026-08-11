@@ -12,7 +12,7 @@ import {
     PodcastTextToSpeechRequest,
     PodcastTextToTextRequest,
     PodcastWorkflow
-} from "../../src/podcast/podcast";
+} from "../../src/agent/abstract/podcast/podcast";
 import type { TextToSpeechOptions } from "../../src/models/text-to-speech/tts.mutual";
 
 describe("PodcastWorkflow", () => {

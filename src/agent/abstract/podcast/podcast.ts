@@ -3,10 +3,10 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
-import type { ReActAgent } from "../agent/ReAct.agent";
-import type { MessagesVariations } from "../agent/state";
-import type { StandardLLMShema } from "../models/mutual";
-import type { TextToSpeechModel, TextToSpeechOptions } from "../models/text-to-speech/tts.mutual";
+import type { ReActAgent } from "../../ReAct.agent";
+import type { MessagesVariations } from "../../state";
+import type { StandardLLMShema } from "../../../models/mutual";
+import type { TextToSpeechModel, TextToSpeechOptions } from "../../../models/text-to-speech/tts.mutual";
 
 const execFileAsync = promisify(execFile);
 

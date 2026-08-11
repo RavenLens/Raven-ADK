@@ -22,8 +22,8 @@ import type {
     PodcastTextToTextRequest,
     PodcastTranscript,
     PodcastWorkflowConfig
-} from "../../src/podcast/podcast";
-import { PodcastWorkflow } from "../../src/podcast/podcast";
+} from "../../src/agent/abstract/podcast/podcast";
+import { PodcastWorkflow } from "../../src/agent/abstract/podcast/podcast";
 
 const falKey = process.env.FAL_KEY?.trim() || process.env.FAI_API_KEY?.trim();
 const hasFalKey = Boolean(falKey);

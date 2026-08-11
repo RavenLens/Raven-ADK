@@ -130,9 +130,9 @@
       "require": "./dist/agent/skills/index.js"
     },
     "./podcasts": {
-      "types": "./dist/podcast/podcast.d.ts",
-      "import": "./dist/podcast/podcast.js",
-      "require": "./dist/podcast/podcast.js"
+      "types": "./dist/agent/abstract/podcast/index.d.ts",
+      "import": "./dist/agent/abstract/podcast/index.js",
+      "require": "./dist/agent/abstract/podcast/index.js"
     },
     "./skills/store": {
       "types": "./dist/agent/skills/stores/index.d.ts",
