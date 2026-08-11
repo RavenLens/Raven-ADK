@@ -2,6 +2,7 @@ import { AgenticEvaluator } from "../aeval/aeval";
 import type { AgentModel } from "../../ReAct.agent";
 import type { MessagesVariations } from "../../state";
 import type { Tool } from "../../tools/tools";
+import { recordEventWithData, withTelemetry } from "../../../telemetry/telemetry";
 
 export interface TruthnessState { 
     from: number;
@@ -51,35 +52,81 @@ export class FactChecker {
     }
 
     async check(): Promise<TruthnessState[]> {
+        const verifierCount = Array.isArray(this.config.verifiers)
+            ? this.config.verifiers.length
+            : 1;
+        return withTelemetry("factchecker.check", {
+            verifier_count: verifierCount,
+            claim_length: this.config.toCheck.length,
+            has_judge: Boolean(this.config.judge)
+        }, async () => this.checkInternal());
+    }
+
+    private async checkInternal(): Promise<TruthnessState[]> {
         const verifiers = Array.isArray(this.config.verifiers)
             ? this.config.verifiers
             : [this.config.verifiers];
         const ratings = await Promise.all(verifiers.map(verifier => verifier(this.config.toCheck)));
         const conflictGroups = this.findConflictGroups(ratings);
+        const conflictedIndexes = new Set(conflictGroups.flat());
+
+        recordEventWithData("factchecker.verification.completed", {
+            verifier_count: verifiers.length,
+            rating_count: ratings.length,
+            truthful_count: ratings.filter(({ truthy }) => truthy).length,
+            conflict_group_count: conflictGroups.length,
+            conflicted_rating_count: conflictedIndexes.size
+        });
 
         if (!conflictGroups.length) {
+            recordEventWithData("factchecker.check.completed", {
+                returned_rating_count: ratings.length,
+                conflicts_resolved: 0
+            });
             return ratings;
         }
 
         if (!this.config.judge) {
+            recordEventWithData("factchecker.conflict_judge.required", {
+                conflict_group_count: conflictGroups.length,
+                conflicted_rating_count: conflictedIndexes.size
+            });
             throw new Error(
                 "FactChecker found conflicting verifier results. Configure a `judge` to resolve overlapping truthiness conflicts."
             );
         }
 
-        const conflictedIndexes = new Set(conflictGroups.flat());
         const winningIndexes = new Set<number>();
         for (const conflictGroup of conflictGroups) {
-            winningIndexes.add(await this.judgeConflict(ratings, conflictGroup));
+            const winningIndex = await this.judgeConflict(ratings, conflictGroup);
+            winningIndexes.add(winningIndex);
+            recordEventWithData("factchecker.conflict.resolved", {
+                candidate_count: conflictGroup.length,
+                truthful_candidate_count: conflictGroup.filter(index => ratings[index].truthy).length,
+                winner_index: winningIndex
+            });
         }
 
-        return ratings.filter((_, index) =>
+        const resolvedRatings = ratings.filter((_, index) =>
             !conflictedIndexes.has(index) || winningIndexes.has(index)
         );
+        recordEventWithData("factchecker.check.completed", {
+            returned_rating_count: resolvedRatings.length,
+            conflicts_resolved: winningIndexes.size
+        });
+
+        return resolvedRatings;
     }
 
     /** Replaces untruthful ranges with the evidence supplied by their verifiers. */
     async improve(rating: TruthnessState[]): Promise<string> {
+        return withTelemetry("factchecker.improve", {
+            rating_count: rating.length,
+            claim_length: this.config.toCheck.length
+        }, async () => this.improveInternal(rating));
+    }
+
+    private async improveInternal(rating: TruthnessState[]): Promise<string> {
         let improved = this.config.toCheck;
 
         const untruthfulRatings = rating
@@ -93,7 +140,19 @@ export class FactChecker {
 
         for (const { state } of untruthfulRatings) {
             improved = improved.slice(0, state.from) + state.baseOnRecource + improved.slice(state.to);
+            recordEventWithData("factchecker.improvement.replacement", {
+                from: state.from,
+                to: state.to,
+                replacement_length: state.baseOnRecource.length
+            });
         }
+
+        recordEventWithData("factchecker.improvement.completed", {
+            rating_count: rating.length,
+            replacement_count: untruthfulRatings.length,
+            original_length: this.config.toCheck.length,
+            improved_length: improved.length
+        });
 
         return improved;
 
