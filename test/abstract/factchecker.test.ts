@@ -1,6 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { FactChecker, TruthnessState } from "../../src/agent/abstract/factchecker/factchecker";
 
+vi.mock("../../src/agent/abstract/aeval/aeval", () => ({
+    AgenticEvaluator: class MockAgenticEvaluator {
+        constructor(private readonly messages: { content: string }[]) {}
+
+        async evaluate() {
+            const candidate = JSON.parse(this.messages.at(-1)!.content) as TruthnessState;
+            return {
+                result: {
+                    score: candidate.truthy ? 0.9 : 0.2,
+                    verdict: candidate.truthy ? "BEST" : "REJECTED",
+                    reasoning: "The mocked judge selected the truthy candidate.",
+                    metrics: {}
+                },
+                messages: []
+            };
+        }
+    }
+}));
+
 describe("FactChecker", () => {
     it("runs a single verifier against the configured text", async () => {
         const verifier = vi.fn(async (fact: string): Promise<TruthnessState> => ({
@@ -57,5 +76,73 @@ describe("FactChecker", () => {
 
         expect(improved).toBe("Alpha BETA gamma");
         expect(checker.config.toCheck).toBe(original);
+    });
+
+    it("requires a judge when overlapping verifiers disagree", async () => {
+        const checker = new FactChecker({
+            toCheck: "A fact",
+            verifiers: [
+                async (): Promise<TruthnessState> => ({
+                    from: 0,
+                    to: 6,
+                    truthy: true,
+                    baseOnRecource: "truthy evidence"
+                }),
+                async (): Promise<TruthnessState> => ({
+                    from: 0,
+                    to: 6,
+                    truthy: false,
+                    baseOnRecource: "corrected evidence"
+                })
+            ]
+        });
+
+        await expect(checker.check()).rejects.toThrow(
+            "Configure a `judge` to resolve overlapping truthiness conflicts"
+        );
+    });
+
+    it("uses the AgenticEvaluator judge to select the strongest conflicting result", async () => {
+        const checker = new FactChecker({
+            toCheck: "A fact",
+            verifiers: [
+                async (): Promise<TruthnessState> => ({
+                    from: 0,
+                    to: 6,
+                    truthy: false,
+                    baseOnRecource: "corrected evidence"
+                }),
+                async (): Promise<TruthnessState> => ({
+                    from: 0,
+                    to: 6,
+                    truthy: true,
+                    baseOnRecource: "verified evidence"
+                })
+            ],
+            judge: { model: {} as any }
+        });
+
+        await expect(checker.check()).resolves.toEqual([{
+            from: 0,
+            to: 6,
+            truthy: true,
+            baseOnRecource: "verified evidence"
+        }]);
+    });
+
+    it("does not treat disjoint ranges with different verdicts as a conflict", async () => {
+        const ratings: TruthnessState[] = [
+            { from: 0, to: 1, truthy: true, baseOnRecource: "A" },
+            { from: 1, to: 2, truthy: false, baseOnRecource: "B" }
+        ];
+        const checker = new FactChecker({
+            toCheck: "AB",
+            verifiers: [
+                async () => ratings[0],
+                async () => ratings[1]
+            ]
+        });
+
+        await expect(checker.check()).resolves.toEqual(ratings);
     });
 });

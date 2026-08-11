@@ -30,6 +30,13 @@ export type FactSentry = (
 export interface FactCheckerConfig {
 	toCheck: string;
 	verifiers: FactSentry | FactSentry[];
+	judge?: FactCheckerJudgeConfig;
+}
+
+export interface FactCheckerJudgeConfig {
+	model: AgentModel;
+	systemPrompt?: string;
+	tools?: Tool<any, any>[];
 }
 ```
 
@@ -71,6 +78,69 @@ console.log(correctedText);
 ```
 
 `check()` accepts either one verifier or an array of verifiers. All verifiers receive the same input and run concurrently. The returned array has the same order as the configured verifier array.
+
+## Resolving verifier conflicts
+
+Two verifier results conflict when their ranges overlap and their `truthy` values differ. Different verdicts for disjoint ranges are not a conflict; they can describe different claims in the same text.
+
+FactChecker does not silently use the first result, the last result, or a majority vote. Configure the optional `judge` with an AEval model when conflicting results need to be resolved:
+
+```typescript
+import { FactChecker, type FactCheckerJudgeConfig, type FactSentry } from "@ravenlens/raven-adk";
+import { OpenAI } from "@ravenlens/raven-adk/models";
+
+const judge: FactCheckerJudgeConfig = {
+	model: new OpenAI({
+		model: "gpt-5-mini",
+		apiKey: process.env.OPENAI_API_KEY
+	}),
+	systemPrompt: [
+		"Resolve conflicts between factual verifiers.",
+		"Compare the claim, each verifier's evidence, and the proposed truthy/falsy result.",
+		"Select the candidate with the strongest reliable support."
+	].join("\n")
+};
+
+const verifierA: FactSentry = async (fact) => ({
+	from: 0,
+	to: fact.length,
+	truthy: true,
+	baseOnRecource: "Evidence supporting the original claim."
+});
+
+const verifierB: FactSentry = async (fact) => ({
+	from: 0,
+	to: fact.length,
+	truthy: false,
+	baseOnRecource: "Corrected text based on contradictory evidence."
+});
+
+const checker = new FactChecker({
+	toCheck: "The claim that needs a decision.",
+	verifiers: [verifierA, verifierB],
+	judge
+});
+
+// The AEval judge evaluates each competing result and the strongest candidate wins.
+const resolvedRatings = await checker.check();
+const resolvedText = await checker.improve(resolvedRatings);
+```
+
+Internally, FactChecker creates an `AgenticEvaluator` for each candidate in the conflict group. The evaluator receives the original claim, all competing verifier results, and the candidate currently being scored. Its `score` is used first, its `verdict` (`BEST`, `GOOD`, `POOR`, or `REJECTED`) breaks ties, and the original verifier order is the final deterministic tie-breaker.
+
+When a conflict exists without `judge`, `check()` throws an error. This fail-closed behavior prevents `improve()` from applying an arbitrary correction. A conflict group is reduced to the winning `TruthnessState`; non-conflicting ratings remain in the returned array.
+
+The judge can also use tools to inspect additional evidence:
+
+```typescript
+const judge: FactCheckerJudgeConfig = {
+	model,
+	tools: [webSearchTool, internalKnowledgeTool],
+	systemPrompt: "Resolve verifier conflicts using the available evidence tools."
+};
+```
+
+Use the judge only when there is a real disagreement. A single verifier or a set of verifiers that agree does not invoke AEval.
 
 ```typescript
 const checker = new FactChecker({
