@@ -17,6 +17,8 @@ export * from "./abstract/multianswers/index.js";
 export * as MultiAnswers from "./abstract/multianswers/index.js";
 export * from "./abstract/sequential/index.js";
 export * as Sequential from "./abstract/sequential/index.js";
+export * from "./abstract/factchecker/factchecker.js";
+export * as FactChecker from "./abstract/factchecker/factchecker.js"
 
 export * as HITL from "./tools/hitl/index.js";
 export * as MCP from "./tools/mcp/index.js";
