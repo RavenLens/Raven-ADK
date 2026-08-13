@@ -258,6 +258,14 @@ const supervisedCodeAct = new SupervisedCodeAct({
         maxRepairAttempts: 3, // Optional. Default: Infinity - agent will try till success. Important: this configuration dictates how many times **supervisor** and **worker** or **cordinator-of-workers** (itself without delegation to subworkers) tries to correct the errors captured with `custome` (`adjustCommandToResult`) or `preConfiguredCommands` before producting the error. When this quota is exceeded e.g: 3 error or outcome is thrown with the event and as the agent result base on the `attemptsExceededBehaviour`
         attemptsExceededBehaviour: "error", // Default: "result" - produces the result with indcation of attempts exceeeded- either event and otucome of agent. Possible: `error` - produces error event
     },
+    // Sandboxes where code is run
+    sandboxes: { // sandboxes have to support sandbox schema - it's compilant with RLMs codeact schema
+        default: nodeSandbox,
+        byLanguage: {
+            python: pythonSandbox,
+            typescript: nodeSandbox
+        }
+    },
     plugins: [/* ... Plugins list */],  // Optional. Default: undefined. Supports ReActAgent plugins full list with optionally additional invoke places and events. List with plugins will be invoked from space
     hitl: new CustomHITL() // Optional. Default: false. Used to configure the tools asks and for additional informations. TODO: Configure HITL for the CodeAct and Supervised Code act - allow to apply additional fields - or use mutually when possilbe Hitl can get the config for **validation** additionally TODO: Add Hybrid HITL with configuration
 });

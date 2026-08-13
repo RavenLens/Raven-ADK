@@ -21,7 +21,7 @@ software workspace:
 Both patterns build on the existing RavenADK abstractions:
 
 - [ReActAgent](../ReAct.agent.ts) for model invocation, tools, plugins, memory,
-  skills, and abort handling.
+  skills, and abort handling. Uses the universal patterns from ReAct Agent without hurting the logic
 - [Graph](../../graph/index.ts) for lifecycle orchestration and state changes.
 - [Tool](../tools/tools.ts) for tool registration and invocation.
 - [CodeExecutionSandboxSchema](../tools/CodeExecutionSandboxes/mutual.ts) for
@@ -66,7 +66,7 @@ Every conforming implementation MUST enforce these invariants:
 6. Proposal mode MUST NOT mutate the target workspace.
 7. Only one applier MAY mutate a target workspace at a time.
 8. Parallel workers MUST use isolated snapshots, isolated worktrees, or return
-   read-only analysis. They MUST NOT concurrently write the same target files.
+   read-only analysis. **They MUST NOT concurrently write the same target files.**
 9. A validation command MUST produce structured evidence, including success,
    exit code, output, and timeout state.
 10. A run MUST NOT report `completed` when required validation failed or when an
