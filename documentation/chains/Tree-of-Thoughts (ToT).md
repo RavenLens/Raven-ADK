@@ -12,6 +12,33 @@ Tree-of-Thoughts allows the agent to generate multiple "thoughts" or potential n
 
 In RavenADK, ToT is implemented with a strong focus on events, allowing you to monitor backtracks, branch explorations, and evaluations in real-time.
 
+### Structured output
+
+ToT uses RavenADK's structured-output interface for every model call that generates
+or evaluates part of the tree. The option generator, thought generator, and
+evaluator responses are requested with Zod schemas and are parsed and validated
+before the search strategy uses them. This includes generated options and
+thoughts, node ratings, pruning decisions, and final option selection.
+
+The structured model response is an internal implementation detail of the search:
+the intermediate `AIMessage` contains the parsed value in its
+`structuredOutput` property, but `tot.invoke()` returns the strategy's structured
+result directly rather than an `AIMessage`.
+
+The result has this shape:
+
+```typescript
+const result = await tot.invoke();
+
+result.theBestOption;  // The selected OptionNode
+result.reasoningChains; // The explored reasoning chains
+result.allOptions;      // All generated options, including their ratings
+```
+
+`reasoningChains` contains entries with a `rootOption` and its nested
+`reasoningChain`. Each option and thought node follows the schemas exported from
+the ToT nodes module, including identifiers, content, and any evaluator ratings.
+
 ### Motivational questions
 
 #### Why?
