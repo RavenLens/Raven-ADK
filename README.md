@@ -11,6 +11,8 @@
 **RavenADK** is an ultra-fast, lightweight, TypeScript-native **Agentic-AI** framework built-on *event-driven* approach with AI-SOTA patterns on mind.
 <br/>**RavenADK** is designed to help you build high-performance AI agents with minimal dependencies; OpenSource in definition
 
+> Join to out community on [discord](https://discord.gg/XJed3eKn4v)
+
 <!-- Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor. -->
 
 #### RavenADK as default supports these SOTA Agentic patterns:
@@ -35,6 +37,8 @@
 - Builting tools
     - Browser - run serverless browser on your device - [check](./documentation/tools/Browsing.md)
 - RAG (Resource-Augmented-Generation) - Use to enforce responses with documents from your vector-database. Retriver loads these documents matches to the Semantic Similarity of query given to llm. It's usefull when you've huge documents database cannot be treat as CAG. - [check](./documentation/augmented%20generation/RAG.md)
+- AEval - Agentic evaluation for scoring responses and guiding improvements - [check](./documentation/AEval.md)
+- FactChecker - Verify the truthfulness of specified information - [check](./documentation/FactChecker.md)
 
 ## Installation
 ```bash
@@ -62,6 +66,8 @@ npm install @ravenlens/raven-adk
 - [Self-Improvement](./documentation/Self-Improvement.md)
     - Agent learns new skills and keeps memories
 - [Secure Sandboxes](./documentation/Sandbox.md)
+- [AEval](./documentation/AEval.md)
+- [FactChecker](./documentation/FactChecker.md)
 - [Supported Models](./documentation/Models.md)
     - [Models come with Compaction](./documentation/compaction/Readme.md#model-support)
 
