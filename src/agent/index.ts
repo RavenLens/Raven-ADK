@@ -1,4 +1,12 @@
-export { ReActAgent, type ReActAgentConfig, type SubAgent } from "./ReAct.agent.js";
+export {
+	ReActAgent,
+	type DeterministicMemoryHook,
+	type DeterministicMemoryPhase,
+	type MemoryToolKind,
+	type ReActAgentConfig,
+	type ReActAgentMemoryError,
+	type SubAgent
+} from "./ReAct.agent.js";
 export * from "./RLM/index.js";
 export * as RLM from "./RLM/index.js";
 export * from "./tools/index.js";

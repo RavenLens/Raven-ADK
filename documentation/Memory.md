@@ -116,7 +116,7 @@ Deterministic memory tools are optional. When configured, their calls are record
 
 ## Tool-based memory
 
-`ToolBasedMemorySchema` exposes only the `fetch` and/or `update` tools declared in `memoryTools`. `ReActAgent` registers those tools and calls their functions with parsed arguments and the current agent state. It does not create implicit memory tools. A tool-based schema may also provide a normal `conclusionPlugin`; the plugin is registered as supplied, but RavenADK does not provide a built-in `MemoryConclusionPlugin` or `createMemoryConclusionPlugin` export.
+`ToolBasedMemorySchema` exposes only the `fetch` and/or `update` tools declared in `memoryTools`. `ReActAgent` registers those tools and calls their functions with parsed arguments and the current agent state. The `update` category is intentionally broad: its callback may save, overwrite, or delete records. Delete is therefore a storage action implemented by an `update` tool, not a separate custom memory-tool category. `ReActAgent` does not create implicit memory tools. A tool-based schema may also provide a normal `conclusionPlugin`; the plugin is registered as supplied, but RavenADK does not provide a built-in `MemoryConclusionPlugin` or `createMemoryConclusionPlugin` export.
 
 ## Built-in systems
 

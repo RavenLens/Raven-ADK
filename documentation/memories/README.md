@@ -333,6 +333,12 @@ Use stable, descriptive tool names. `ReActAgent` does not add implicit
 fetch/save operations for this schema: the tools you declare are exactly the
 memory capabilities the model receives.
 
+> `fetch` and `update` are the only custom tool categories. An `update` callback
+may **save**, **overwrite**, or **delete** a *memory record*, but *deletion is not represented
+by a separate `memoryTools.delete` entry*. If that callback fails, the
+`memory_error` event reports `toolKind: "update"` because that is the declared
+tool category.
+
 #### The tool `fn` callback
 
 `memoryTools.fetch.fn` and `memoryTools.update.fn` are the implementations the
