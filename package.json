@@ -54,6 +54,11 @@
       "import": "./dist/agent/index.js",
       "require": "./dist/agent/index.js"
     },
+    "./code": {
+      "types": "./dist/agent/code/index.d.ts",
+      "import": "./dist/agent/code/index.js",
+      "require": "./dist/agent/code/index.js"
+    },
     "./rlm": {
       "types": "./dist/agent/RLM/index.d.ts",
       "import": "./dist/agent/RLM/index.js",

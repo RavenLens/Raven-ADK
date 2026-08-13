@@ -68,7 +68,7 @@ export function isSubAgentFn(subagentVariation: SubAgent): subagentVariation is 
     return (subagentVariation as SubAgentAsFn<any>).fn !== undefined;
 }
 
-type ConfiguredMemory<Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>> =
+export type ConfiguredMemory<Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>> =
     | Memory
     | {
         memory: Memory;

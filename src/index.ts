@@ -7,6 +7,7 @@ export * from "./augmented_generation/index.js"
 export * from "./chains/index.js"
 
 export * as Agent from "./agent/index.js"
+export * as Code from "./agent/code/index.js"
 export * as Model from "./models/index.js"
 export * as Utils from "./utils/files.js"
 export * as AugmentedGeneration from "./augmented_generation/index.js"
