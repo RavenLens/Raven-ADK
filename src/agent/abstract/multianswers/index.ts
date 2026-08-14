@@ -1,6 +1,6 @@
 import { AgentModel, ReActAgent } from "../../ReAct.agent";
 import { randomUUID } from "node:crypto";
-import { AgenticEvaluator, EvaluationResult } from "../aeval";
+import { AEvalConfig, AgenticEvaluator, EvaluationResult } from "../aeval";
 import { MessagesVariations } from "../../state";
 
 type RunID = `run-id:${string}`;
@@ -78,7 +78,7 @@ export class MultipleAnswers {
      * @param sharedContext - The messages that preceded the AI answers (e.g. the user request)
      * @param evaluatorConfig - Config for the evaluation agent
      */
-    async evaluate(sharedContext: MessagesVariations[], evaluatorConfig: any) {
+    async evaluate(sharedContext: MessagesVariations[], evaluatorConfig: AEvalConfig) {
         const evaluations = [];
         for (const [id, result] of this.results) {
             this.emit("evaluate_start", id);
