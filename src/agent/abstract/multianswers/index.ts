@@ -5,14 +5,17 @@ import { MessagesVariations } from "../../state";
 
 type RunID = `run-id:${string}`;
 
-export interface MultipleAnswersEvents {
+export interface MultipleAnswersEvents<Result = any> {
     start_run: (id: string) => any;
-    end_run: (id: string, output: any) => any;
+    end_run: (id: string, output: Result) => any;
     evaluate_start: (id: string) => any;
     evaluate_end: (id: string, evaluation: EvaluationResult) => any;
 }
 
-type ParallelRun = ReActAgent<any, any, any, any> | AgentModel | ((options: InvokeOptions) => any);
+type ParallelRun<Result = any> =
+    | ReActAgent<any, any, any, any>
+    | AgentModel
+    | ((options: InvokeOptions) => Result | PromiseLike<Result>);
 
 export interface InvokeOptions {
     /** User has to specify the messages history for what Multiple Answers is run */
@@ -21,12 +24,12 @@ export interface InvokeOptions {
     abort?: AbortSignal;
 }
 
-export class MultipleAnswers {
-    parallelRun: [RunID, ParallelRun][];
-    results: [RunID, any][] = [];
+export class MultipleAnswers<Result = any> {
+    parallelRun: [RunID, ParallelRun<Result>][];
+    results: [RunID, Result][] = [];
     private eventsListeners: Record<string, ((...args: any[]) => void)[]> = {};
 
-    constructor(parallelRun: ParallelRun[]) {
+    constructor(parallelRun: ParallelRun<Result>[]) {
         this.parallelRun = parallelRun.map(rune => {
             return [
                 `run-id:${randomUUID()}`,
@@ -36,7 +39,7 @@ export class MultipleAnswers {
     }
 
     /** Register event listener */
-    onEvent<K extends keyof MultipleAnswersEvents>(event: K, listener: MultipleAnswersEvents[K]): void {
+    onEvent<K extends keyof MultipleAnswersEvents<Result>>(event: K, listener: MultipleAnswersEvents<Result>[K]): void {
         if (!this.eventsListeners[event]) {
             this.eventsListeners[event] = [];
         }
@@ -44,7 +47,10 @@ export class MultipleAnswers {
     }
 
     /** Emit event */
-    private emit<K extends keyof MultipleAnswersEvents>(event: K, ...args: Parameters<MultipleAnswersEvents[K]>): void {
+    private emit<K extends keyof MultipleAnswersEvents<Result>>(
+        event: K,
+        ...args: Parameters<MultipleAnswersEvents<Result>[K]>
+    ): void {
         const listeners = this.eventsListeners?.[event];
         if (listeners) {
             listeners.forEach(l => l(...args));
@@ -52,21 +58,21 @@ export class MultipleAnswers {
     }
 
     /** Runs all parallel runners and returns all outcomes */
-    async invoke(options: InvokeOptions) {
+    async invoke(options: InvokeOptions): Promise<[RunID, Result][]> {
         const runPrepare = this.parallelRun.map(async ([id, run]) => {
             this.emit("start_run", id);
 
             // Result
-            let result: any;
+            let result: Result;
             if (typeof run === "function") {
                 result = await run(options);
             }
-            else result = await run.invoke(options);
+            else result = await run.invoke(options) as Result;
 
             this.emit("end_run", id, result);
 
             //
-            return [id, result] as [RunID, any];
+            return [id, result] as [RunID, Result];
         });
 
         this.results = await Promise.all(runPrepare);
@@ -83,7 +89,11 @@ export class MultipleAnswers {
         for (const [id, result] of this.results) {
             this.emit("evaluate_start", id);
 
-            const aiMessage = result?.messages?.at(-1) || result?.answer?.at(-1);
+            const resultRecord = result as unknown as {
+                messages?: MessagesVariations[];
+                answer?: MessagesVariations[];
+            };
+            const aiMessage = resultRecord?.messages?.at(-1) || resultRecord?.answer?.at(-1);
 
             if (!aiMessage) {
                 throw new Error(`Could not find AI message in result for ${id}`);

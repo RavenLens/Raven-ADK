@@ -6,16 +6,278 @@ for doing so is strong enough. It is not a guarantee of truth. If every run
 shares the same prompt, model, retrieval mistake, or misleading source, the
 answers can agree and still be wrong.
 
-RavenADK does not currently ship a `SelfConsistency` class. The pattern can be
-implemented by composing the existing `MultipleAnswers`, `AgenticEvaluator`
-(`AEval`), `FactChecker`, and `TreeOfThoughts` (`ToT`) APIs. Starting with this
-composition keeps the policy visible and avoids committing to an API before
-consensus, confidence, and abstention semantics are stable.
+RavenADK ships a `SelfConsistency` class as a reusable policy layer around
+`MultipleAnswers`. It can also compose the existing `AgenticEvaluator`
+(`AEval`), `FactChecker`, and `TreeOfThoughts` (`ToT`) APIs. The class keeps
+normalization, clustering, agreement measurement, and abstention consistent
+across product modules without duplicating that decision logic in every
+caller.
+
+## Implement Self-Consistency with `SelfConsistency`
+
+`SelfConsistency` class is a decision
+layer around `MultipleAnswers`: `MultipleAnswers` runs the candidates, while
+`SelfConsistency` extracts their answers, normalizes them, groups equivalent
+answers into clusters, measures agreement, and decides whether to accept or
+abstain.
+
+The class does not claim that agreement proves truth. It answers a narrower
+question: **do enough independent candidates support the same normalized
+answer to satisfy this application's policy?** Use `FactChecker`, AEval, or
+human review when the decision also needs evidence or quality verification.
+
+### Constructor and options
+
+Create one instance with a `MultipleAnswers` runner and the policy for turning
+raw runner results into comparable answers:
+
+```typescript
+import {
+  MultipleAnswers,
+  OpenAI,
+  SelfConsistency,
+  type MessagesVariations
+} from "@ravenlens/raven-adk";
+
+const consistency = new SelfConsistency<string>({
+  candidates: new MultipleAnswers([
+    new OpenAI({ model: "gpt-5-mini" }),
+    new OpenAI({ model: "gpt-5-mini" }),
+    new OpenAI({ model: "gpt-5-mini" })
+  ]),
+  minAgreement: 2 / 3,
+  minCandidates: 2
+});
+```
+
+The class accepts two generic parameters:
+
+```typescript
+new SelfConsistency<Answer, Result>(options)
+```
+
+`Answer` is the value returned by `extract`, stored in each candidate's
+`answer`, and returned as `result.answer` when a cluster is accepted. `Result`
+is the raw value returned by each candidate runner. It is passed to `extract`
+and stored in `candidate.result` and `invalidCandidates[].result`.
+
+The generic parameters are ordered as `Answer, Result`:
+
+```typescript
+type CandidateResult = {
+  messages: MessagesVariations[];
+};
+
+const consistency = new SelfConsistency<string, CandidateResult>({
+  candidates: typedCandidates, // MultipleAnswers<CandidateResult>
+  extract: result => result.messages.at(-1)?.content ?? ""
+});
+```
+
+`Answer` and `Result` both default to `any` for compatibility with untyped
+runners. If `candidates` is a typed `MultipleAnswers<Result>`, TypeScript can
+usually infer `Result`; an explicitly typed `extract` function can also make
+the answer type clear. Specify both parameters when you want the extractor,
+candidate records, events, and returned result to be checked against concrete
+types. If only `Answer` is supplied, the second parameter still defaults to
+`any`, for example `new SelfConsistency<string>(options)`.
+
+The constructor options are:
+
+| Option | What it does | Default | When to customize it |
+| --- | --- | --- | --- |
+| `candidates` | Supplies the models, agents, or custom function runners that generate answers. | Required | Always. Use independent models, prompts, retrieval paths, or sampling settings when independence matters. |
+| `extract(result)` | Converts one raw runner result into the answer to compare. The default reads the last `messages` or `answer` item, then uses `structuredOutput` or `content`. | Built-in extraction | Use it for structured output, nested API results, claims, labels, or domain-specific fields. |
+| `normalize(answer)` | Converts an answer into the string used as its cluster key. | Trim/lowercase/compress whitespace for strings; stable JSON for objects | Use it for aliases, number formats, dates, units, case-insensitive labels, or canonical JSON. |
+| `weight(candidate)` | Gives a valid candidate more or less influence in its cluster. | `1` | Use calibrated model reliability or source quality. Do not use it to hide disagreement without documenting the policy. |
+| `minAgreement` | Minimum winning-cluster weight divided by total valid-candidate weight required for acceptance. | `2 / 3` | Raise it for high-risk decisions; lower it only when abstention is more costly and the risk is understood. |
+| `minCandidates` | Minimum number of valid candidates required before a decision can be accepted. | `2` | Increase it when one or two answers are not enough evidence. |
+
+`minAgreement` must be between `0` and `1`. `minCandidates` must be a positive
+integer. A candidate is counted only after extraction, normalization, and
+weight validation succeed.
+
+### `invoke(options)`
+
+`invoke` is the main execution method. It:
+
+1. Calls `MultipleAnswers.invoke(options)` with the supplied `messages` and
+   optional `abort` signal.
+2. Extracts and normalizes every returned answer.
+3. Calculates each candidate's weight.
+4. Groups candidates with the same normalized value into clusters.
+5. Sorts clusters by descending total weight.
+6. Returns an accepted answer or an abstention result.
+
+Use `invoke` when you want to treat self-consistency as an executable runner or
+when the method name fits an existing invocation pipeline:
+
+```typescript
+const result = await consistency.invoke({
+  messages: [
+    { type: "user", content: "Which support queue should handle this ticket?" }
+  ]
+});
+
+if (result.status === "accepted") {
+  console.log("Route to:", result.answer);
+  console.log("Agreement:", result.agreement);
+} else {
+  console.log("Send to human review:", result.reason);
+}
+```
+
+`invoke` does not call `evaluate`, AEval, or `FactChecker` automatically. Run
+those as an additional policy step when normalized agreement alone is not
+enough.
+
+### `check(options)`
+
+`check` is a readable alias for `invoke`. It performs exactly the same work and
+returns the same `SelfConsistencyResult` type. Prefer it in business code when
+the operation reads as a reliability check:
+
+```typescript
+const decision = await consistency.check({
+  messages: [
+    { type: "user", content: "Which support queue should handle this ticket?" }
+  ]
+});
+
+if (decision.status === "abstained") {
+  // Do not route, publish, or automate the answer without another review step.
+  console.log(decision.reason);
+}
+```
+
+Use either method, not both for the same request. Calling both runs all
+candidates twice.
+
+### `onEvent(event, listener)`
+
+`onEvent` registers listeners for the class-level lifecycle. It is useful for
+audit logs, metrics, tracing, and human-review queues:
+
+| Event | Listener argument | Meaning |
+| --- | --- | --- |
+| `start` | `InvokeOptions` | A consistency check is beginning. |
+| `candidate` | Valid candidate record | One result was extracted, normalized, and weighted successfully. |
+| `invalid_candidate` | Invalid candidate record | Extraction, normalization, or weight calculation failed for one result. |
+| `end` | Final `SelfConsistencyResult` | The class accepted a winner or abstained. |
+
+```typescript
+consistency.onEvent("candidate", candidate => {
+  console.log(candidate.id, candidate.normalizedAnswer, candidate.weight);
+});
+
+consistency.onEvent("invalid_candidate", candidate => {
+  console.warn("Candidate excluded", candidate.id, candidate.error.message);
+});
+
+consistency.onEvent("end", result => {
+  console.log(result.status, result.agreement, result.winner?.normalizedAnswer);
+});
+```
+
+The class events describe the decision layer. Use `MultipleAnswers.onEvent`
+when you also need runner-level `start_run` and `end_run` events.
+
+### Results and clusters
+
+Every result contains:
+
+- `status`: either `"accepted"` or `"abstained"`;
+- `answer`: the original answer from the first candidate in the winning
+  cluster, or `undefined` when abstaining;
+- `candidates`: all valid extracted candidates;
+- `invalidCandidates`: results that could not be compared;
+- `clusters`: all normalized-answer groups, sorted by descending weight;
+- `winner`: the first cluster, even when it does not meet the threshold;
+- `agreement`: the winning cluster's weighted share of all valid candidates;
+- `reason`: the abstention reason when `status` is `"abstained"`.
+
+A cluster is not a new model run. It is a group of candidate records whose
+`normalizedAnswer` strings are equal. For example, with answers `"Paris"`,
+`" paris "`, and `"London"`, the default normalizer produces two clusters:
+
+```text
+normalizedAnswer: "paris"   candidates: 2   weight: 2   agreement: 0.667
+normalizedAnswer: "london"  candidates: 1   weight: 1   agreement: 0.333
+```
+
+With the default `minAgreement` of `2 / 3`, the result is accepted and returns
+the original answer from the first `"paris"` candidate. With three different
+answers, the winning cluster has agreement `1 / 3`, so the result abstains.
+Weighted clusters use the same calculation with total weight instead of only
+the candidate count.
+
+The possible abstention reasons are:
+
+- `NO_VALID_CANDIDATES`: every result failed extraction, normalization, or
+  weight validation;
+- `NOT_ENOUGH_CANDIDATES`: fewer valid candidates than `minCandidates` remain;
+- `INSUFFICIENT_AGREEMENT`: a winning cluster exists, but its agreement is
+  below `minAgreement`.
+
+If a runner itself rejects while `MultipleAnswers.invoke()` is executing, that
+rejection still propagates. `invalidCandidates` currently covers failures
+after a runner has returned a result, not runner-level retries or partial
+failure recovery.
+
+### Custom extraction and normalization
+
+Use custom functions when the answer is structured or equivalent values have
+different textual representations:
+
+```typescript
+type TicketDecision = {
+  queue: "billing" | "technical" | "account";
+  urgency: "low" | "high";
+};
+
+type TicketResult = {
+  decision: TicketDecision;
+};
+
+const consistency = new SelfConsistency<TicketDecision, TicketResult>({
+  candidates,
+  extract: result => result.decision,
+  normalize: decision => `${decision.queue}:${decision.urgency}`,
+  minAgreement: 0.75
+});
+```
+
+For free-form prose, exact normalized equality is usually too strict. Either
+extract a stable label or use AEval to rank the prose after candidate
+generation. `SelfConsistency` deliberately does not pretend that two
+different paragraphs are equivalent without a domain-specific comparison
+function.
+
+### When this class is beneficial
+
+Use `SelfConsistency` when an automated action should happen only after several
+independent candidate runs support the same decision:
+
+| Business scenario | Why clusters help | Typical response to abstention |
+| --- | --- | --- |
+| Support ticket routing | Groups equivalent queue labels such as `billing` or `technical`; prevents one unusual answer from silently misrouting a ticket. | Send to a general queue or human triage. |
+| Invoice and document extraction | Groups normalized values for totals, dates, currencies, or vendor IDs despite formatting differences. | Flag the document for verification before posting it to accounting. |
+| Compliance and policy classification | Requires agreement before assigning a policy label or triggering a workflow. | Hold the case for compliance review. |
+| Incident severity triage | Compares `low`, `medium`, and `high` severity decisions from independent responders or models. | Page an operator when the severity is disputed. |
+| Eligibility and application pre-screening | Makes disagreement visible before a recommendation affects a customer. | Request missing information or require human approval. |
+| Configuration and deployment planning | Clusters stable recommendations such as `rollout`, `rollback`, or `needs-review` while retaining every supporting run. | Stop automation and open an engineering review. |
+
+The class is most valuable when the output is a canonical label, structured
+decision, or otherwise normalizable value and when abstention has a defined
+business path. It is less useful for one authoritative calculation, highly
+creative writing, or candidates that all depend on the same unverified source.
+
+
+----
 
 ## Implement Self-Consistency by combining existing constructs
-
-The implementation is an application-level policy built from existing
-constructs:
+\
+Section contains instructions how to implement Self-Consistency concept in RavenADK without leveraging `SelfConsistency` class
 
 1. Generate independent candidates with `MultipleAnswers`.
 2. Pass the conversation as `invoke({ messages })`. The optional `abort` signal
@@ -32,13 +294,17 @@ constructs:
    multi-step reasoning. ToT can be adapted as a custom function runner because
    it is not a `ParallelRun` accepted directly by `MultipleAnswers`.
 
-`MultipleAnswers` does not decide what consensus means. Its constructor accepts
+`SelfConsistency` owns the consensus decision, while `MultipleAnswers` remains
+the candidate runner. `MultipleAnswers` does not decide what consensus means.
+Its constructor accepts
 `AgentModel`, `ReActAgent`, or function runners. `invoke` returns results as
 `[runId, result][]`; `evaluate` processes those results sequentially and
 returns `{ id, evaluation, result }` records without sorting them; `getBest`
 invokes, evaluates, sorts by descending score, and returns the first record.
-The examples below add the normalization, quality, verification, and
-abstention policy around those primitives.
+The class adds typed candidate records, normalization, weighted clustering,
+agreement thresholds, invalid-candidate tracking, and abstention around those
+primitives. The examples below also show how to compose AEval, FactChecker, and
+ToT when the decision needs quality or evidence checks.
 
 ### Use case 1: Consensus for canonical answers
 
@@ -386,11 +652,9 @@ highly creative and have no single target, or all candidates depend on the same
 unverified source. For high-impact decisions, use authoritative verification
 and human review rather than consensus alone.
 
-## Future module boundary
+## Module boundary
 
-After several applications reveal a stable policy, RavenADK could add a
-`SelfConsistency` module. Its responsibilities should be limited to candidate
-orchestration, normalization/clustering hooks, consensus and confidence
-calculation, traceable result reporting, and abstention. It should compose—not
-duplicate—AEval, FactChecker, ToT, model providers, or human-in-the-loop
-controls.
+`SelfConsistency` is responsible for candidate orchestration around a
+reliability decision, normalization/clustering hooks, agreement calculation,
+traceable result reporting, and abstention. It should compose, not duplicate,
+AEval, FactChecker, ToT, model providers, or human-in-the-loop controls.

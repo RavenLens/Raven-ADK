@@ -169,6 +169,11 @@
       "import": "./dist/agent/abstract/multianswers/index.js",
       "require": "./dist/agent/abstract/multianswers/index.js"
     },
+    "./self-consistency": {
+      "types": "./dist/agent/abstract/self-consistency/index.d.ts",
+      "import": "./dist/agent/abstract/self-consistency/index.js",
+      "require": "./dist/agent/abstract/self-consistency/index.js"
+    },
     "./sequential": {
       "types": "./dist/agent/abstract/sequential/index.d.ts",
       "import": "./dist/agent/abstract/sequential/index.js",
