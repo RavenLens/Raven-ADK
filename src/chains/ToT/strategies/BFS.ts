@@ -1,24 +1,12 @@
 import z4 from "zod/v4";
-import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
+import { OptionNode, ThoughtNode, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
+import { createGenerateOptionsSchema, createTheBestOptionSchema, createTopKOptionsSchema, LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
 interface BFS_GenerateOptions {
     options: OptionNode[];
 }
-
-const zodGenerateOptionsSchema: z4.ZodType<BFS_GenerateOptions> = z4.object({
-    options: z4.array(zodOptionSchema).describe("List with generated options")
-})
-
-interface BFS_EvaluateTopKOptionsSchema {
-    topOptions: OptionNode[];
-}
-
-const zodTopKOptions: z4.ZodType<BFS_EvaluateTopKOptionsSchema> = z4.object({
-    topOptions: z4.array(zodOptionSchema).describe("List with Top-K options where k is the number")
-})
 
 interface BFS_EvaluateTopThoughtsSchema {
     topThoughts: ThoughtNode[];
@@ -40,10 +28,6 @@ interface BFS_TheBestOption {
     theBestOption: OptionNode[];
 }
 
-const zodTheBestOptionSchema: z4.ZodType<BFS_TheBestOption> = z4.object({
-    theBestOption: z4.array(zodOptionSchema).describe("The best option selected")
-})
-
 interface BFS_RateNodesResponse {
     ratings: { id: string; rate: any }[];
 }
@@ -60,6 +44,10 @@ export interface BFSConfig {
     topK: number;
 }
 
+/**
+ * Structured-output notation: option generation, pruning, and final selection
+ * include the schema supplied to TreeOfThoughts.invokeStructuredOutput.
+ */
 export class BFSToT implements StrategySchema {
     static name = "BFS-ToT";
     private ToT: TreeOfThoughts | undefined = undefined;
@@ -123,7 +111,9 @@ ${JSON.stringify(candidates, null, 4)}
 Return the selected top-${limit} candidates.
         `;
 
-        const schema = candidates[0].type === "option-node" ? zodTopKOptions : zodEvaluateTopThoughtsSchema;
+        const schema = candidates[0].type === "option-node"
+            ? createTopKOptionsSchema(this.ToT!.getOptionNodeSchema())
+            : zodEvaluateTopThoughtsSchema;
         const result = await this.ToT!.callableUnitInvokeStructured("evaluator", schema, systemPrompt);
         const structured = result.structuredOutput as any;
         const selected = (structured.topOptions || structured.topThoughts) as T[];
@@ -162,7 +152,11 @@ Generate thoughts that continue this reasoning path.
 
         // 1. Level 0: Initial Options
         const initialOptionsPrompt = `Generate ${tot.config.initialOptionsCount} initial options for: ${tot.config.query}`;
-        const optResult = await tot.callableUnitInvokeStructured("optionGenerator", zodGenerateOptionsSchema, initialOptionsPrompt);
+        const optResult = await tot.callableUnitInvokeStructured(
+            "optionGenerator",
+            createGenerateOptionsSchema(tot.getOptionNodeSchema()),
+            initialOptionsPrompt
+        );
         const options = (optResult.structuredOutput as BFS_GenerateOptions).options;
         options.forEach(o => {
             o.id = randomUUID();
@@ -292,7 +286,11 @@ Generate thoughts that continue this reasoning path.
 
     private async selectFinalBest(chains: any[]): Promise<OptionNode> {
         const systemPrompt = `Select the best final option from these reasoning chains: ${JSON.stringify(chains, null, 4)}`;
-        const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTheBestOptionSchema, systemPrompt);
+        const result = await this.ToT!.callableUnitInvokeStructured(
+            "evaluator",
+            createTheBestOptionSchema(this.ToT!.getOptionNodeSchema()),
+            systemPrompt
+        );
         const best = (result.structuredOutput as BFS_TheBestOption).theBestOption[0];
         await this.ToT!.emitEvent("finalOptionSelected", best);
         return best;
