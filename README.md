@@ -31,6 +31,7 @@
         - Expand by writing your own memory store - [check tutorial](./documentation/Memory.md#creating-custom-memory-store)
 - MCP - Model context protocol is to your disposition - [check it](./documentation/MCP.md)
 - **Self-Improvement** - Agents can improve themselves through CASCADE pattern and recursive memory consolidation - [check](./documentation/Self-Improvement.md)
+- **Self-Consistency** - Compose multiple answers, AEval, FactChecker, and ToT to improve reliability - [check](./documentation/Self-Consistency.md)
 - Events - Listen agent events and transfer this to UI/TUI to show user what your agent is doing
 - HITL - sometimes actions are risky or agent needs more information and it can ask you for that - [check](./documentation/HITL.md)
 - Sandboxes - Secure code execution environments designed for RLM and ReAct tools - [check](./documentation/Sandbox.md)
@@ -65,6 +66,7 @@ npm install @ravenlens/raven-adk
     - If enabled - overtime agent learns new skills
 - [Self-Improvement](./documentation/Self-Improvement.md)
     - Agent learns new skills and keeps memories
+- [Self-Consistency](./documentation/Self-Consistency.md)
 - [Secure Sandboxes](./documentation/Sandbox.md)
 - [AEval](./documentation/AEval.md)
 - [FactChecker](./documentation/FactChecker.md)
