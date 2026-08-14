@@ -1,5 +1,5 @@
 # AEval
-AEval stands for Agentic Evaluator that is the way to provide analysys the output in comparision to expected outcome given in question to llm or does the answer include the characteristic
+AEval stands for Agentic Evaluator (`AgenticEvaluator`) that is the way to provide analysys the output in comparision to expected outcome given in question to llm or does the answer include the characteristic
 
 ## How does it work?
 The `AgenticEvaluator` works by spawning a dedicated `ReActAgent` purely for evaluation purposes. 
