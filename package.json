@@ -1,6 +1,6 @@
 {
   "name": "@ravenlens/raven-adk",
-  "version": "0.0.10",
+  "version": "0.0.12",
   "description": "AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightful UI assemblies gorgeous UX. Made by RavenAlliance",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -168,6 +168,11 @@
       "types": "./dist/agent/abstract/multianswers/index.d.ts",
       "import": "./dist/agent/abstract/multianswers/index.js",
       "require": "./dist/agent/abstract/multianswers/index.js"
+    },
+    "./self-consistency": {
+      "types": "./dist/agent/abstract/self-consistency/index.d.ts",
+      "import": "./dist/agent/abstract/self-consistency/index.js",
+      "require": "./dist/agent/abstract/self-consistency/index.js"
     },
     "./sequential": {
       "types": "./dist/agent/abstract/sequential/index.d.ts",

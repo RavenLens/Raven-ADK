@@ -54,6 +54,26 @@ The `ReActAgent` is built on an event-driven architecture. You can listen to var
 | `abort` | Emitted once when the configured abort signal stops the run. | - |
 | `concluding_start` | Emitted when the agent starts generating the final conclusion summary. It's right before `result_producing_start` event | - |
 | `concluding_end` | Emitted when the final conclusion is ready. It's right before `result_producing_start` event | `conclusion: string` |
+| `memory_error` | Emitted when a deterministic memory hook or registered memory tool fails. The agent logs the error and continues the run. | `ReActAgentMemoryError` |
+
+### Memory failures
+
+Deterministic memory failures are isolated per memory system, so a parsing, validation, retrieval, or persistence error does not stop the ReAct loop. Before-run failures are added to the wrapped system prompt under `Memory Diagnostics`, together with any successful memory context, so the model can continue without claiming that unavailable memory was retrieved or saved.
+
+After-run failures are emitted through `memory_error` and written to `console.error` after the model has completed. `ReActAgent` does not provide a generic transaction rollback because memory implementations own their storage; use a transactional memory store when an update must be atomic.
+
+When a registered tool-based memory `fetch` or `update` tool fails, the agent emits the same event and returns a memory-specific failed tool message to the model. The ReAct loop continues, and the model is told not to claim that the unavailable memory was retrieved or saved. Ordinary tool failures continue to emit only their normal failed tool message.
+
+**Error Payload:** The error payload contains `memoryName`, `toolName`, `toolKind` (`"fetch"` or `"update"`), and a sanitized `message` for memory-tool failures. `toolKind` identifies the declared custom memory-tool category, not the storage operation performed by the callback. An `update` tool may save, overwrite, or delete a record, and all of those operations are reported as `toolKind: "update"`. Deterministic hook failures continue to contain `memoryName`, `hook`, `phase`, and `message`.
+
+```typescript
+reactAgent.onEvent("memory_error", (error) => {
+    const source = error.toolName
+        ? `tool ${error.toolName} (${error.toolKind})`
+        : `hook ${error.hook} (${error.phase})`;
+    console.error(`Memory ${error.memoryName} failed in ${source}: ${error.message}`);
+});
+```
 
 ## Example Usage
 

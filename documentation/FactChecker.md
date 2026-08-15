@@ -10,6 +10,8 @@ FactChecker is useful when factual correctness is the main concern:
 - Run several independent verifiers and preserve each result.
 - Replace a falsy text range with a correction returned by the verifier.
 
+> It's simplieifed version to check facts compared to complex [ToT (Tree-of-Thoughts)](./chains/Tree-of-Thoughts%20(ToT).md) - you can ship FactChecker with ToT to improve the checking capability
+
 ## Core API
 
 ```typescript
@@ -333,6 +335,116 @@ const corrected = await checker.improve(ratings);
 ```
 
 The difference from the standalone model example is that the ReAct agent can gather evidence through its tools before producing the structured `FactChecker` result.
+
+## Using Tree-of-Thoughts with FactChecker
+
+Use [Tree-of-Thoughts (ToT)](./chains/Tree-of-Thoughts%20(ToT).md) when a claim needs several competing investigation paths before you can decide which evidence is strongest. ToT explores and ranks candidate reasoning paths; FactChecker then turns the selected path into a claim-level truth verdict and correction.
+
+ToT is not passed directly as a `FactSentry`: ToT returns a winning `OptionNode`, while FactChecker expects a `TruthnessState` with a text range. The adapter below uses ToT to select an evidence path and a `ReActAgent` to convert that path into the FactChecker result. It reuses the `wikipediaLookup` tool from the ReAct example above.
+
+```typescript
+import {
+	BFSToT,
+	FactChecker,
+	ReActAgent,
+	TreeOfThoughts,
+	type FactSentry
+} from "@ravenlens/raven-adk";
+import { OpenAI } from "@ravenlens/raven-adk/models";
+import { z } from "zod";
+
+const FactVerdictSchema = z.object({
+	truthy: z.boolean(),
+	baseOnRecource: z.string().min(1)
+});
+
+// Reuse the wikipediaLookup tool from the ReAct example, or provide a search,
+// browsing, database, or RAG tool appropriate for your evidence source.
+const evidenceTools = [wikipediaLookup];
+
+const createEvidenceAgent = (systemPrompt: string) => new ReActAgent({
+	model: new OpenAI({
+		model: "gpt-5-mini",
+		apiKey: process.env.OPENAI_API_KEY
+	}),
+	systemPrompt,
+	messages: [],
+	tools: evidenceTools,
+	withConclusion: false
+});
+
+const totBackedVerifier: FactSentry = async (fact) => {
+	const evidenceSearch = new TreeOfThoughts({
+		query: [
+			"Investigate the following factual claim.",
+			"Explore different evidence paths, identify counterarguments, and select the best-supported path.",
+			`Claim: ${fact}`
+		].join("\n"),
+		initialOptionsCount: 3,
+		graphSearchAlgorithm: new BFSToT({ topK: 2 }),
+		optionGenerator: createEvidenceAgent(
+			"Generate distinct evidence-backed investigation paths for the claim."
+		),
+		thoughtGenerator: createEvidenceAgent(
+			"Expand the investigation by checking sources, assumptions, and counterarguments."
+		),
+		evaluator: createEvidenceAgent(
+			"Rank paths by source quality, factual support, and resistance to counterarguments."
+		)
+	});
+
+	const searchResult = await evidenceSearch.invoke();
+	const selectedEvidence = searchResult.theBestOption.content;
+
+	const verdictAgent = createEvidenceAgent([
+		"You verify factual claims using the supplied evidence path and available tools.",
+		"Return truthy=false when the claim is unsupported or incorrect.",
+		"When the claim is false, baseOnRecource must be a corrected replacement sentence."
+	].join("\n"));
+	verdictAgent.agentConfig.messages = [{
+		type: "user",
+		content: [
+			`Claim: ${fact}`,
+			`Selected ToT evidence path:\n${selectedEvidence}`
+		].join("\n\n")
+	}];
+
+	const result = await verdictAgent.invokeStructuredOutput(FactVerdictSchema);
+	const aiMessage = [...result.messages]
+		.reverse()
+		.find(message => message.type === "ai");
+
+	if (!aiMessage || aiMessage.type !== "ai" || !aiMessage.structuredOutput) {
+		throw new Error("ToT-backed fact verifier did not return a structured verdict.");
+	}
+
+	const verdict = FactVerdictSchema.parse(aiMessage.structuredOutput);
+	return {
+		from: 0,
+		to: fact.length,
+		...verdict
+	};
+};
+
+const claim = "The claim that needs several independent evidence paths.";
+const checker = new FactChecker({
+	toCheck: claim,
+	verifiers: totBackedVerifier
+});
+
+const ratings = await checker.check();
+const correctedClaim = await checker.improve(ratings);
+console.log(ratings[0].truthy ? "Claim supported" : correctedClaim);
+```
+
+### When to use each composition
+
+- **FactChecker with a deterministic verifier:** Use it when an authoritative database, policy, or fixed rule can answer the claim without model reasoning.
+- **FactChecker with `ReActAgent`:** Use it when one verification path must browse, call APIs, execute code, or consult tools before returning a verdict.
+- **FactChecker with ToT:** Use it when the claim is ambiguous, high-stakes, or likely to benefit from multiple competing evidence and counterargument paths.
+- **FactChecker with ToT and `ReActAgent`:** Use this composition when ToT should explore the investigation space and a tool-using agent should validate the strongest path before applying a correction.
+
+ToT increases coverage and reasoning quality at the cost of additional model calls. For a simple claim with one trusted source, a direct FactChecker verifier is usually faster and cheaper.
 
 ## Using RAG to find relevant information
 

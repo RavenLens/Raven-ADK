@@ -1,4 +1,12 @@
-export { ReActAgent, type ReActAgentConfig, type SubAgent } from "./ReAct.agent.js";
+export {
+	ReActAgent,
+	type DeterministicMemoryHook,
+	type DeterministicMemoryPhase,
+	type MemoryToolKind,
+	type ReActAgentConfig,
+	type ReActAgentMemoryError,
+	type SubAgent
+} from "./ReAct.agent.js";
 export * from "./RLM/index.js";
 export * as RLM from "./RLM/index.js";
 export * from "./tools/index.js";
@@ -13,8 +21,10 @@ export * from "./plugins/index.js";
 export * as Plugins from "./plugins/index.js";
 export * from "./abstract/aeval/index.js";
 export * as AEval from "./abstract/aeval/index.js";
-export * from "./abstract/multianswers/index.js";
-export * as MultiAnswers from "./abstract/multianswers/index.js";
+export * from "./abstract/multianswers/index";
+export * as MultiAnswers from "./abstract/multianswers/index";
+export * as SelfConsistancy from "./abstract/self-consistency/index.js";
+export * from "./abstract/self-consistency/index.js";
 export * from "./abstract/sequential/index.js";
 export * as Sequential from "./abstract/sequential/index.js";
 export * from "./abstract/podcast/index.js";

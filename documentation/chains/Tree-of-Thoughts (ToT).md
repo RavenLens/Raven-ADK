@@ -1,83 +1,212 @@
 # Tree-of-Thoughts (ToT)
 
-## Tree-of-Thoughts (ToT)
+Tree-of-Thoughts (ToT) is a reasoning framework in which an agent explores multiple candidate paths, evaluates them, and backtracks when a path reaches a dead end. Unlike a linear chain of thought, ToT treats problem solving as a tree search: several options can be explored at the same depth, and weaker branches can be abandoned before the search continues.
 
-The Tree-of-Thoughts (ToT) pattern is a powerful reasoning framework that enables AI agents to explore multiple reasoning paths in parallel, evaluate their potential, and backtrack when a path leads to a dead end. Unlike linear chain-of-thought, ToT treats problem-solving as a tree search with backtrack option for failure/misunderstanding on-way.
+RavenADK's implementation is based on the paper [Tree of Thoughts: Deliberate Problem Solving with Large Language Models](https://arxiv.org/pdf/2305.10601).
 
-> RavenADK ToT implementation base on paper [Tree of Thoughts: Deliberate Problem Solving with Large Language Models](https://arxiv.org/pdf/2305.10601)
+## Overview
 
-### Description
+At each level, ToT can generate several potential next steps, called thoughts. An evaluator then scores those thoughts. The evaluator may be the same model, a different model, or a programmatic evaluator such as [`AEval`](../AEval.md). The selected search strategy decides which branches to expand, which to prune, and when to backtrack.
 
-Tree-of-Thoughts allows the agent to generate multiple "thoughts" or potential next steps at any given point. These thoughts are then evaluated (either by the same model, a different model, or a programmatic evaluator like `AEval`). Based on the evaluation, the agent decides which branches to continue exploring, which to abandon, and when to backtrack to a previous state to try a different approach.
+RavenADK also emits events for branch exploration, evaluation, and backtracking, so applications can observe the search as it runs.
 
-In RavenADK, ToT is implemented with a strong focus on events, allowing you to monitor backtracks, branch explorations, and evaluations in real-time.
+## Invocation
 
-### Motivational questions
+Choose the invocation method based on the shape required by the caller:
 
-#### Why?
+| Method | Use it when | Result |
+| --- | --- | --- |
+| `invoke()` | A free-form, narrative result is sufficient. | Returns the strategy result with the selected text in `theBestOption.content`. |
+| `invokeStructuredOutput(schema, maxRecallTries?)` | The final answer must conform to a Zod schema, such as a plan, specification, course definition, or API response. | Returns parsed values in `theBestOption.zodSchema` and `allOptions[*].zodSchema`. |
 
-To get more accuracy from final ai output. You can consider to pair this algorithm with [`RAG`](<../augmented generation/RAG.md>) and [`AEval`](../) to check and lift-up groundess as required
+### Structured output
 
-#### How much?
+Use `invokeStructuredOutput` when the result will be consumed as data rather than displayed only as prose. The supplied schema becomes the output contract for every candidate option. Each strategy generates, evaluates, prunes, and selects options that carry a value matching that schema.
 
-Incremental increase of accuracy comes with cost of tokens
+The selected parsed value is available in `result.theBestOption.zodSchema`. The corresponding `content` field remains available for the human-readable explanation or description. Use `invoke()` for exploratory, narrative, or otherwise unstructured results. Use `invokeStructuredOutput` for objects, arrays, enums, and nested records that will be rendered in a UI, stored, passed to another function, or returned from an API.
 
-### Supported Search Strategies
+The optional `maxRecallTries` argument controls how many retries are available for structured option, thought, and evaluator calls:
 
-**RavenADK** supports two primary graph-search strategies for exploring the reasoning tree. Each strategy balances diversity and efficiency differently.
+```typescript
+const result = await tot.invokeStructuredOutput(AnswerSchema, 3);
+```
 
-#### Default config
+Complete example:
 
-* `maxThoughtsDepth` - the default number of thoughts layers can be generated. Default is **10**
-* `thoughtsCount` - for each layer is generated this number of thoughts. Default is **3**
+```typescript
+import { z } from "zod";
+import { TreeOfThoughts, BFSToT } from "@ravenlens/raven-adk";
 
-#### 1. Multi-Beam Search (`MultiBeamToT`)
+const AnswerSchema = z.object({
+    answer: z.string(),
+    confidence: z.number()
+});
+
+const tot = new TreeOfThoughts({
+    query: "Return a structured answer",
+    initialOptionsCount: 3,
+    graphSearchAlgorithm: new BFSToT({ topK: 1 }),
+    optionGenerator,
+    thoughtGenerator,
+    evaluator
+});
+
+const result = await tot.invokeStructuredOutput(AnswerSchema);
+const answer = AnswerSchema.parse(result.theBestOption.zodSchema);
+```
+
+ToT already validates the value against `AnswerSchema`. Calling `AnswerSchema.parse` again is optional and can be useful when you want to make the validation explicit at the call site.
+
+### Example result
+
+The following is a shortened Node.js console representation of a structured result:
+
+```javascript
+{
+    theBestOption: {
+        id: 'af485d4f-15c8-42ef-8e97-a36baf2d4ce1',
+        type: 'option-node',
+        content: 'Python - beginner-friendly syntax and a broad ecosystem.',
+        zodSchema: { answer: 'Python', confidence: 0.92 },
+        initialRate: {
+            decision: 'the-best',
+            score: 0.92,
+            justification: 'Python is a strong general-purpose recommendation for beginners.'
+        }
+    },
+    reasoningChains: [
+        { rootOption: [Object], reasoningChain: [Array] }
+    ],
+    allOptions: [
+        {
+            id: 'af485d4f-15c8-42ef-8e97-a36baf2d4ce1',
+            type: 'option-node',
+            content: 'Python - beginner-friendly syntax and a broad ecosystem.',
+            zodSchema: [Object],
+            initialRate: [Object]
+        }
+    ]
+}
+```
+
+`[Object]` and `[Array]` are abbreviated Node.js console representations. They are not literal values in the returned object.
+
+## Result shape
+
+All five search strategies return the same top-level result shape. A strategy can change which optional fields are populated and how much of the reasoning tree is present, but it does not add a different top-level field.
+
+### Top-level fields
+
+| Field | Shape | Meaning |
+| --- | --- | --- |
+| `theBestOption` | `OptionNode` | The selected root option. With `invokeStructuredOutput`, `zodSchema` contains the value parsed by the caller's Zod schema. |
+| `reasoningChains` | `{ rootOption, reasoningChain }[]` | The explored or retained reasoning trees. `rootOption` is the root `OptionNode`; `reasoningChain` is a recursive tuple of thoughts and their child chains. |
+| `allOptions` | `OptionNode[]` | All initially generated root options, including options later pruned by the strategy. |
+
+### `OptionNode` fields
+
+| Field | Meaning | When it is present |
+| --- | --- | --- |
+| `id` | Unique option identifier used to connect a result to its reasoning tree. | Every generated option. |
+| `type` | The literal value `"option-node"`. | Every option. |
+| `content` | Human-readable explanation of the candidate option. | Every option. It remains available when `zodSchema` is used. |
+| `zodSchema` | The parsed structured value, not the Zod schema object itself. | After a successful `invokeStructuredOutput(...)` for `theBestOption` and every entry in `allOptions`; optional when using `invoke()`. |
+| `initialRate` | The first evaluator result: `decision`, `score`, and `justification`. | Normally present on initial options for BFS, DFS, Best-First, Multi-Beam, and MCTS. It can be absent when an evaluator does not return a matching rating. |
+| `finalRate` | A later evaluator result for the complete candidate path. | Assigned by `MultiBeamToT` during normal final scoring. BFS, DFS, Best-First, and MCTS do not assign this field. Early exits skip Multi-Beam's final-scoring phase. |
+| `justification` | An explanation for why an option was selected. | Optional. Multi-Beam's final selector explicitly requests it; other strategies may return it when their model response includes it. Callers should not assume it is always present. |
+
+The `Rate` object used by `initialRate`, `finalRate`, and thought `rate` contains:
+
+| Field | Meaning |
+| --- | --- |
+| `decision` | `"good"`, `"the-best"`, or `"declined"`. |
+| `score` | Numeric evaluation score. |
+| `justification` | The evaluator's reason for the score and decision. |
+
+### `reasoningChains` structure
+
+Each `reasoningChain` is represented as `[thoughts, childChains]`:
+
+- `thoughts` is an array of `ThoughtNode` values at the next depth.
+- `childChains` is an array of recursive chains for those thoughts, or `null` at a leaf. Initial early exits use `[[], null]` because no thought was explored.
+- A `ThoughtNode` contains `id`, `type: "though-node"` (the current API spelling), `content`, an optional `rate`, and `dependingThoughNodes` containing linked child thoughts.
+
+### Strategy-specific outcomes
+
+| Strategy | `theBestOption` selection | `reasoningChains` and rate behavior |
+| --- | --- | --- |
+| `BFSToT` | Returns the initial option on an option-level early exit, the parent root on a thought-level early exit, or an evaluator-selected option from the surviving global top-$K$ paths. | Normal chains are built only for globally surviving roots. Initial options receive `initialRate`; thoughts receive `rate`. The strategy does not assign `finalRate`. |
+| `DFSToT` | Returns the initial option on an early exit. Otherwise, it asks the evaluator to choose among successful paths and falls back to the highest initially rated option when no path succeeds. | Normal chains represent paths that reached the depth limit or triggered early exit. If no successful path exists, `reasoningChains` can be empty even when `allOptions` and `theBestOption` are returned. Initial options receive `initialRate`; thoughts receive `rate`. |
+| `BestFirstToT` | Returns the best frontier root on an early exit. Otherwise, it asks the evaluator to choose from finished paths. | Chains represent finished frontier paths, with a root-only fallback when no finished path was recorded. Initial options receive `initialRate`; expanded thoughts receive `rate`. The strategy does not assign `finalRate`. |
+| `MultiBeamToT` | Returns the initial root or the root belonging to an early-exit thought. Otherwise, it asks a final evaluator to select the best beam and explicitly requests `justification`. | Normal chains represent the retained beams. Initial options receive `initialRate`, thoughts are rated according to `evaluateAfterThoughtTreeLevel`, and roots receive `finalRate` during normal final scoring. Early exits use the shorter chain form and skip final scoring. |
+| `MCTSToT` | Selects the initial option with the highest visit count after its simulations. MCTS does not use `earlyExitThreshold` or a final evaluator-selection call. | A chain is returned for every initial option. With zero iterations, those chains are root-only (`[[], null]`). Initial options receive `initialRate`; expanded thoughts receive `rate`. The strategy does not assign `finalRate`. |
+
+The stable contract is the three top-level fields and the shared `OptionNode` and `ReasoningChain` shapes. Strategy-specific differences are optional nested fields and chain contents, not alternative result object schemas.
+
+## Why use ToT?
+
+ToT can improve the quality of the final answer by exploring and comparing multiple candidate paths. It is especially useful when the problem has several plausible approaches, when an early assumption may be wrong, or when the evaluator can identify weak intermediate steps.
+
+The additional exploration increases token usage and latency. Tune the number of initial options, thoughts per level, search depth, and strategy-specific limits to balance quality and cost. ToT also combines well with [`RAG`](../augmented%20generation/RAG.md) for factual grounding and [`AEval`](../AEval.md) for evaluation.
+
+## Search strategies
+
+RavenADK supports five graph-search strategies. They use the same ToT building blocks but differ in how they prioritize, retain, and revisit candidate paths.
+
+### Shared defaults
+
+Unless overridden in the `TreeOfThoughts` configuration:
+
+- `maxThoughtsDepth`: Maximum number of thought levels. The default is **10**.
+- `thoughtsCount`: Number of thoughts generated at each level. The default is **3**.
+
+### 1. Multi-Beam Search (`MultiBeamToT`)
 
 Multi-Beam Search maintains several independent reasoning "beams" that compete globally at each level. Each beam is rooted in an initial option and maintains its own specialized context.
 
-**In details:**
+**How it works:**
 
-1. **Initial Generation**: Generate `initialOptionsCount` using `optionGenerator`.
-2. **Initial Pruning (Optional)**: If `pruneAtBegining` is enabled, evaluate all options and select only the top `topK` to start beams.
-3. **Beam Parallel Exploration**: For each active beam:
-   * **Expansion**: Generate `thoughtsCount` thoughts using `thoughtGenerator`.
-   * **Contextual Evaluation**: If the current level is $\ge$ `evaluateAfterThoughtTreeLevel`, evaluate thoughts using the **Full Established Path** as context. Describes when the model can start to evaluate the thoughts. If the measured thought score from same branch is grater or equal to `earlyExitThreshold` then excits and gives option with belonging score as the output. If not specified always analyses from end of first thoughts layer. Cannot exceed the `maxThoughtsDepth` - it causes the error
-   * **Local Pruning**: Within that specific beam, select the top `topK` thoughts to continue.
-   * **Depth**: Repeat until `maxThoughtsDepth` is reached.
-4. **Final Selection**: Once all beams reach the maximum depth, evaluate the final paths and pick the absolute best `theBestOption`.
+1. **Initial generation:** Generate `initialOptionsCount` options with `optionGenerator`.
+2. **Optional initial pruning:** When `pruneAtBegining` is enabled, evaluate the initial options and use only the top `topK` options as beam roots.
+3. **Beam expansion:** For each active beam:
+    - Generate `thoughtsCount` thoughts with `thoughtGenerator`.
+    - Starting at `evaluateAfterThoughtTreeLevel`, evaluate each thought using the full established path as context. If a thought reaches `earlyExitThreshold`, return its root immediately.
+    - Keep the top `topK` thoughts in that beam.
+    - Repeat until `maxThoughtsDepth` is reached. `evaluateAfterThoughtTreeLevel` cannot be greater than `maxThoughtsDepth`.
+4. **Final selection:** Evaluate the completed beam paths and select the best `theBestOption`.
 
-**Pros**
+**Strengths**
 
 * **High Diversity**: By preserving $K$ independent seeds, it prevents the search from prematurely converging on a single path.
 * **Context Awareness**: Prompts included the "Established Path" for each specific beam, allowing the LLM to maintain deep topical consistency.
 * **Backtrack Stability**: Since beams are conceptually distinct, failing one beam doesn't necessarily poison the evaluation of others.
 
-**Cons**
+**Trade-offs**
 
 * **Token Overhead**: Detailed context-rich prompts for each beam increase input token consumption.
 * **Rigidity**: A slightly inferior but valid branch might be pruned because it doesn't "outperform" a very strong (but potentially dead-end) path early on.
 
-**Real-World Applications**
+**Good fits**
 
 * **Strategic Advisory**: When you need $K$ distinct battle plans or business strategies where each must be internally consistent.
 * **Creative Writing**: Developing multiple different plot twists where each must follow its own logic.
 * **Learning Path Design**: Generating coherent, longitudinal educational roadmaps.
 
-**Example Usage**
+**Example**
 
 ```typescript
-import { TreeOfThoughts, MultiBeamToT } from "@raven/adk";
+import { TreeOfThoughts, MultiBeamToT } from "@ravenlens/raven-adk";
 
 const tot = new TreeOfThoughts({
     query: "Design a multi-planetary migration strategy for humanity",
     initialOptionsCount: 5,
     thoughtsCount: 3,
     maxThoughtsDepth: 5,
-    earlyExitThreshold: 0.7, // Optional: Determines treshold when achived on some branch to make the option has thought branches to be the choosen one. Evaluation starts from `evaluateAfterThoughtTreeLevel` or from first layer when not specified. AI evaluator hasn't knowledge about exist treshold to don't bias him
+    earlyExitThreshold: 0.7, // Optional early exit for a high-scoring branch
     graphSearchAlgorithm: new MultiBeamToT({
         topK: 3,                           // Maintain 3 independent beams
-        pruneAtBegining: true,            // Evaluate initial options before starting beams - Disable to evaluate all options
-        evaluateAfterThoughtTreeLevel: 2  // Start evaluating thoughts from Level 2 of thoughts.
+        pruneAtBegining: true,            // Evaluate initial options before starting beams
+        evaluateAfterThoughtTreeLevel: 2  // Start evaluating thoughts at level 2
     }),
     optionGenerator: myAgent,
     thoughtGenerator: myAgent,
@@ -87,42 +216,42 @@ const tot = new TreeOfThoughts({
 
 ***
 
-#### 2. Breadth-First Search (`BFSToT`)
+### 2. Breadth-First Search (`BFSToT`)
 
 True BFS expands the reasoning frontier level-by-level. At every step, all potential thoughts from all active branches are pooled and the top $K$ are selected globally.
 
-**In details:**
+**How it works:**
 
-1. **Initial Generation**: Generate `initialOptionsCount` using `optionGenerator`.
-2. **Breadth Selection**: Evaluate all initial options and prune the frontier to the globally best `topK`.
-3. **Level-by-Level Expansion**:
-   * **Expansion**: For _every_ node currently in the frontier, generate `thoughtsCount` new thoughts.
-   * **Global Pooling**: All new thoughts from all parents are gathered into a single pool.
-   * **Global Pruning**: The `evaluator` selects the top `topK` thoughts from the entire pool, regardless of which parent they came from.
-   * **Iteration**: The selected thoughts become the new frontier for the next level.
-   * **Depth**: Repeat until `maxThoughtsDepth` is reached.
-4. **Finalization**: Pick the best thought from the final frontier as the winner.
+1. **Initial generation:** Generate `initialOptionsCount` options with `optionGenerator`.
+2. **Initial pruning:** Evaluate the options and keep the globally best `topK` options in the frontier.
+3. **Level-by-level expansion:**
+    - For every node in the current frontier, generate `thoughtsCount` thoughts.
+    - Gather all new thoughts from all parents into one pool.
+    - Use the `evaluator` to keep the top `topK` thoughts, regardless of their parent branch.
+    - Use the selected thoughts as the frontier for the next level.
+    - Repeat until `maxThoughtsDepth` is reached.
+4. **Final selection:** Select the best surviving path from the final frontier.
 
-**Pros**
+**Strengths**
 
 * **Global Efficiency**: Ensures that for any depth $D$, we are following the $K$ absolute best thoughts found so far, regardless of which root they came from.
 * **Resource Focused**: Concentrates all reasoning power on the highest-gradient paths.
 * **Simple Heuristics**: Easier for evaluators to compare "apples to apples" when all thoughts are at the same logical depth.
 
-**Cons**
+**Trade-offs**
 
 * **Low Diversity (Convergence Risk)**: One exceptionally high-scoring branch can "suffocate" others, often leading to $K$ near-identical paths.
 * **Context Loss**: As paths are pooled, the shared context becomes more generic compared to the targeted beams of Multi-Beam search.
 
-**Real-World Applications**
+**Good fits**
 
 * **Optimization Problems**: Finding the shortest or most efficient path to a technical solution (e.g., code optimization).
 * **Fact-Checking**: Exhaustively checking all immediate claims in a text before proceeding to deeper implications.
 
-**Example Usage**
+**Example**
 
 ```typescript
-import { TreeOfThoughts, BFSToT } from "@raven/adk";
+import { TreeOfThoughts, BFSToT } from "@ravenlens/raven-adk";
 
 const tot = new TreeOfThoughts({
     query: "Find the most efficient route for a delivery drone in a dense city",
@@ -130,7 +259,7 @@ const tot = new TreeOfThoughts({
     thoughtsCount: 5,
     maxThoughtsDepth: 4,
     graphSearchAlgorithm: new BFSToT({
-        topK: 3 // Keep only the top 3 thoughts across the entire frontier at each level
+        topK: 3 // Keep only the top 3 thoughts across the frontier at each level
     }),
     optionGenerator: myAgent,
     thoughtGenerator: myAgent,
@@ -140,43 +269,43 @@ const tot = new TreeOfThoughts({
 
 ***
 
-#### 3. Depth-First Search (`DFSToT`)
+### 3. Depth-First Search (`DFSToT`)
 
 Depth-First Search (DFS) focuses on exploring a single reasoning path as deeply as possible before backtracking. It uses a `threshold` to decide when a path is "good enough" to continue or if it should backtrack immediately.
 
-**In details:**
+**How it works:**
 
-1. **Initial Generation**: Generate and evaluate `initialOptionsCount`.
-2. **Recursive Depth Search**: Iterate through options starting with the first one:
-   * **Expansion**: Generate `thoughtsCount` for the current node.
-   * **Evaluation**: Rate all new thoughts.
-   * **Threshold Filtering**: Only consider thoughts with a score $\ge$ `treshold`.
-   * **Dive**: If multiple thoughts pass, take the **first** one and repeat the expansion recursively (going deeper).
-   * **Backtrack**: If no thoughts pass the threshold or `maxThoughtsDepth` is hit, return to the parent and try the next valid sibling.
-3. **Success Tracking**: Record all paths that reach the `maxThoughtsDepth` with scores above the threshold.
-4. **Finalization**: Select the highest-scoring completed path from the successful candidates.
+1. **Initial generation:** Generate and evaluate `initialOptionsCount` options.
+2. **Recursive depth search:** Visit options in order, starting with the first one:
+    - Generate `thoughtsCount` thoughts for the current node.
+    - Evaluate the new thoughts.
+    - Keep only thoughts with a score $\ge$ `threshold`.
+    - If several thoughts pass, follow the first one and continue recursively.
+    - If no thought passes, or `maxThoughtsDepth` is reached, backtrack and try the next valid sibling.
+3. **Success tracking:** Record paths that reach `maxThoughtsDepth` with scores above the threshold.
+4. **Final selection:** Ask the evaluator to choose among successful paths. If no path succeeds, return the highest initially rated option.
 
-**Pros**
+**Strengths**
 
 * **Memory Efficiency**: Only stores the current path in active memory, making it highly efficient for deep search trees ($O(\text{Depth})$).
 * **Specialization**: Excellent for problems requiring deep, focused investigation into a single specialized niche.
 * **Fast Discovery**: If the successful path is located deep in the first few branches, DFS finds it much faster than BFS or Multi-Beam.
 
-**Cons**
+**Trade-offs**
 
 * **Local Minima Risk**: Can get stuck exploring a very deep, high-scoring (but ultimately wrong) branch for a long time.
 * **High Latency for Failures**: If the solution is in the last branch, DFS will explore every other branch to its full depth first.
 * **Threshold Sensitivity**: Highly dependent on the `threshold` parameter; too high and it backtracks constantly, too low and it follows dead ends.
 
-**Real-World Applications**
+**Good fits**
 
 * **Scientific Discovery**: Deeply investigating a single hypothesis to its logical conclusion.
 * **Legal Reasoning**: Following a specific legal precedent through all its implications and sub-clauses.
 
-**Example Usage**
+**Example**
 
 ```typescript
-import { TreeOfThoughts, DFSToT } from "@raven/adk";
+import { TreeOfThoughts, DFSToT } from "@ravenlens/raven-adk";
 
 const tot = new TreeOfThoughts({
     query: "Determine the root cause of a specific complex software bug",
@@ -194,53 +323,53 @@ const tot = new TreeOfThoughts({
 
 ***
 
-#### 4. Best-First Search (`BestFirstToT`)
+### 4. Best-First Search (`BestFirstToT`)
 
 Best-First Search maintains a global frontier of all unexpanded thoughts and always chooses to expand the node with the highest heuristic score from the evaluator, regardless of its depth.
 
-**In details:**
+**How it works:**
 
-1. **Initial Generation**: Generate `initialOptionsCount` using `optionGenerator`.
-2. **Initial Rating**: Evaluate all options using `evaluator`.
-3. **Frontier Initialization**: Put all rated options into a **Priority Queue** (highest score first).
-4. **Best-First Loop**:
-   * **Pop Best**: Remove the node with the highest global score from the queue.
-   * **Early Exit**: If its score $\ge$ `earlyExitThreshold`, terminate and return this path immediately.
-   * **Expansion**: If node depth $<$ `maxThoughtsDepth`, generate `thoughtsCount` new thoughts.
-   * **Evaluation & Filter**: Rate all new thoughts and add those with score $\ge$ `acceptanceTreshold` back into the global Priority Queue.
-   * **Branch Jump**: The next "Pop" might come from a completely different branch or depth if its score is now the highest.
-5. **Finalization**: If the queue empties or limits are reached, the `evaluator` selects the best path among all finished reasoning chains.
+1. **Initial generation:** Generate `initialOptionsCount` options with `optionGenerator`.
+2. **Initial rating:** Evaluate all options with `evaluator`.
+3. **Frontier initialization:** Add the rated options to a priority queue, ordered by score.
+4. **Best-first loop:**
+    - Remove the highest-scoring node from the queue.
+    - If its score is $\ge$ `earlyExitThreshold`, return its path immediately.
+    - If its depth is below `maxThoughtsDepth`, generate `thoughtsCount` new thoughts.
+    - Rate the new thoughts and add those with a score $\ge$ `acceptanceTreshold` to the queue.
+    - Continue with whichever branch currently has the highest score. The next branch can have a different depth or root.
+5. **Final selection:** If the queue is empty or a limit is reached, ask the evaluator to choose among the finished reasoning chains.
 
-**Pros**
+**Strengths**
 
 * **Dynamic Prioritization**: Focuses computational effort on the most "promising" paths globally across the entire tree.
 * **Efficiency**: Avoids expanding siblings of a high-scoring thought if that thought itself is progressing well.
 * **Branch Switching**: If a deep path starts to decline in quality, the algorithm naturally "jumps" back to a more promising shallow branch.
 
-**Cons**
+**Trade-offs**
 
 * **Evaluator Dependency**: Extremely sensitive to the evaluator's quality; a single "hallucinated" high score can derail the search.
 * **Exploration Bias**: May ignore valid but "average-starting" branches in favor of a single branch that starts strong but leads to a dead end.
 
-**Real-World Applications**
+**Good fits**
 
 * **Game AI**: Finding the best move in complex state-space trees where some moves are clearly superior.
 * **Medical Diagnosis**: Following the most likely symptom-to-disease paths while leaving other hypotheses open.
 * **Financial Modeling**: Exploring the most profitable investment sequences in parallel.
 
-**Configuration & Supported Parameters**
+**Configuration**
 
-The `BestFirstToT` strategy utilizes all parameters defined in `TreeOfThoughtsConfig`. Unlike Multi-Beam which requires tracking independent tracks, Best-First treats the entire tree as a single global pool, making it fully compatible with:
+`BestFirstToT` uses the shared `TreeOfThoughtsConfig` parameters. Unlike Multi-Beam, which tracks independent beams, Best-First treats the tree as one global pool:
 
 * `maxThoughtsDepth`: Caps the length of any single branch.
 * `earlyExitThreshold`: Allows for high-confidence short-circuiting.
 * `thoughtsCount`: Determines the branching factor at each expansion step.
 * `initialOptionsCount`: Sets the starting breadth at Level 0.
 
-**Example Usage**
+**Example**
 
 ```typescript
-import { TreeOfThoughts, BestFirstToT } from "@raven/adk";
+import { TreeOfThoughts, BestFirstToT } from "@ravenlens/raven-adk";
 
 const tot = new TreeOfThoughts({
     query: "Optimize the supply chain logistics for a global retail chain",
@@ -261,18 +390,18 @@ const result = await tot.invoke();
 
 ***
 
-#### 5. Monte Carlo Tree Search (`MCTSToT`)
+### 5. Monte Carlo Tree Search (`MCTSToT`)
 
 Monte Carlo Tree Search (MCTS) is a probabilistic search algorithm that balances exploration and exploitation using the **Upper Confidence Bound for Trees (UCT)**. It is particularly effective for large, non-deterministic reasoning spaces.
 
-**In details:**
+**How it works:**
 
-1. **Selection**: Starting from the root, the algorithm selects the most "promising" child node using the UCT formula until it reaches a leaf node.
-2. **Expansion**: If the leaf node is not a terminal state (and hasn't reached `maxThoughtsDepth`), it generates `thoughtsCount` new thoughts.
-3. **Simulation**: The algorithm uses the `evaluator` to assign an initial quality score to the newly expanded node.
-4. **Backpropagation**: The score (potentially with a `depthPenalty`) is propagated back up the tree, updating the visit counts and total values of all ancestor nodes.
-5. **Iteration**: This process repeats for a fixed number of `iterations`.
-6. **Finalization**: The path with the highest average value or visit count is selected as the winning reasoning chain.
+1. **Selection:** Starting at the root, select the most promising child using the UCT formula until a leaf is reached.
+2. **Expansion:** If the leaf is not terminal and has not reached `maxThoughtsDepth`, generate `thoughtsCount` new thoughts.
+3. **Simulation:** Use the `evaluator` to assign an initial quality score to the newly expanded node.
+4. **Backpropagation:** Propagate the score, optionally adjusted by `depthPenalty`, through the node's ancestors and update their visit counts and total values.
+5. **Iteration:** Repeat the process for the configured number of `iterations`.
+6. **Final selection:** Select the root with the highest visit count as the winning option.
 
 **The UCT Formula**
 
@@ -280,14 +409,13 @@ MCTS uses the **Upper Confidence Bound** to decide which node to explore next:
 
 $$UCT = \frac{V_i}{n_i} + C \times \sqrt{\frac{\ln(N)}{n_i}}$$
 
-Where:
+where:
 
-* $\frac{V\_i}{n\_i}$: **Exploitation** (Average value of the node).
-  * It's otherwise `value / visits` (**value of node** divided by **visits of node**)
-* $C \times \sqrt{\frac{\ln(N)}{n\_i\}}$: **Exploration** (Bias towards nodes with fewer visits).
-* $C$: `explorationConstant`.
-* $n\_i$: Number of visits to the current node.
-* $N$: Total visits to the parent node. Represents total number of parent node visits
+* $\frac{V_i}{n_i}$ is the **exploitation** term: the node's average value (`value / visits`).
+* $C \times \sqrt{\frac{\ln(N)}{n_i}}$ is the **exploration** term, which favors nodes with fewer visits.
+* $C$ is `explorationConstant`.
+* $n_i$ is the number of visits to the current node.
+* $N$ is the total number of visits to the parent node.
 
 **Configuration Parameters**
 
@@ -295,30 +423,30 @@ Where:
 * **`explorationConstant (C)`**:
   * **Higher values (> 1.41)** favor **exploration** (trying new, unvisited branches).
   * **Lower values (< 1.41)** favor **exploitation** (focusing on branches that already have high scores).
-* **`depthPenalty`**: A penalty subtracted from the backpropagated value based on depth. This encourages the agent to find the most efficient (shortest) reasoning path. The grater number more will be removed from evaluated score with depth. This should floating point value like: 0.01 to 1.00 or with greater percision up to f64
+* **`depthPenalty`**: A penalty subtracted from the backpropagated value based on depth. This encourages shorter reasoning paths. Use a floating-point value such as `0.01` to `1.00`.
 
 > **Note**: MCTS is the only strategy that **does not use** the `earlyExitThreshold` parameter. It relies entirely on the statistical convergence over its defined `iterations`.
 
-**Pros**
+**Strengths**
 
 * **Balanced Search**: Automatically balances trying new ideas vs. refining existing ones.
 * **Asymmetric Tree Growth**: Focuses heavily on promising branches while still maintaining a statistical map of alternatives.
 * **Efficiency**: Use `depthPenalty` to prevent "rambling" and find concise solutions.
 
-**Cons**
+**Trade-offs**
 
 * **High Latency**: Requires a significant number of iterations to become statistically significant.
 * **Costly**: Each expansion and simulation step involves LLM calls.
 
-**Real-World Applications**
+**Good fits**
 
 * **Policy Making**: Simulating complex social or economic impacts where multiple variables interact.
 * **Coding Architecture**: Exploring different design patterns and their downstream implications.
 
-**Example Usage**
+**Example**
 
 ```typescript
-import { TreeOfThoughts, MCTSToT } from "@raven/adk";
+import { TreeOfThoughts, MCTSToT } from "@ravenlens/raven-adk";
 
 const tot = new TreeOfThoughts({
     query: "Develop a consensus protocol for a decentralized autonomous organization",
@@ -336,103 +464,89 @@ const tot = new TreeOfThoughts({
 });
 ```
 
-***
+## Strategy comparison
 
-### Mathematical Comparison
+The following table summarizes the typical search profile of each strategy. The exact number of model calls and retained nodes depends on the configured depth, branching factor, pruning limits, and evaluator behavior.
 
-Regarding the search complexity and search space:
+| Feature | Multi-Beam | BFS | DFS | Best-First | MCTS |
+| --- | --- | --- | --- | --- | --- |
+| Search pattern | Independent beams | Global level-by-level frontier | One path at a time with backtracking | Global priority queue | Iterative UCT simulations |
+| Space profile | $O(K \cdot D)$ | $O(K \cdot D)$ | $O(D)$ active path | Depends on the frontier | $O(N)$ visited nodes |
+| Pruning | Top $K$ within each beam | Global top $K$ | Score threshold | Acceptance threshold | UCT selection |
+| Early exit | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | Yes (`earlyExitThreshold`) | No |
 
-| Feature                | Multi-Beam Search                            | BFS                                                 | DFS                          | Best-First Search                | MCTS                      |
-| ---------------------- | -------------------------------------------- | --------------------------------------------------- | ---------------------------- | -------------------------------- | ------------------------- |
-| **Expansion Formula**  | $K \times \text{Depth}$ (Independent tracks) | $\text{Frontier} \times \text{Width}$ (Global Pool) | Single branch recursion      | Global Priority (Score Based)    | Iterative UCT Simulations |
-| **Space Complexity**   | $O(K \cdot D)$                               | $O(K \cdot D)$                                      | $O(D)$                       | $O(K \cdot D)$                   | $O(N)$ (Visited Nodes)    |
-| **Convergence Rate**   | Slow (High exploration)                      | Fast (High exploitation)                            | Variable (Path-dependent)    | Very Fast (Targeted)             | Balanced (Probabilistic)  |
-| **Pruning Logic**      | Competitive across fixed tracks              | Pure global top-K selection                         | Threshold-based backtracking | Score-based acceptance threshold | UCT-based Priority        |
-| **Early Exit Support** | Yes (`earlyExitThreshold`)                   | Yes (`earlyExitThreshold`)                          | Yes (`earlyExitThreshold`)   | Yes (`earlyExitThreshold`)       | No                        |
+### Exploration and exploitation
 
-**Exploration vs. Exploitation**:
+- **Multi-Beam** preserves several independent directions and helps avoid premature convergence.
+- **BFS** applies greedy global pruning at each depth, which is effective when candidates at the same level are easy to compare.
+- **DFS** favors depth over breadth. It uses little active memory but can miss a better branch when its threshold is poorly tuned.
+- **Best-First** expands the highest-scoring available node, so it can switch between branches and depths as scores change.
+- **MCTS** uses statistical simulation to balance exploration and exploitation. It is useful when the search space is too large for exhaustive exploration and evaluator scores are uncertain.
 
-* **Multi-Beam** acts as a multi-modal explorer, avoiding premature convergence.
-* **BFS** is a greedy frontier expansion, optimal for simple search landscapes.
-* **DFS** is a "deep-diver". It sacrifices breadth for depth, making it the most memory-efficient but also the most prone to missing global optima if not tuned with the correct threshold.
-* **Best-First** is the "smartest" explorer. It navigates based on heuristic confidence, effectively balancing speed and quality by targeting the most likely paths first.
-* **MCTS** provides a mathematically grounded balance, utilizing statistical simulation to explore trees that are too large for exhaustive search. Doesn't rely on pre-deterministic herustic that in sense of llm is blackboxed and non-deterministic (it base on model and particular task, query, method model use, training phase quality data and post-training choices and so on...)
+## Early exit
 
-***
+Strategies that support `earlyExitThreshold` can stop as soon as an option or thought receives a score greater than or equal to that threshold. MCTS does not use early exit; it relies on its configured number of simulations.
 
-#### Efficiency Feature: Early Exit (Short-Circuiting)
+When early exit occurs:
 
-RavenADK supports an **Early Exit** mechanism via the `earlyExitThreshold` parameter.
+- The current branch is returned as the winning path.
+- Remaining expansions are skipped, reducing token usage and latency.
+- The result is built from the high-scoring path discovered so far.
 
-**How it works:**
+Early exit is useful when a satisfactory answer may appear in the first few levels, when latency matters, or when a deep search would cost more than the expected quality improvement.
 
-If any **Option** or **Thought** receives a score from the evaluator that is **greater than or equal** to the `earlyExitThreshold`, the search process terminates immediately.
+## Case study: generating learning paths
 
-* The current branch is treated as the "Winning Path".
-* All remaining expansions are skipped to save tokens and time.
-* The system proceeds directly to generating the final result based on the discovered high-quality path.
+For educational curricula and professional roadmaps, **Multi-Beam Search (`MultiBeamToT`)** is often a good starting point.
 
-**Use Cases:**
+Multi-Beam is a good fit because:
 
-* **Known Solutions**: When there's a possibility the model finds the answer in the first 2-3 levels.
-* **Cost Optimization**: Drastically reduces token usage in deep trees.
-* **Low Latency**: Returns the answer as soon as "good enough" evidence is found.
+1. **It preserves consistency.** Each beam keeps its established path, so a route that begins with game development is less likely to drift into unrelated prerequisites.
+2. **It supports variety.** With $K$ beams, the search can produce distinct styles such as visual/project-based, mathematical/theoretical, and fast-track learning paths.
+3. **It keeps prerequisites contextual.** Each step is evaluated against the path that led to it rather than against a pooled frontier alone.
 
-***
+### Comparison for educational use
 
-#### Case Study: Generating Learning Paths
+| Feature | Multi-Beam | BFS | DFS | Best-First | MCTS |
+| --- | --- | --- | --- | --- | --- |
+| Consistency | High | Low to medium | Medium, with local-minimum risk | Medium, with possible topic switching | High for simulated paths |
+| Result variety | $K$ distinct versions | One average version | One deep version | One highest-priority path | One statistically favored path |
+| Prerequisite coverage | Balanced | High raw coverage | Can skip basics | Follows high-scoring dependencies | Strong when iterations are sufficient |
 
-When generating educational curricula or professional roadmaps, **Multi-Beam Search (`MultiBeamToT`)** is the recommended strategy.
+## Summary
 
-**Why Multi-Beam?**
-
-1. **Longitudinal Consistency**: A learning path requires a narrative thread. Multi-Beam preserves the "Established Path" for each beam, ensuring that if it starts a "Game Development" route, it doesn't accidentally pivot to unrelated "Web Dev" prerequisites (a common issue in global BFS pooling).
-2. **Pedagogical Diversity**: By initializing $K$ beams, you can generate distinct styles (e.g., "Visual/Project-based," "Mathematical/Theoretical," and "Fast-track") simultaneously.
-3. **Prerequisite Mapping**: The threshold-based evaluation in independent beams ensures that each step is a logical successor to the previous one within its specific context.
-
-**Comparison for Educational Use**
-
-| Feature            | Multi-Beam (Winner)       | BFS                  | DFS                         | Best-First                      | MCTS                                 |
-| ------------------ | ------------------------- | -------------------- | --------------------------- | ------------------------------- | ------------------------------------ |
-| **Consistency**    | **High** (Stays on topic) | Low (Context mixing) | Med (Prone to local minima) | Med (Topic jumping possibility) | High (Path-simulation focus)         |
-| **Student Choice** | **$K$ distinct versions** | 1 "Average" version  | 1 "Deep" version            | 1 "Best Path" version           | 1 "Balanced" version                 |
-| **Prerequisites**  | Balanced                  | Best at raw coverage | Poor (Might skip basics)    | High (Follows best dependency)  | Exceptional (Iterative verification) |
-
-***
-
-## ToT Overall Sumup
-
-**Crucial Note: In all strategies, the final "Winner" is determined by evaluating the entire Reasoning Chain (the full path from problem to solution), ensuring that the final output is backed by a logically sound and consistent history of thoughts.**
+ToT is most useful when a problem benefits from comparing alternatives, evaluating intermediate steps, or recovering from a weak assumption. Each strategy applies a different search policy, but all of them expose the same result shape.
 
 ### Benefits
 
-* **Non-Linear Reasoning**: Solves complex problems where the first logical step might not be the best one.
-* **Self-Correction**: Naturally supports backtracking and re-evaluation of previous decisions.
-* **Transparency**: Every branch and evaluation can be captured via events, providing full visibility into the agent's "thinking" process.
-* **Higher Accuracy**: By exploring multiple paths, the agent is more likely to find optimal solutions for mathematical, creative, or strategic tasks.
+- **Non-linear reasoning:** Explore several candidate approaches instead of committing to the first step.
+- **Self-correction:** Backtrack and reevaluate branches that stop looking promising.
+- **Transparency:** Observe branch exploration and evaluation through emitted events.
+- **Higher answer quality:** Increase the chance of finding a strong solution for complex, creative, mathematical, or strategic tasks.
 
-### Pitfalls
+### Trade-offs
 
-* **Cost and Latency**: Exploring multiple branches requires more LLM calls, increasing both token usage and time to reach a final answer. It can be costful by x30 of original
-* **State Management**: Keeping track of a growing tree of thoughts can become complex if not managed efficiently.
-* **Evaluator Bias**: The quality of the solution depends heavily on the accuracy of the evaluator; a poor evaluation can lead the agent down a wrong path. **We recomend to use capable llms to perform evaluations**
+- **Cost and latency:** Exploring multiple branches requires more model calls, tokens, and time than a single-pass response.
+- **State management:** A large reasoning tree requires careful control of depth, branching, and retained paths.
+- **Evaluator bias:** A weak or inconsistent evaluator can cause the search to prune a useful branch or favor a misleading one. Use a capable evaluator and tune the search parameters for the task.
 
-### Use Cases
+### Common use cases
 
-* **Complex Problem Solving**: When a problem requires strategic planning or has multiple potential solutions (e.g., puzzles, coding architecture).
-* **Long Term Planning**: Plan for future with less risks because evaluator by multiple time ensures correcteness of original assumption.
-* **Find critical mistakes**: Simulate `Claude Mythos` without Claude Myhtos by utilizing multiple stage-reasoning-phases with backtracking. Works the best with `ReAct` and `CodeAct` patterns.
-* **Creative Writing**: Exploring different narrative directions or plot points.
-* **Mathematical Reasoning**: Trying different formulas or proof strategies.
-* **Strategic Games**: Simulating multiple moves ahead and evaluating the resulting game states.
+- **Complex problem solving:** Compare approaches to puzzles, technical designs, and architecture decisions.
+- **Long-term planning:** Evaluate multiple plans and their consequences before choosing a direction.
+- **Critical-error detection:** Use staged reasoning and backtracking to uncover mistakes in complex work. ToT pairs well with `ReAct` and `CodeAct` for this type of workflow.
+- **Creative writing:** Explore different narrative directions or plot points.
+- **Mathematical reasoning:** Try multiple formulas, derivations, or proof strategies.
+- **Strategic games:** Simulate several moves ahead and evaluate the resulting states.
 
-### Core Components
+### Core components
 
-1. **Runner**: Responsible for generating the next set of thoughts. This can be a simple LLM call or a full [`ReActAgent`](../ReAct-Agent.md).
-2. **Evaluator**: A function or agent (like [AEval](../)) that reviews generated thoughts and provides a score or verdict.
-3. **Events**: The system emits specific events like `backtrack` to allow the parent application to track the search progress.
+1. **Option generator:** Produces the initial candidate options. It can be a simple model call or a full [`ReActAgent`](../ReAct-Agent.md).
+2. **Thought generator:** Expands a selected option with possible next steps.
+3. **Evaluator:** Reviews options or thoughts and returns a score, decision, and justification. It can be a model or a programmatic evaluator such as [`AEval`](../AEval.md).
+4. **Events:** Emits events such as `backtrack` so the parent application can observe search progress.
 
-### How it works (Visualization)
+### Visualization
 
 ```mermaid
 graph TD
@@ -452,17 +566,17 @@ graph TD
     T2_1 --> End((Solution))
 ```
 
-_Note: The `backtrack` event is triggered whenever the agent determines a path is no longer viable and returns to a previous state._
+_Note: The `backtrack` event is triggered whenever the agent determines that a path is no longer viable and returns to a previous state._
 
-### Possible combinations
+## Combining ToT with other patterns
 
-#### ToT + RAG (Resource Augmented Generation)
+### ToT + RAG (Resource-Augmented Generation)
 
-Combine the reasoning power of the Tree-of-Thoughts with the factual grounding of RAG. This is especially useful for the `evaluator` and `thoughtGenerator` units.
+Combine ToT's alternative-path search with RAG's factual grounding. This is especially useful for the `evaluator` and `thoughtGenerator` units.
 
-1. **Grounded Evaluation**: Use a RAG-enabled `evaluator` to score thoughts against a verified knowledge base. This prevents the search from following "hallucinated" but logically sounding branches.
-2. **Contextual Expansion**: Use RAG in the `thoughtGenerator` to provide the agent with relevant technical documentation or business rules before it generates the next reasoning step.
-3. **ToT as Pre-processor**: Run a ToT search to find the most likely search queries (Initial Options), then use RAG to fetch content for those specific paths.
+1. **Grounded evaluation:** Use a RAG-enabled `evaluator` to score thoughts against a verified knowledge base. This helps prevent the search from following branches that sound logical but are not supported by the available facts.
+2. **Contextual expansion:** Use RAG in the `thoughtGenerator` to provide relevant technical documentation or business rules before generating the next thought.
+3. **Query generation:** Use ToT to generate and compare candidate search queries, then use RAG to retrieve content for the selected paths.
 
 ```typescript
 const ragEvaluator = new ResourceAugmentedGeneration({
@@ -473,25 +587,25 @@ const ragEvaluator = new ResourceAugmentedGeneration({
 
 const tot = new TreeOfThoughts({
     // ...
-    evaluator: ragEvaluator, // The evaluator now has access to your private data
+    evaluator: ragEvaluator // The evaluator now has access to your private data
 });
 ```
 
-#### ToT + ReAct Agent
+### ToT + ReAct Agent
 
-Using a full `ReActAgent` as the engine for your `thoughtGenerator` or `optionGenerator` creates a "nested reasoning" effect.
+Using a full `ReActAgent` as the `thoughtGenerator` or `optionGenerator` creates a nested reasoning workflow.
 
-* **Deep Reasoning**: Instead of a simple LLM response, each "Thought" is the result of a ReAct loop (Reasoning -> Acting -> Observation). This allows the tree to branch based on actual tool outputs.
-* **Backtracking Faulty Actions**: If a ReAct agent's tool call leads to a failure, the ToT system can catch the low score from the evaluator and backtrack, effectively "undoing" or rerouting the agent's strategy at a high level.
-* **Parallel Problem Solving**: Using `MultiBeamToT` with ReAct agents allows you to simulate multiple agents trying different tool-based strategies in parallel.
+- **Deep reasoning:** Each thought can be the result of a ReAct loop (reasoning -> acting -> observation), allowing branches to use real tool outputs.
+- **Recovery from failed actions:** If a tool call leads to a weak result, the evaluator can assign a low score and ToT can backtrack to a different branch.
+- **Parallel problem solving:** `MultiBeamToT` can run several tool-based strategies in parallel, with each beam maintaining its own context.
 
 ```typescript
-import { TreeOfThoughts, MultiBeamToT, ReActAgent, OpenAI } from "@raven/adk";
+import { TreeOfThoughts, MultiBeamToT, ReActAgent, OpenAI } from "@ravenlens/raven-adk";
 
 const toolUsingAgent = new ReActAgent({
-    model: new OpenAI({ model: "gpt-5", apiKey: "..." }),
+    model: new OpenAI({ model: "gpt-5", apiKey: process.env.OPENAI_API_KEY }),
     tools: [googleSearch, mathematicalCalculator],
-    withConclusion: false // Usually better for intermediate thought generations
+    withConclusion: false // Usually better for intermediate thought generation
 });
 
 const tot = new TreeOfThoughts({

@@ -103,6 +103,55 @@ const factualMemory = new Mem0({
 - Use `scope` to isolate users, tenants, or sessions.
 - `topK` defaults to `10`, matching the paper's update retrieval setting.
 
+## Structured memory with schema
+
+Use `memorySchema` for contacting structured memory with checking for correcteness. Mem0 combines the supplied Zod schema with `mem0MemorySchema` internally, so every stored record always contains and validates:
+
+- `id`
+- `scope`
+- `content`
+- `revision`
+- `createdAt`
+- `updatedAt`
+- optional `expiresAt`
+- optional `metadata`
+
+The custom schema is also enforced. Its fields are persisted by the default store and remain available from `addMemory`, `getMemory`, `listMemories`, retrieval results, custom retrievers, and update-planner contexts.
+
+```typescript
+import { z } from "zod";
+import { Mem0 } from "@ravenlens/raven-adk/memory";
+
+const profileSchema = z.object({
+  userId: z.string(),
+  preferences: z.object({
+    format: z.enum(["concise", "detailed"]),
+    channels: z.array(z.string())
+  })
+});
+
+const factualMemory = new Mem0({
+  name: "Structured user facts",
+  purpose: "Keep typed user preferences current.",
+  scope: "user-123",
+  memorySchema: profileSchema
+});
+
+const saved = await factualMemory.addMemory({
+  content: "The user prefers concise updates.",
+  userId: "user-123",
+  preferences: {
+    format: "concise",
+    channels: ["email"]
+  }
+});
+
+saved.preferences.format; // "concise"
+saved.revision;            // Mem0-managed field
+```
+
+Fields declared by `memorySchema` are required when the record is written. For lifecycle updates, return those fields from a custom `factExtractor` or include them in the `Mem0Update` returned by `updatePlanner`; the default language-model updater can preserve fields already present on the extracted fact, but application-controlled callbacks are recommended when the structured fields are required or must be deterministic. `metadata` remains an optional untyped bag for auxiliary values.
+
 ## Hierarchical Scopes
 
 Mem0 supports hierarchical identity scopes: `user` (broadest), `agent`, and `session` (run_id). When `scopes` are configured, retrieval searches across all provided levels, while writes use the most specific level.

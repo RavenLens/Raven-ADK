@@ -16,6 +16,7 @@
 * [ReAct Agent](ReAct-Agent.md)
 * [Code Execution Sandboxes](Sandbox.md)
 * [Self-Improvement in RavenADK](Self-Improvement.md)
+* [Self-Consistency](Self-Consistency.md)
 * [SequentialRunner](SequentialRunner.md)
 * [Skills In RavenADK](Skills.md)
 * [Structured Output](StructuredOutput.md)

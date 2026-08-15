@@ -1,16 +1,12 @@
 import z4 from "zod/v4";
 import { randomUUID } from "node:crypto";
-import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
+import { OptionNode, ThoughtNode, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { DEFAULT_THOUGHTS_DEPTH, TreeOfThoughts } from "../ToT";
-import { LogicReturnType, OpenTelemetryTreeOfThoughts, ReasoningChain, StrategySchema } from "./strategy";
+import { createGenerateOptionsSchema, LogicReturnType, OpenTelemetryTreeOfThoughts, ReasoningChain, StrategySchema } from "./strategy";
 
 interface MCTS_GenerateOptions {
     options: OptionNode[];
 }
-
-const zodGenerateOptionsSchema = z4.object({
-    options: z4.array(zodOptionSchema).describe("List of generated candidate options")
-});
 
 interface MCTS_NewThoughtsSchema {
     thoughts: ThoughtNode[];
@@ -48,6 +44,10 @@ interface NodeStats {
     node: OptionNode | ThoughtNode;
 }
 
+/**
+ * Structured-output notation: candidate options are generated with and
+ * returned with the schema supplied to TreeOfThoughts.invokeStructuredOutput.
+ */
 export class MCTSToT implements StrategySchema {
     name = "MCTS-ToT";
     telemetry?: OpenTelemetryTreeOfThoughts;
@@ -156,7 +156,11 @@ Generate ${this.ToT.config.thoughtsCount || 3} thoughts that continue this path.
         // 1. Initial Options Generation
         this.telemetry?.recordStep("initial_generation");
         const initialPrompt = `Generate ${tot.config.initialOptionsCount} candidate solutions for: ${tot.config.query}`;
-        const optResult = await tot.callableUnitInvokeStructured("optionGenerator", zodGenerateOptionsSchema, initialPrompt);
+        const optResult = await tot.callableUnitInvokeStructured(
+            "optionGenerator",
+            createGenerateOptionsSchema(tot.getOptionNodeSchema()),
+            initialPrompt
+        );
         const options = (optResult.structuredOutput as MCTS_GenerateOptions).options;
         
         options.forEach(o => {

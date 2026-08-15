@@ -1,16 +1,12 @@
 import z4 from "zod/v4";
-import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
+import { OptionNode, ThoughtNode, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { LogicReturnType, OpenTelemetryTreeOfThoughts, ReasoningChain, StrategySchema } from "./strategy";
+import { createGenerateOptionsSchema, createTheBestOptionSchema, LogicReturnType, OpenTelemetryTreeOfThoughts, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
 interface DFS_GenerateOptions {
     options: OptionNode[];
 }
-
-const zodGenerateOptionsSchema: z4.ZodType<DFS_GenerateOptions> = z4.object({
-    options: z4.array(zodOptionSchema).describe("List with generated options")
-})
 
 interface DFS_NewThoughtsSchema {
     thoughts: ThoughtNode[]
@@ -24,10 +20,6 @@ interface DFS_TheBestOption {
     theBestOption: OptionNode[];
 }
 
-const zodTheBestOptionSchema: z4.ZodType<DFS_TheBestOption> = z4.object({
-    theBestOption: z4.array(zodOptionSchema).describe("The best option selected")
-})
-
 interface DFS_RateNodesResponse {
     ratings: { id: string; rate: any }[];
 }
@@ -39,6 +31,10 @@ const zodRateNodesSchema = z4.object({
     }))
 });
 
+/**
+ * Structured-output notation: every generated root option carries a value
+ * validated against the schema supplied to TreeOfThoughts.invokeStructuredOutput.
+ */
 export class DFSToT implements StrategySchema {
     name = "DFS-ToT";
     telemetry?: OpenTelemetryTreeOfThoughts;
@@ -128,7 +124,11 @@ Generate ${this.ToT!.config.thoughtsCount} thoughts that continue this specific 
 
         // 1. Initial Options
         const initialPrompt = `Generate ${tot.config.initialOptionsCount} initial options for: ${tot.config.query}`;
-        const optResult = await tot.callableUnitInvokeStructured("optionGenerator", zodGenerateOptionsSchema, initialPrompt);
+        const optResult = await tot.callableUnitInvokeStructured(
+            "optionGenerator",
+            createGenerateOptionsSchema(tot.getOptionNodeSchema()),
+            initialPrompt
+        );
         const options = (optResult.structuredOutput as DFS_GenerateOptions).options;
         options.forEach(o => o.id = randomUUID());
 
@@ -219,7 +219,11 @@ Generate ${this.ToT!.config.thoughtsCount} thoughts that continue this specific 
 
         const selectBest = async (chains: any[]): Promise<OptionNode> => {
             const prompt = `Select the best final option from these deep reasoning chains: ${JSON.stringify(chains, null, 4)}`;
-            const res = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTheBestOptionSchema, prompt);
+            const res = await this.ToT!.callableUnitInvokeStructured(
+                "evaluator",
+                createTheBestOptionSchema(this.ToT!.getOptionNodeSchema()),
+                prompt
+            );
             this.telemetry?.recordStep("select_final_option");
             const best = (res.structuredOutput as DFS_TheBestOption).theBestOption[0];
             await this.ToT!.emitEvent("finalOptionSelected", best);

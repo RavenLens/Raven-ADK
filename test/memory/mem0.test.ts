@@ -2,8 +2,75 @@ import { describe, expect, it, vi } from "vitest";
 import { ReActAgent } from "../../src/agent/ReAct.agent";
 import { DeterministicMemorySchema } from "../../src/agent/memory/schema/deterministicMemorySchema";
 import { Mem0 } from "../../src/agent/memory";
+import { z } from "zod";
 
 describe("Mem0", () => {
+    it("stores structured fields with the required Mem0 record fields", async () => {
+        const structuredMemorySchema = z.object({
+            userId: z.string(),
+            preferences: z.object({
+                format: z.enum(["concise", "detailed"]),
+                channels: z.array(z.string())
+            })
+        });
+        const memory = new Mem0({
+            name: "Structured user facts",
+            purpose: "Keep typed user preferences current.",
+            memorySchema: structuredMemorySchema,
+            scope: "user-123",
+            idFactory: () => "structured-fact",
+            now: () => 1_000
+        });
+
+        const added = await memory.addMemory({
+            content: "The user prefers concise updates.",
+            userId: "user-123",
+            preferences: { format: "concise", channels: ["email"] }
+        });
+
+        expect(added).toMatchObject({
+            id: "structured-fact",
+            scope: "user-123",
+            content: "The user prefers concise updates.",
+            revision: 1,
+            createdAt: 1_000,
+            updatedAt: 1_000,
+            userId: "user-123",
+            preferences: { format: "concise", channels: ["email"] }
+        });
+
+        added.preferences.channels.push("slack");
+        expect((await memory.getMemory("structured-fact"))?.preferences.channels).toEqual(["email"]);
+
+        const retrieved = await memory.retrieve("Which format does the user prefer?");
+        expect(retrieved.memories[0].memory).toMatchObject({
+            userId: "user-123",
+            preferences: { format: "concise", channels: ["email"] }
+        });
+
+        const updated = await memory.updateMemory("structured-fact", {
+            content: "The user prefers detailed updates.",
+            userId: "user-123",
+            preferences: { format: "detailed", channels: ["email", "slack"] }
+        });
+        expect(updated).toMatchObject({
+            revision: 2,
+            content: "The user prefers detailed updates.",
+            preferences: { format: "detailed", channels: ["email", "slack"] }
+        });
+        expect(await memory.listMemories()).toHaveLength(1);
+    });
+
+    it("requires custom fields defined by memorySchema", async () => {
+        const memory = new Mem0({
+            name: "Structured facts",
+            purpose: "Require an owning user for each fact.",
+            memorySchema: z.object({ userId: z.string() })
+        });
+
+        await expect(memory.addMemory({ content: "The user prefers coffee." })).rejects.toThrow();
+    });
+
     it("reconciles factual memories through add, update, delete, and retrieval", async () => {
         const memory = new Mem0({
             name: "User facts",
