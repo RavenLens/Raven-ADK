@@ -57,7 +57,7 @@ Key Concept: Demonstrates how turn-based conversational communication between sp
         - Specify the set of professional agents and make them engaged in the conversation
         - Make the each discussion step boundary explicilty told
     - From **MetaGPT**:
-        - Give agents ability to ***handoff*** the tasks by specify `handoff`  parameter
+        - Give agents ability to ***handoff*** the tasks by specify `handoff` parameter
         - Give each agent explicit constraints as the description
         - Subscribe the subject in the between agents communication - allow agent to communicate the agents by pushing the messages to some subjects that other agents subscribe
     - From **ChatDEV**:
