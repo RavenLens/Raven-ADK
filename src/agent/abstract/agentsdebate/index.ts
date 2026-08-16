@@ -76,7 +76,7 @@ export interface AgentsDebateConfig<
     memory?: Memory;
 
     /** 
-     * Specify the expanse boundaries agents cannot cross in conversations
+     * Specify the expanse boundaries agents cannot cross in debate
      * - Cannonical - no of other agents can breake the overall budget specified by this field and params
     */
     mutualBoundaries?: BoundaryObject;
