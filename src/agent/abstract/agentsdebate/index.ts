@@ -5,6 +5,7 @@ import { Tool } from "../../tools";
 import z from "zod/v4";
 import { AgentsDebateEvents, AgentsDebateLoopEvent } from "./events";
 import { AgentCommunicationStageRecord, HandoffExecution, InvokeConsultationOptions, InvokeConsultationResult, InvokeCritiqueOptions, InvokeCritiqueResult, InvokeHandoffOptions, InvokeHandoffResult } from "./config";
+import { withTelemetry } from "../../../telemetry";
 
 /** Input supplied to a debate participant for one execution. */
 export interface ExecutableAgentDebateOptions {
@@ -165,16 +166,21 @@ export class AgentsDebate<
         schema: z.ZodType<Result>,
         options: ExecutableAgentDebateOptions
     ): Promise<Result> {
-        this.emitEvent("debate_agent_start", agentLogic, schema, options, options.messages, { agentLogic, schema });
-        try {
-            const result = await this.invokeDebateAgentInternal(agentLogic, schema, options);
-            this.emitEvent("debate_agent_end", result);
-            return result;
-        } catch (error) {
-            const normalizedError = error instanceof Error ? error : new Error(String(error));
-            this.emitEvent("debate_agent_error", normalizedError);
-            throw error;
-        }
+        return withTelemetry("agents_debate.invoke_agent", {
+            messagesCount: options.messages.length,
+            isReActAgent: agentLogic instanceof ReActAgent
+        }, async () => {
+            this.emitEvent("debate_agent_start", agentLogic, schema, options, options.messages, { agentLogic, schema });
+            try {
+                const result = await this.invokeDebateAgentInternal(agentLogic, schema, options);
+                this.emitEvent("debate_agent_end", result);
+                return result;
+            } catch (error) {
+                const normalizedError = error instanceof Error ? error : new Error(String(error));
+                this.emitEvent("debate_agent_error", normalizedError);
+                throw error;
+            }
+        });
     }
 
     private async invokeDebateAgentInternal<Result = unknown>(
@@ -185,15 +191,15 @@ export class AgentsDebate<
         if (agentLogic instanceof ReActAgent) {
             const previousMessages = agentLogic.agentConfig.messages;
             agentLogic.agentConfig.messages = options.messages;
-            
+
             try {
                 const execution = await agentLogic.invokeStructuredOutput(schema);
                 const message = execution.messages.at(-1);
-                
+
                 if (message?.type !== "ai") {
                     throw new Error("Structured debate agent did not return an AI message.");
                 }
-                
+
                 return schema.parse(message.structuredOutput ?? JSON.parse(message.content ?? ""));
             } finally {
                 agentLogic.agentConfig.messages = previousMessages;
@@ -243,16 +249,16 @@ export class AgentsDebate<
     private getBoundary(agent: AgentDebateType): BoundaryObject {
         const mutual = this.config.debateMutualBoundaries ?? {};
         const agentBoundary = agent.debateBoundary ?? {};
-        
+
         // Error fallbacks
         if (agentBoundary.tokens !== undefined && mutual.tokens !== undefined && agentBoundary.tokens > mutual.tokens) {
             throw new Error(`Agent "${agent.name}" debateBoundary.tokens cannot exceed debateMutualBoundaries.tokens.`);
         }
-        
+
         if (agentBoundary.timeMs !== undefined && mutual.timeMs !== undefined && agentBoundary.timeMs > mutual.timeMs) {
             throw new Error(`Agent "${agent.name}" debateBoundary.timeMs cannot exceed debateMutualBoundaries.timeMs.`);
         }
-        
+
         if (agentBoundary.maxRounds !== undefined && mutual.maxRounds !== undefined && agentBoundary.maxRounds > mutual.maxRounds) {
             throw new Error(`Agent "${agent.name}" debateBoundary.maxRounds cannot exceed debateMutualBoundaries.maxRounds.`);
         }
@@ -281,7 +287,7 @@ export class AgentsDebate<
         timeMs?: number
     ): Promise<Result> {
         const execution = this.invokeDebateAgentInternal(logic, schema, options);
-        
+
         if (timeMs === undefined) return execution;
         let timeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -315,139 +321,145 @@ export class AgentsDebate<
         records?: AgentCommunicationStageRecord[],
         initialMessages: MessagesVariations[] = this.config.messages
     ): Promise<MessagesVariations[]> {
-        const agents = this.getAgentsWithNames(agentNames);
-        if (agents.length === 0) throw new Error("Cannot spawn a debate without at least one known agent.");
+        return withTelemetry("agents_debate.spawn", {
+            agentsCount: agentNames.length,
+            initialMessagesCount: initialMessages.length,
+            hasRecords: records !== undefined
+        }, async () => {
+            const agents = this.getAgentsWithNames(agentNames);
+            if (agents.length === 0) throw new Error("Cannot spawn a debate without at least one known agent.");
 
-        // Trigger errors for exceeded boundaries
-        agents.forEach(agent => this.getBoundary(agent));
+            // Trigger errors for exceeded boundaries
+            agents.forEach(agent => this.getBoundary(agent));
 
-        const startedAt = Date.now();
-        const mutual = this.config.debateMutualBoundaries ?? {};
-        
-        // Define room for conversation message with specified task
-        const room: MessagesVariations[] = [...initialMessages, {
-            type: "user",
-            content: [`# Debate subject\n${debateSubject}`, `# Instructions\n${debateInstructions}`].join("\n\n")
-        }];
-        
-        // Participation of the agent
-        const participation = new Map<string, boolean>();
-        /// Whether to continue the conversation
-        const continuation = new Map<string, boolean>();
-        /// Tokens used by each agent
-        const agentTokens = new Map<string, number>();
-        let mutualTokensUsed = 0;
+            const startedAt = Date.now();
+            const mutual = this.config.debateMutualBoundaries ?? {};
 
-        // Executes agent in round
-        const runRoundInternal = async (round: number) => {
-            // 1. Run agents and return results of agent run
-            const results = await Promise.all(agents.map(async agent => {
-                const boundary = this.getBoundary(agent);
-                
-                // Error fallbacks
-                if (round >= (boundary.maxRounds ?? 1)) return null;
-                if ((round > 0 && !participation.get(agent.name)) || this.config.abort?.aborted) return null;
-                if (mutual.timeMs !== undefined && Date.now() - startedAt >= mutual.timeMs) return null;
-                if (boundary.timeMs !== undefined && Date.now() - startedAt >= boundary.timeMs) return null;
-                if (mutual.tokens !== undefined && mutualTokensUsed >= mutual.tokens) return null;
-                if (boundary.tokens !== undefined && (agentTokens.get(agent.name) ?? 0) >= boundary.tokens) return null;
+            // Define room for conversation message with specified task
+            const room: MessagesVariations[] = [...initialMessages, {
+                type: "user",
+                content: [`# Debate subject\n${debateSubject}`, `# Instructions\n${debateInstructions}`].join("\n\n")
+            }];
 
-                // 
-                const prompt: MessagesVariations = {
-                    type: "user",
-                    content: [
-                        `You are ${agent.name}: ${agent.description}`,
-                        `The debate participants are: ${agents.map(participant => `${participant.name} (${participant.description})`).join(", ")}`,
-                        "Participate as a member of the multi-agent conversation. Read the preceding messages, consider the other agents' contributions, and add a useful response that advances the debate. You may abstain only when you have no relevant contribution.",
-                        "When participating, respond to the existing discussion rather than starting an unrelated answer. Set continueConversation=true only when another round is needed to resolve, improve, or verify the discussion; otherwise set it to false.",
-                        agent.internalInstructions ? `## Internal instructions\n${agent.internalInstructions}` : "",
-                        `This is conversation round ${round}. Return only a structured object with boolean participate, boolean continueConversation, and a messages array. Set participate=false to abstain.`
-                    ].filter(Boolean).join("\n\n")
-                };
-                
-                const input = [...room, prompt];
-                const inputTokens = await this.estimateTokens(input, agent.tokenizer);
-                const consumedTokens = agentTokens.get(agent.name) ?? 0;
-                
-                if (boundary.tokens !== undefined && consumedTokens + inputTokens >= boundary.tokens) return null;
-                
-                const response: DebateAgentResponse = await this.invokeWithTimeLimit<DebateAgentResponse>(
-                    agent.agentLogic,
-                    debateAgentResponseSchema as z.ZodType<DebateAgentResponse>,
-                    {
-                        messages: input,
-                        abort: this.config.abort
-                    },
-                    boundary.timeMs === undefined ? undefined : Math.max(1, boundary.timeMs - (Date.now() - startedAt))
-                );
-                const addedTokens = await this.estimateTokens(response.messages, agent.tokenizer);
-                
-                if (boundary.tokens !== undefined && consumedTokens + inputTokens + addedTokens > boundary.tokens) {
-                    throw new Error(`Agent "${agent.name}" debate token boundary exceeded.`);
+            // Participation of the agent
+            const participation = new Map<string, boolean>();
+            /// Whether to continue the conversation
+            const continuation = new Map<string, boolean>();
+            /// Tokens used by each agent
+            const agentTokens = new Map<string, number>();
+            let mutualTokensUsed = 0;
+
+            // Executes agent in round
+            const runRoundInternal = async (round: number) => {
+                // 1. Run agents and return results of agent run
+                const results = await Promise.all(agents.map(async agent => {
+                    const boundary = this.getBoundary(agent);
+
+                    // Error fallbacks
+                    if (round >= (boundary.maxRounds ?? 1)) return null;
+                    if ((round > 0 && !participation.get(agent.name)) || this.config.abort?.aborted) return null;
+                    if (mutual.timeMs !== undefined && Date.now() - startedAt >= mutual.timeMs) return null;
+                    if (boundary.timeMs !== undefined && Date.now() - startedAt >= boundary.timeMs) return null;
+                    if (mutual.tokens !== undefined && mutualTokensUsed >= mutual.tokens) return null;
+                    if (boundary.tokens !== undefined && (agentTokens.get(agent.name) ?? 0) >= boundary.tokens) return null;
+
+                    // 
+                    const prompt: MessagesVariations = {
+                        type: "user",
+                        content: [
+                            `You are ${agent.name}: ${agent.description}`,
+                            `The debate participants are: ${agents.map(participant => `${participant.name} (${participant.description})`).join(", ")}`,
+                            "Participate as a member of the multi-agent conversation. Read the preceding messages, consider the other agents' contributions, and add a useful response that advances the debate. You may abstain only when you have no relevant contribution.",
+                            "When participating, respond to the existing discussion rather than starting an unrelated answer. Set continueConversation=true only when another round is needed to resolve, improve, or verify the discussion; otherwise set it to false.",
+                            agent.internalInstructions ? `## Internal instructions\n${agent.internalInstructions}` : "",
+                            `This is conversation round ${round}. Return only a structured object with boolean participate, boolean continueConversation, and a messages array. Set participate=false to abstain.`
+                        ].filter(Boolean).join("\n\n")
+                    };
+
+                    const input = [...room, prompt];
+                    const inputTokens = await this.estimateTokens(input, agent.tokenizer);
+                    const consumedTokens = agentTokens.get(agent.name) ?? 0;
+
+                    if (boundary.tokens !== undefined && consumedTokens + inputTokens >= boundary.tokens) return null;
+
+                    const response: DebateAgentResponse = await this.invokeWithTimeLimit<DebateAgentResponse>(
+                        agent.agentLogic,
+                        debateAgentResponseSchema as z.ZodType<DebateAgentResponse>,
+                        {
+                            messages: input,
+                            abort: this.config.abort
+                        },
+                        boundary.timeMs === undefined ? undefined : Math.max(1, boundary.timeMs - (Date.now() - startedAt))
+                    );
+                    const addedTokens = await this.estimateTokens(response.messages, agent.tokenizer);
+
+                    if (boundary.tokens !== undefined && consumedTokens + inputTokens + addedTokens > boundary.tokens) {
+                        throw new Error(`Agent "${agent.name}" debate token boundary exceeded.`);
+                    }
+
+                    return { agent, response, addedTokens, consumedTokens: inputTokens + addedTokens };
+                }));
+
+                // Calculate tokens used by each messages in this round
+                const roundTokens = results.reduce((total, item) => total + (item?.consumedTokens ?? 0), 0);
+                if (mutual.tokens !== undefined && mutualTokensUsed + roundTokens > mutual.tokens) {
+                    throw new Error("Debate mutual token boundary exceeded.");
                 }
-                
-                return { agent, response, addedTokens, consumedTokens: inputTokens + addedTokens };
-            }));
+                mutualTokensUsed += roundTokens;
 
-            // Calculate tokens used by each messages in this round
-            const roundTokens = results.reduce((total, item) => total + (item?.consumedTokens ?? 0), 0);
-            if (mutual.tokens !== undefined && mutualTokensUsed + roundTokens > mutual.tokens) {
-                throw new Error("Debate mutual token boundary exceeded.");
-            }
-            mutualTokensUsed += roundTokens;
+                // 3. Add results from different agents to the room messages
+                for (const item of results) {
+                    if (!item) continue;
 
-            // 3. Add results from different agents to the room messages
-            for (const item of results) {
-                if (!item) continue;
-                
-                participation.set(item.agent.name, item.response.participate);
-                continuation.set(
-                    item.agent.name,
-                    item.response.participate && item.response.continueConversation
-                );
-                agentTokens.set(item.agent.name, (agentTokens.get(item.agent.name) ?? 0) + item.consumedTokens);
+                    participation.set(item.agent.name, item.response.participate);
+                    continuation.set(
+                        item.agent.name,
+                        item.response.participate && item.response.continueConversation
+                    );
+                    agentTokens.set(item.agent.name, (agentTokens.get(item.agent.name) ?? 0) + item.consumedTokens);
 
-                if (item.response.participate) {
-                    room.push({ type: "user", content: `## ${item.agent.name}` }, ...item.response.messages);
-                    records?.push({
-                        agentName: item.agent.name,
-                        messages: item.response.messages,
-                        timestamp: Date.now()
-                    });
+                    if (item.response.participate) {
+                        room.push({ type: "user", content: `## ${item.agent.name}` }, ...item.response.messages);
+                        records?.push({
+                            agentName: item.agent.name,
+                            messages: item.response.messages,
+                            timestamp: Date.now()
+                        });
+                    }
                 }
-            }
-        };
+            };
 
-        const runRound = async (round: number) => {
-            const messagesBefore = room.length;
-            const loopEvent = (messages: MessagesVariations[]): AgentsDebateLoopEvent => ({
-                loop: round,
-                loops_count: Math.max(...agents.map(agent => this.getBoundary(agent).maxRounds ?? 1)),
-                messages
-            });
-            this.emitEvent("debate_loop_start", loopEvent(room.slice()));
-            try {
-                await runRoundInternal(round);
-                this.emitEvent("debate_loop_end", loopEvent(room.slice(messagesBefore)));
-            } catch (error) {
-                const normalizedError = error instanceof Error ? error : new Error(String(error));
-                this.emitEvent("debate_loop_error", {
-                    ...loopEvent(room.slice(messagesBefore)),
-                    reason: normalizedError.message
+            const runRound = async (round: number) => {
+                const messagesBefore = room.length;
+                const loopEvent = (messages: MessagesVariations[]): AgentsDebateLoopEvent => ({
+                    loop: round,
+                    loops_count: Math.max(...agents.map(agent => this.getBoundary(agent).maxRounds ?? 1)),
+                    messages
                 });
-                throw error;
+                this.emitEvent("debate_loop_start", loopEvent(room.slice()));
+                try {
+                    await runRoundInternal(round);
+                    this.emitEvent("debate_loop_end", loopEvent(room.slice(messagesBefore)));
+                } catch (error) {
+                    const normalizedError = error instanceof Error ? error : new Error(String(error));
+                    this.emitEvent("debate_loop_error", {
+                        ...loopEvent(room.slice(messagesBefore)),
+                        reason: normalizedError.message
+                    });
+                    throw error;
+                }
+            };
+
+            // Tokens rounds
+            await runRound(0);
+
+            const maxRounds = Math.max(...agents.map(agent => this.getBoundary(agent).maxRounds ?? 1));
+            for (let round = 1; round < maxRounds && [...continuation.values()].some(Boolean); round++) {
+                await runRound(round);
             }
-        };
 
-        // Tokens rounds
-        await runRound(0);
-
-        const maxRounds = Math.max(...agents.map(agent => this.getBoundary(agent).maxRounds ?? 1));
-        for (let round = 1; round < maxRounds && [...continuation.values()].some(Boolean); round++) {
-            await runRound(round);
-        }
-        
-        return room;
+            return room;
+        });
     }
 
     /**
@@ -464,26 +476,32 @@ export class AgentsDebate<
      * agent is also selected for consultation, or if automatic selection is requested.
      */
     async invokeConsultation(options: InvokeConsultationOptions): Promise<InvokeConsultationResult | undefined> {
-        this.emitEvent(
-            "consultation_start",
-            options,
-            options.taskMessages ?? this.config.messages,
-            {
-                executionAgent: options.choosenExecutionAgent,
-                consultationAgents: options.choosenConsultationAgents ?? [],
-                loopsCount: options.loopsCount ?? 1,
-                stages: options.invokeForStages ?? {}
+        return withTelemetry("agents_debate.consultation", {
+            executionAgent: options.choosenExecutionAgent,
+            consultationAgentsCount: options.choosenConsultationAgents?.length ?? 0,
+            loopsCount: options.loopsCount ?? 1
+        }, async () => {
+            this.emitEvent(
+                "consultation_start",
+                options,
+                options.taskMessages ?? this.config.messages,
+                {
+                    executionAgent: options.choosenExecutionAgent,
+                    consultationAgents: options.choosenConsultationAgents ?? [],
+                    loopsCount: options.loopsCount ?? 1,
+                    stages: options.invokeForStages ?? {}
+                }
+            );
+            try {
+                const result = await this.invokeConsultationInternal(options);
+                this.emitEvent("consultation_end", result);
+                return result;
+            } catch (error) {
+                const normalizedError = error instanceof Error ? error : new Error(String(error));
+                this.emitEvent("consultation_error", normalizedError);
+                throw error;
             }
-        );
-        try {
-            const result = await this.invokeConsultationInternal(options);
-            this.emitEvent("consultation_end", result);
-            return result;
-        } catch (error) {
-            const normalizedError = error instanceof Error ? error : new Error(String(error));
-            this.emitEvent("consultation_error", normalizedError);
-            throw error;
-        }
+        });
     }
 
     private async invokeConsultationInternal(options: InvokeConsultationOptions): Promise<InvokeConsultationResult | undefined> {
@@ -550,14 +568,14 @@ export class AgentsDebate<
                 },
                 this.getBoundary(executionAgent).timeMs
             );
-            
+
             const finalMessage = [...response.messages].reverse().find(message => message.type === "ai");
             if (!finalMessage || finalMessage.type !== "ai") {
                 throw new Error(`Execution agent "${executionAgent.name}" did not return an AI message.`);
             }
-            
+
             executionMessages.push(...response.messages);
-            
+
             return finalMessage;
         };
 
@@ -635,25 +653,31 @@ export class AgentsDebate<
      * 3. Use the selected agents set in debate
     */
     async invokeCritique(options: InvokeCritiqueOptions): Promise<InvokeCritiqueResult | undefined> {
-        this.emitEvent(
-            "critique_start",
-            options,
-            this.config.messages,
-            {
-                executionAgent: options.choosenExecutionAgent,
-                critiqueAgents: options.choosenCriticqueAgents ?? [],
-                loopsCount: options.loopsCount ?? 1
+        return withTelemetry("agents_debate.critique", {
+            executionAgent: options.choosenExecutionAgent,
+            critiqueAgentsCount: options.choosenCriticqueAgents?.length ?? 0,
+            loopsCount: options.loopsCount ?? 1
+        }, async () => {
+            this.emitEvent(
+                "critique_start",
+                options,
+                this.config.messages,
+                {
+                    executionAgent: options.choosenExecutionAgent,
+                    critiqueAgents: options.choosenCriticqueAgents ?? [],
+                    loopsCount: options.loopsCount ?? 1
+                }
+            );
+            try {
+                const result = await this.invokeCritiqueInternal(options);
+                this.emitEvent("critique_end", result);
+                return result;
+            } catch (error) {
+                const normalizedError = error instanceof Error ? error : new Error(String(error));
+                this.emitEvent("critique_error", normalizedError);
+                throw error;
             }
-        );
-        try {
-            const result = await this.invokeCritiqueInternal(options);
-            this.emitEvent("critique_end", result);
-            return result;
-        } catch (error) {
-            const normalizedError = error instanceof Error ? error : new Error(String(error));
-            this.emitEvent("critique_error", normalizedError);
-            throw error;
-        }
+        });
     }
 
     private async invokeCritiqueInternal(options: InvokeCritiqueOptions): Promise<InvokeCritiqueResult | undefined> {
@@ -787,28 +811,34 @@ export class AgentsDebate<
      * 3. Uses conclusion agent `choosenConclusionAgent` the conclusion of each handoff 
      */
     async invokeHandoff(options: InvokeHandoffOptions): Promise<InvokeHandoffResult<Result> | undefined> {
-        this.emitEvent(
-            "handoff_start",
-            options,
-            this.config.messages,
-            {
-                conclusionAgent: options.choosenConclusionAgent,
-                candidates: this.config.agents
-                    .filter(agent => agent.name !== options.choosenConclusionAgent)
-                    .map(agent => agent.name),
-                handoffToAgentsCount: options.handoffToAgentsCount ?? 1,
-                executeHandoffParallel: options.executeHandoffParallel
+        return withTelemetry("agents_debate.handoff", {
+            conclusionAgent: options.choosenConclusionAgent,
+            handoffToAgentsCount: options.handoffToAgentsCount ?? 1,
+            executeHandoffParallel: options.executeHandoffParallel ?? "all"
+        }, async () => {
+            this.emitEvent(
+                "handoff_start",
+                options,
+                this.config.messages,
+                {
+                    conclusionAgent: options.choosenConclusionAgent,
+                    candidates: this.config.agents
+                        .filter(agent => agent.name !== options.choosenConclusionAgent)
+                        .map(agent => agent.name),
+                    handoffToAgentsCount: options.handoffToAgentsCount ?? 1,
+                    executeHandoffParallel: options.executeHandoffParallel
+                }
+            );
+            try {
+                const result = await this.invokeHandoffInternal(options);
+                this.emitEvent("handoff_end", result);
+                return result;
+            } catch (error) {
+                const normalizedError = error instanceof Error ? error : new Error(String(error));
+                this.emitEvent("handoff_error", normalizedError);
+                throw error;
             }
-        );
-        try {
-            const result = await this.invokeHandoffInternal(options);
-            this.emitEvent("handoff_end", result);
-            return result;
-        } catch (error) {
-            const normalizedError = error instanceof Error ? error : new Error(String(error));
-            this.emitEvent("handoff_error", normalizedError);
-            throw error;
-        }
+        });
     }
 
     private async invokeHandoffInternal(options: InvokeHandoffOptions): Promise<InvokeHandoffResult<Result> | undefined> {
