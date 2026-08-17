@@ -41,6 +41,7 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 - RAG (Resource-Augmented-Generation) - Use to enforce responses with documents from your vector-database. Retriver loads these documents matches to the Semantic Similarity of query given to llm. It's usefull when you've huge documents database cannot be treat as CAG. - [check](./documentation/augmented%20generation/RAG.md)
 - AEval - Agentic evaluation for scoring responses and guiding improvements - [check](./documentation/AEval.md)
 - FactChecker - Verify the truthfulness of specified information - [check](./documentation/FactChecker.md)
+- AgentsDebate - Debate among agents the next step to take - [check](./documentation/AgentsDebate.md)
 
 ## Installation
 ```bash
@@ -73,6 +74,7 @@ npm install @ravenlens/raven-adk
 - [Secure Sandboxes](./documentation/Sandbox.md)
 - [AEval](./documentation/AEval.md)
 - [FactChecker](./documentation/FactChecker.md)
+- [AgentsDebate](./documentation/AgentsDebate.md)
 - [Supported Models](./documentation/Models.md)
     - [Models come with Compaction](./documentation/compaction/Readme.md#model-support)
 - [Podcasts](./documentation/Podcast.md)
