@@ -1,284 +1,186 @@
 # Agents Debate
 
-`AgentsDebate` is the RavenADK abstraction for coordinating several specialized
-agents around one task. It supports local and remote participants, agent
-selection, consultation, critique, and handoff workflows.
+`AgentsDebate` coordinates structured-output agents around one task. The implemented workflows are consultation, critique, and handoff. Multi-agent agreement is evidence for a solution, not proof that the solution is correct; applications may still need a domain-specific evaluator or verifier.
 
-The design draws on multi-agent debate, group discussion, MetaGPT-style
-delegation, and ChatDev-style role-based collaboration. Agreement between
-agents is evidence for a solution, not proof that the solution is correct. A
-final evaluator, verifier, or domain-specific check may still be required.
+## Participant Contract
 
-## Research Foundations
+Each `AgentDebateType` has:
 
-> [Improving Factuality and Reasoning in Language Models through Multi-Agent Debate](https://arxiv.org/abs/2305.14325), [GroupDebate: Enhancing the Efficiency of Multi-Agent Debate Using Group Discussion](https://arxiv.org/abs/2409.14051), [MetaGPT: Meta Programming for Multi-Agent Collaborative Software Development](https://arxiv.org/abs/2308.00352), and [Communicative Agents for Software Development (ChatDev)](https://arxiv.org/abs/2307.07924) show how multi-turn critique, organized discussion stages, specialized roles, structured handoffs, and bounded communication can improve collaborative agent workflows, which informs `AgentsDebate` participant descriptions, selection, consultation, critique, handoff, communication stages, clarification, and shared token and time boundaries.
+- `name`: a unique participant identifier.
+- `description`: the participant's role and specialization.
+- `agentLogic`: a `ReActAgent` or an object implementing `invokeStructuredOutput(schema, options)`.
+- `tokenizer`: a function used for token-boundary accounting.
+- `debateBoundary`: optional per-agent token, time, and round limits.
 
-## Core Concepts
-
-### Debate participant
-
-Each participant has:
-
-- `name`: a unique identifier used when selecting or addressing the agent.
-- `description`: the participant's specialization and role.
-- `agentLogic`: the executable implementation.
-
-The participant can be supplied in several forms:
-
-1. A callback implementing `ExecutableAgentDebateFn`.
-2. An object implementing `InvokableAgentDebate` with `invoke(options)`.
-3. A startable workflow implementing `StartableAgentDebate` with `start()`.
-4. A `ReActAgent` instance.
-
-Callbacks and invokable objects receive the debate message history and an
-optional abort signal. A startable workflow receives no arguments through its
-`start()` contract. Use an adapter callback when the workflow needs the task
-messages or needs to return a value.
+Participants return the structured `DebateAgentResponse` protocol for workflow execution:
 
 ```typescript
-import { Graph, GraphMarkers } from "@ravenlens/raven-adk/graph";
-import {
-	AgentsDebate,
-	type AgentDebateType,
-	type ExecutableAgentDebateFn
-} from "@ravenlens/raven-adk/agents";
-
-const specialist: ExecutableAgentDebateFn<string> = async ({ messages, abort }) => {
-	if (abort?.aborted) {
-		throw new Error("Debate was aborted");
-	}
-
-	const task = messages.at(-1);
-	return task?.type === "user" ? `Specialist response: ${task.content}` : "No user task";
-};
-
-const workflow = new Graph({ completed: false });
-workflow
-	.addNode("finish", () => ({ stateUpdate: { completed: true } }))
-	.addEdge(GraphMarkers.START, "finish")
-	.addEdge("finish", GraphMarkers.END);
-
-const agents: AgentDebateType[] = [
-	{
-		name: "specialist",
-		description: "Handles the task using domain-specific reasoning.",
-		agentLogic: specialist
-	},
-	{
-		name: "workflow",
-		description: "Runs a deterministic workflow.",
-		agentLogic: workflow
-	}
-];
+{
+  participate: boolean;
+  continueConversation: boolean;
+  messages: MessagesVariations[];
+}
 ```
 
-### Shared task context
-
-`AgentsDebateConfig.messages` is the message history supplied to debate
-operations. The primary task is conventionally the last user message. The
-history may also contain system, assistant, tool, reasoning, or compaction
-messages supported by RavenADK.
-
-The debate treats the history as input context. Participants do not mutate the
-original array; each execution receives an independent copy when debate
-messages or execution results are appended.
-
-### Boundaries
-
-`mutualBoundaries` describes limits shared by the debate:
-
-```typescript
-const boundaries = {
-	tokens: 20_000,
-	timeMs: 60_000
-};
-```
-
-`tokens` limits the total budget consumed by communication and delegated work.
-`timeMs` limits the total time allowed for the debate. Cancellation propagates
-to participants through `AbortSignal`, and partial results are preserved when a
-participant fails or the budget is exhausted.
+`invokeDebateAgent` can also invoke a participant with any caller-supplied Zod schema and returns the validated structured value.
 
 ## Configuration
 
 ```typescript
 const debate = new AgentsDebate({
-	agents,
-	messages: [
-		{ type: "user", content: "Design a reliable caching strategy." }
-	],
-	mutualBoundaries: {
-		tokens: 20_000,
-		timeMs: 60_000
-	},
-	abort: controller.signal
+  agents,
+  messages: [
+    { type: "user", content: "Design a reliable caching strategy." }
+  ],
+  debateMutualBoundaries: {
+    tokens: 20_000,
+    timeMs: 60_000,
+    maxRounds: 2
+  },
+  abort: controller.signal
 });
 ```
 
-The configuration also accepts:
+`AgentsDebateConfig` also accepts `plugins` and shared `memory`. The `messages` array is the task context; workflow stages append to independent copies and do not intentionally mutate the caller's original history.
 
-- `plugins`: plugins applied to participating Raven agents.
-- `memory`: shared memory for recording or retrieving debate context.
-- `abort`: a caller-owned signal used to stop the debate.
+`debateMutualBoundaries` limits are shared across the debate configuration. `tokens` accounts for communication text using each participant's tokenizer. `timeMs` limits participant execution. `maxRounds` limits debate rounds. Per-agent boundaries cannot exceed the corresponding mutual boundary.
 
-Shared memory uses namespaced or append-only debate records when participants
-run concurrently, preventing parallel participants from overwriting the same
-mutable state.
+## Available Methods
 
-## Method Workflows
+### `invokeDebateAgent(agentLogic, schema, options)`
 
-### `chooseBestAgents(options)`
-
-Selects and orders the participants that best match the current task.
-
-```typescript
-const selection = await debate.chooseBestAgents({
-	agentsCount: 2,
-	instruction: "Prefer agents with practical production experience."
-});
-```
-
-How it works:
-
-1. Read the task from the configured message history.
-2. Ask the available participants to assess their suitability.
-3. Compare the assessments using a debate or selection judge.
-4. Return the best participants first.
-5. Include a reason for every selected participant.
-
-`agentsCount` defaults to one. Negative, zero, non-finite, or larger-than-
-available values are rejected rather than silently producing an unexpected
-selection.
-
-The returned agents retain their `agentLogic`, so the result can be passed to a
-subsequent execution step.
+Invokes one participant with a message history and optional `AbortSignal`, then validates the response with the supplied Zod schema. For `ReActAgent`, its temporary message context is restored after invocation.
 
 ### `invokeConsultation(options)`
 
-Uses selected participants to advise one execution agent before or during task
-execution.
+Uses explicitly named consultation agents to advise an execution agent. Automatic selection is not currently implemented, so `choosenConsultationAgents` is required.
 
 ```typescript
 const result = await debate.invokeConsultation({
-	choosenExecutionAgent: "specialist",
-	choosenConsultationAgents: ["workflow"],
-	invokeForStages: {
-		begining: true,
-		betweenExecutionReasoning: false
-	}
+  choosenExecutionAgent: "specialist",
+  choosenConsultationAgents: ["reviewer"],
+  invokeForStages: {
+    begining: true,
+    betweenExecutionReasoning: false
+  },
+  loopsCount: 1
 });
 ```
 
-How it works:
+The workflow:
 
-1. Use `choosenConsultationAgents`, or select them with
-   `chooseBestAgents` when the list is omitted.
-2. Run consultation before execution when `begining` is enabled.
-3. Provide the consultation messages to `choosenExecutionAgent`.
-4. Optionally consult again between execution reasoning stages.
-5. Return the execution result and consultation records.
+1. Validates the execution and consultation agent names.
+2. Runs a consultation debate before execution unless `begining` is `false`.
+3. Passes consultation messages to the execution agent.
+4. Optionally runs a second consultation between execution stages.
+5. Repeats the process for `loopsCount` iterations.
 
-Each consultation record preserves which agent contributed, which stage it
-contributed to, the messages it produced, and when it contributed. A stage can
-contain records from multiple participants.
+The result contains `consultation.begining` and `consultation.betweenExecutionReasoning` records, `choosenAgentResult` with the execution agent's complete message history, and `result` with its final `AIMessage`.
 
 ### `invokeCritique(options)`
 
-Runs an execution agent, asks other agents to critique its result, and uses the
-critique to improve the final answer.
+Runs an execution agent, asks explicitly named critics to review the candidate, and gives the critiques back to the execution agent for revision.
 
 ```typescript
 const result = await debate.invokeCritique({
-	choosenExecutionAgent: "specialist",
-	choosenCriticqueAgents: ["workflow"],
-	useDebateBeforeExecution: false
+  choosenExecutionAgent: "specialist",
+  choosenCriticqueAgents: ["reviewer"],
+  useDebateBeforeExecution: false,
+  loopsCount: 1
 });
 ```
 
-How it works:
-
-1. Run `choosenExecutionAgent` with the task context.
-2. Use the explicitly supplied critics, or select critics through debate.
-3. Send the candidate answer and task to the critics, preferably in parallel.
-4. Collect each critic's messages and recommendations.
-5. Give the critiques back to the execution agent for revision.
-6. Return the final result together with all critique records.
-
-Critique uses an explicit maximum number of rounds and preserves failed critic
-executions instead of discarding the complete result.
+`choosenCriticqueAgents` is currently required because automatic critic selection is not implemented. The result contains `agentsCritique`, the final `result`, and the execution message history returned as `executionMessages`. Critique failures are not silently converted into successful results by the workflow.
 
 ### `invokeHandoff(options)`
 
-Delegates the task to one or more selected agents and uses a conclusion agent to
-combine or finalize their work.
+Scores eligible agents, delegates the task to the highest-scoring candidates, and asks a conclusion agent to combine their outputs.
 
 ```typescript
 const result = await debate.invokeHandoff({
-	choosenConclusionAgent: "specialist",
-	handoffToAgentsCount: 2,
-	executeHandoffParallel: true,
-	instructions: "Return an actionable solution with stated assumptions."
+  choosenConclusionAgent: "conclusion",
+  handoffToAgentsCount: 2,
+  executeHandoffParallel: 2,
+  handoffInstructions: "Return an actionable solution with assumptions."
 });
 ```
 
-How it works:
+The conclusion agent is excluded from handoff candidates. Candidate agents are asked for a finite numeric `score` and a `reason`; candidates are ordered by descending score, with configured order retained for ties.
 
-1. Debate over the configured agents and select the best handoff candidates.
-2. Select up to `handoffToAgentsCount` candidates without duplicating agents.
-3. Execute them either in parallel or in sequential batches.
-4. Record every completed, failed, and aborted execution.
-5. Send the collected handoff results to `choosenConclusionAgent`.
-6. Return the conclusion messages and final result.
+`handoffToAgentsCount` defaults to one and is capped at the number of eligible agents. `executeHandoffParallel` controls execution concurrency:
 
-`executeHandoffParallel` supports these forms:
+- `true`: run all selected agents concurrently.
+- `false` or omitted: use the default full selected batch.
+- A positive number: run that many selected agents per batch.
 
-- `true`: execute all selected agents concurrently.
-- `false`: execute selected agents one at a time.
-- A number: execute that many agents concurrently per batch.
+The result contains:
 
-The result exposes the selected agents, each handoff execution, the conclusion
-agent's messages, and the final answer. Raw participant results retain their
-generic type, allowing callbacks, `ReActAgent`, and graph workflows to be mixed
-without losing their result data.
+- `selectedAgents`: selected participants with their selection reasons.
+- `handoffExecutions`: every attempted execution, with `completed`, `failed`, or `aborted` status, batch number, result, and normalized error when present.
+- `conclusionMessages`: the conclusion agent's complete response messages.
+- `result`: the final conclusion `AIMessage`.
 
-## Communication Model
+## Events
 
-The debate has two conceptual communication stages:
+`AgentsDebate` exposes a typed event map through `onEvent` and `emitEvent`, following the event-listener pattern used by `ReActAgent`. Event names use lowercase snake_case notation.
 
-- **Before execution**: participants analyze the task and propose approaches or
-  identify the best specialist.
-- **Meanwhile execution**: participants exchange information between execution
-  steps or reasoning rounds.
+```typescript
+debate.onEvent("consultation_start", options => {
+  console.log("consultation started", options.choosenExecutionAgent);
+});
 
-Communication includes explicit instructions and boundaries. A room, event bus,
-or protocol adapter connects local participants to remote agents through A2A,
-ACP, GACP, WebSockets, or another transport without changing the participant
-contract.
+debate.onEvent("consultation_loop_end", event => {
+  console.log("consultation loop", event.loop + 1, "messages", event.messages);
+});
 
-## Error and Cancellation Expectations
+debate.onEvent("consultation_end", result => {
+  console.log("consultation completed", result?.result.content);
+});
 
-A debate run:
+debate.onEvent("consultation_error", error => {
+  console.error("consultation failed", error);
+});
+```
 
-- validates that participant names are unique;
-- rejects references to unknown execution, critic, consultation, or conclusion
-	agents;
-- propagates `AbortSignal` to callbacks and invokable participants;
-- stops starting new work after cancellation or when a shared budget is
-	exhausted;
-- preserves partial communication and execution records;
-- normalizes thrown values to `Error` instances in result records; and
-- isolates mutable participant message arrays across parallel runs.
+The event map is exported as `AgentsDebateEvents`. The public workflow lifecycle events are:
 
-## Relationship to Other RavenADK Utilities
+- `debate_agent_start(agentLogic, schema, options)`
+- `debate_agent_end(result)`
+- `debate_agent_error(error)`
+- `consultation_start(options)`
+- `consultation_end(result)`
+- `consultation_error(error)`
+- `critique_start(options)`
+- `critique_end(result)`
+- `critique_error(error)`
+- `handoff_start(options)`
+- `handoff_end(result)`
+- `handoff_error(error)`
+- `conclusion_start(messages)`
+- `conclusion_end(messages)`
+- `conclusion_error(error, messages)`
 
-`AgentsDebate` is an orchestration layer. It can use existing RavenADK pieces
-for specific jobs:
+Loop events are emitted for every debate round, consultation loop, critique loop, and handoff execution batch:
 
-- `ReActAgent` performs an agent's reasoning and tool-use loop.
-- `MultipleAnswers` runs independent candidates concurrently.
-- `AgenticEvaluator` can judge candidate answers or compare handoff results.
-- `Graph` can provide deterministic or stateful custom workflows through a
-  startable participant or an adapter callback.
+- `debate_loop_start`, `debate_loop_end`, `debate_loop_error`
+- `consultation_loop_start`, `consultation_loop_end`, `consultation_loop_error`
+- `critique_loop_start`, `critique_loop_end`, `critique_loop_error`
+- `handoff_loop_start`, `handoff_loop_end`, `handoff_loop_error`
 
-Debate coordinates these utilities without duplicating their execution,
-evaluation, memory, or cancellation logic.
+Each loop start/end event receives `{ loop, loops_count, messages }`. `loop` is zero-based, `loops_count` is the total expected number of loops, and `messages` contains the messages entering or produced by that loop. Loop errors add `reason`, containing the normalized failure message. Handoff loop errors can represent a failed participant while the overall handoff continues with the recorded failure.
+
+`onEvent` accepts one listener for each event name and returns the `AgentsDebate` instance for chaining. Registering a second listener for the same name leaves the first listener in place. Event listeners may be synchronous or asynchronous; listener execution is scheduled independently and listener failures are reported as warnings without changing the workflow result. Workflow errors still emit their error event and are rethrown to the caller.
+
+## Communication And Cancellation
+
+Consultation and debate stages preserve participant names, messages, and timestamps in communication records. `AbortSignal` is passed to structured participants, prevents new handoff work after cancellation, and marks skipped handoffs as `aborted`. Participant failures are normalized to `Error` objects in handoff execution records.
+
+## Related Utilities
+
+`AgentsDebate` is an orchestration layer. It can use:
+
+- `ReActAgent` for model reasoning and tool use.
+- `AgenticEvaluator` elsewhere in an application for judging results.
+- Custom structured participants for deterministic or remote workflows.
+
+The repository includes OpenAI live integration tests for `invokeDebateAgent`, `invokeConsultation`, `invokeCritique`, and `invokeHandoff`. They run when `OPENAI_API_KEY` is configured and are skipped in offline test runs.
