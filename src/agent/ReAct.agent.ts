@@ -201,7 +201,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     abort?: AbortSignal;
 }
 
-interface ReActAgentEvents extends SkillEvents {
+export interface ReActAgentEvents extends SkillEvents {
     llm_result: (result: LLMAnswer) => void | Promise<void>;
     tool_invoked: (toolName: string, toolParams: Record<string, any>) => void | Promise<void>;
     tool_executed: (toolName: string, toolParams: Record<string, any>, output: string) => void | Promise<void>;
