@@ -149,6 +149,7 @@ export interface ReActAgentPluginSpec {
      * TODO: Deliver more plugin execution places: after_tool_execution, "before_tool_execution"
     */
     executionWay: PluginExecutionWays | PluginExecutionWays[];
+    errorHandling?: "abort-agent" | "log" | "ignore";
     /**
      * Runs the plugin logic 
      * @param executionPlace - it's singular place from where execution happens - it can be singular atime
@@ -168,6 +169,12 @@ export interface ReActAgentPluginSpec {
         };
     }>;
 }
+
+type PluginExecutionResult = Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>;
+
+export type PluginResultEvent =
+    | { status: "success"; result: PluginExecutionResult }
+    | { status: "error"; error: unknown };
 
 export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema> {
     model: AgentModel;
@@ -216,10 +223,18 @@ export interface ReActAgentEvents extends SkillEvents {
     concluding_start: () => void | Promise<void>;
     concluding_end: (conclusion: string) => void | Promise<void>;
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
-    plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: Awaited<ReturnType<ReActAgentPluginSpec["execute"]>>) => void | Promise<void>;
+    plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: PluginResultEvent) => void | Promise<void>;
+    plugin_error: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], error: unknown) => void | Promise<void>;
+    subagent_called: (role: string, instruction: string) => void | Promise<void>;
+    subagent_result: (role: string, instruction: string, result: ReActAgentInvokeResult) => void | Promise<void>;
+    subagent_reasoning: (role: string, content: string) => void | Promise<void>;
+    hitl_triggered: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>) => void | Promise<void>;
+    hitl_result: (type: "tool_usage" | "question_abc" | "question_open" | "acceptance", payload: Record<string, any>, result: any) => void | Promise<void>;
+    hitl_tool_approval: (toolName: string, allowance: Record<string, any>) => void | Promise<void>;
+    memory_action: (action: "fetch" | "save" | "get_conclusion" | "set_conclusion", memoryName: string, details: Record<string, any>, result?: any) => void | Promise<void>;
     memory_error: (error: ReActAgentMemoryError) => void | Promise<void>;
 }
-interface ReActAgentInvokeResult {
+export interface ReActAgentInvokeResult {
 
     messages: MessagesVariations[];
     state: AgentMessagesGraphState;
@@ -274,7 +289,10 @@ export type ReActAgentStreamChunk = {
 }[keyof ReActAgentStreamEventMap];
 
 type ReActAgentStreamListener = (event: ReActAgentStreamChunk) => void;
+export type ReActAgentAnyEventListener = (eventName: keyof ReActAgentEvents, ...args: any[]) => void | Promise<void>;
 type AbortableOperationResult<Result> = Result | typeof ABORTED_OPERATION;
+
+const DEFAULT_ERROR_HANDLING: ReActAgentPluginSpec["errorHandling"] = "log";
 
 const RECALL_MAIN_NODE_PREFIX = "[[RAVEN_RECALL_MAIN_NODE]]";
 const DEFAULT_MAX_REASONING_RECALLS = 3;
@@ -454,6 +472,7 @@ interface ReActAgentMemoryContext {
     getMessages: () => MessagesVariations[];
     isAbortRequested: () => boolean;
     emitMemoryError: (error: ReActAgentMemoryError) => void;
+    emitMemoryAction: ReActAgentEvents["memory_action"];
     invalidateSystemPrompt: () => void;
 }
 
@@ -661,7 +680,16 @@ ${memoryErrors}`);
         }
     ): void {
         this.registerMemoryTool(new Tool(
-            async argsObj => await memoryTool.fn(argsObj, this.createMemoryAgentState()),
+            async argsObj => {
+                const result = await memoryTool.fn(argsObj, this.createMemoryAgentState());
+                this.context.emitMemoryAction(
+                    kind === "fetch" ? "fetch" : "save",
+                    memory.name,
+                    argsObj as Record<string, any>,
+                    result
+                );
+                return result;
+            },
             {
                 toolName: memoryTool.toolName,
                 toolDescription: this.createMemoryToolDescription(memory.name, memory.purpose, memoryTool.instruction),
@@ -721,6 +749,12 @@ ${memoryErrors}`);
             async argsObj => {
                 this.recordDeterministicMemoryWant(memory, hook, kind, argsObj);
                 const result = await memoryTool.fn?.(argsObj, this.createMemoryAgentState());
+                this.context.emitMemoryAction(
+                    kind === "fetch" ? "fetch" : "save",
+                    memory.config.name,
+                    argsObj as Record<string, any>,
+                    result
+                );
 
                 return result ?? `Recorded ${kind} request for deterministic memory "${memory.config.name}".`;
             },
@@ -921,6 +955,7 @@ export class ReActAgent
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private readonly abortable: ReActAgentAbortable;
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private AnyEventListeners: Set<ReActAgentAnyEventListener> = new Set();
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     private readonly ReActAgentMemoryInterface: ReActAgentMemory<Memory>;
@@ -965,6 +1000,7 @@ export class ReActAgent
             getMessages: () => this.agentConfig.messages,
             isAbortRequested: () => this.abortable.isAbortRequested(),
             emitMemoryError: error => this.emitEvent("memory_error", error),
+            emitMemoryAction: (...args) => this.emitEvent("memory_action", ...args),
             invalidateSystemPrompt: () => {
                 this.cachedWrappedSystemPrompt = undefined;
             }
@@ -1186,6 +1222,10 @@ export class ReActAgent
                     }
 
                     if (validInstructions.length > 0) {
+                        for (const { role, instruction } of validInstructions) {
+                            this.emitEvent("subagent_called", role, instruction);
+                        }
+
                         if (this.agentConfig.parallelizeSubagents) {
                             // Execute all subagents in parallel
                             const subagentResultsExecution = await this.abortable.runAbortable(() => Promise.all(validInstructions.map(async ({ role, instruction }) => {
@@ -1220,6 +1260,7 @@ export class ReActAgent
                                     subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
                                     subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
                                     subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
+                                    subagent.onEvent("reasoning", (content) => this.emitEvent("subagent_reasoning", agent.role, content));
                                     subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
                                     subagent.onEvent("memory_error", (error) => this.emitEvent("memory_error", error));
     
@@ -1252,6 +1293,7 @@ export class ReActAgent
                                     }
     
                                     const result = subagentResultExecution;
+                                    this.emitEvent("subagent_result", agent.role, instruction, result);
     
                                     if (result.state.isAborted) {
                                         return {
@@ -1361,6 +1403,7 @@ export class ReActAgent
                                     }
 
                                     const result = agentCallResultExecution;
+                                    this.emitEvent("subagent_result", agent.role, instruction, result);
 
                                     // Track tokens consumed by the function subagent
                                     this.calculateUsedTokens({ tokens: functionUsedTokens } as LLMAnswer);
@@ -1569,7 +1612,10 @@ export class ReActAgent
                         const approvalsExecution = await this.abortable.runAbortable(() => Promise.all(
                             toolsRequiringApproval.map(async ({ toolName, callIndex }) => {
                                 try {
+                                    this.emitEvent("hitl_triggered", "tool_usage", { toolName });
                                     const allowance = await hitlTransport.emitToolUsage(toolName);
+                                    this.emitEvent("hitl_result", "tool_usage", { toolName }, allowance);
+                                    this.emitEvent("hitl_tool_approval", toolName, allowance);
 
                                     return {
                                         callIndex,
@@ -1788,6 +1834,7 @@ export class ReActAgent
                     subagent.onEvent("llm_result", (result) => this.emitEvent("llm_result", result));
                     subagent.onEvent("tool_invoked", (name, params) => this.emitEvent("tool_invoked", name, params));
                     subagent.onEvent("tool_executed", (name, params, out) => this.emitEvent("tool_executed", name, params, out));
+                    subagent.onEvent("reasoning", (content) => this.emitEvent("subagent_reasoning", agent.role, content));
                     subagent.onEvent("reasoning_end", (thoughts) => this.emitEvent("reasoning_end", thoughts));
                     subagent.onEvent("memory_error", (error) => this.emitEvent("memory_error", error));
 
@@ -1812,6 +1859,12 @@ export class ReActAgent
                     }
 
                     const result = subagentResultExecution;
+                    this.emitEvent(
+                        "subagent_result",
+                        agent.role,
+                        this.agentConfig.messages.at(-1)?.content?.toString() ?? "",
+                        result
+                    );
 
                     if (result.state.isAborted) {
                         return this.abortable.createAbortedNodeResult(state);
@@ -2380,10 +2433,21 @@ export class ReActAgent
         return this;
     }
 
+    onAnyEvent(eventListener: ReActAgentAnyEventListener): this {
+        this.AnyEventListeners.add(eventListener);
+        return this;
+    }
+
     protected emitEvent<EventName extends keyof ReActAgentEvents>(
         eventName: EventName,
         ...eventArgs: Parameters<ReActAgentEvents[EventName]>
     ) {
+        this.AnyEventListeners.forEach(listener => {
+            void Promise.resolve(listener(eventName, ...eventArgs)).catch(error => {
+                console.warn(`Any-event listener for "${String(eventName)}" failed during execution.`, error);
+            });
+        });
+
         const streamEvent = this.mapEventToStreamChunk(eventName, ...eventArgs);
 
         // Emit stream event
@@ -2412,10 +2476,7 @@ export class ReActAgent
         };
     }
 
-    /** It's responsible to run agent plugins have the specific execution way
-     *
-     * TODO: Add error resistant plugin execution behaviour as default and ignoring as option
-    */
+    /** Runs plugins and applies each plugin's configured error policy. */
     private async runPlugins(executionWay: PluginExecutionWays, executionFrom?: Omit<ExecutionFrom, "way">) {
         const pluginsToRun = this.agentConfig.plugins?.filter(plugin => plugin.executionWay instanceof Array ? plugin.executionWay.includes(executionWay) : plugin.executionWay === executionWay);
         if (pluginsToRun?.length) {
@@ -2427,17 +2488,38 @@ export class ReActAgent
                 this.emitEvent("plugin_invoking", plugin.name, executionWay);
 
                 const executionFromObjPass: ExecutionFrom = executionFrom ? { ...executionFrom, way: executionWay } : { way: executionWay, nodeType: "aside" };
-                const runResult = await plugin.execute(executionFromObjPass, this.agentConfig, this.AgentGraph.graphState);
 
-                if (this.abortable.isAbortRequested()) {
-                    return;
-                }
+                try {
+                    const runResult = await plugin.execute(executionFromObjPass, this.agentConfig, this.AgentGraph.graphState);
 
-                this.emitEvent("plugin_result", plugin.name, executionWay, runResult);
+                    if (this.abortable.isAbortRequested()) {
+                        return;
+                    }
 
-                if (runResult.status) {
-                    if (runResult.result?.agentConfig) this.agentConfig = runResult.result.agentConfig;
-                    if (runResult.result?.graphState) this.AgentGraph.graphState = runResult.result.graphState;
+                    this.emitEvent("plugin_result", plugin.name, executionWay, { status: "success", result: runResult });
+
+                    if (runResult.status) {
+                        if (runResult.result?.agentConfig) this.agentConfig = runResult.result.agentConfig;
+                        if (runResult.result?.graphState) this.AgentGraph.graphState = runResult.result.graphState;
+                    }
+                } catch (error) {
+                    this.emitEvent("plugin_result", plugin.name, executionWay, { status: "error", error });
+                    this.emitEvent("plugin_error", plugin.name, executionWay, error);
+
+                    switch (plugin.errorHandling ?? DEFAULT_ERROR_HANDLING) {
+                        case "abort-agent":
+                            throw error;
+                        case "log": {
+                            const message = error instanceof Error ? error.message : String(error);
+                            this.agentConfig.messages.push({
+                                type: "user",
+                                content: `Plugin "${plugin.name}" failed during "${executionWay}": ${message}. Continue without relying on this plugin.`
+                            });
+                            break;
+                        }
+                        case "ignore":
+                            break;
+                    }
                 }
             }
         }

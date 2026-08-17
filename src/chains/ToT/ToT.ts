@@ -3,12 +3,13 @@ import { ReActAgent } from "../../agent";
 import { AgentModel } from "../../agent/ReAct.agent";
 import { ResourceAugmentedGeneration } from "../../augmented_generation/rag/RAG";
 import { AIMessage, MessagesVariations, OpenAI } from "../../models";
-import { OptionNode, ThoughtNode } from "./nodes";
+import { OptionNode, ThoughtNode, zodOptionSchema } from "./nodes";
 import { MultiBeamToT } from "./strategies/MultiBeam";
 import { BFSToT } from "./strategies/BFS";
 import { DFSToT } from "./strategies/DFS";
 import { BestFirstToT } from "./strategies/BestFirst";
 import { MCTSToT } from "./strategies/MCTS";
+import type { LogicReturnType } from "./strategies/strategy";
 
 export interface TreeOfThoughtsEvents {
     /** Triggered when the search returns to a previous state. */
@@ -86,12 +87,15 @@ export class TreeOfThoughts {
     config: TreeOfThoughtsConfig;
     /** List with nodes */
     nodes: [OptionNode, ThoughtNode[]][] = [];
+    private structuredOutputSchema?: z4.ZodTypeAny;
+    private structuredOutputMaxRecallTries = 3;
     
     constructor(config: TreeOfThoughtsConfig) {
-        this.config = config;
-
-        config.maxThoughtsDepth = DEFAULT_THOUGHTS_DEPTH;
-        config.thoughtsCount = DEFAULTS_THOUGHTS_COUNT;
+        this.config = {
+            ...config,
+            maxThoughtsDepth: config.maxThoughtsDepth ?? DEFAULT_THOUGHTS_DEPTH,
+            thoughtsCount: config.thoughtsCount ?? DEFAULTS_THOUGHTS_COUNT
+        };
     }
 
     public async emitEvent<EventName extends keyof TreeOfThoughtsEvents>(
@@ -126,16 +130,29 @@ export class TreeOfThoughts {
         return this;
     }
 
-    async callableUnitInvokeStructured(unitName: keyof Pick<TreeOfThoughtsConfig, "evaluator" | "thoughtGenerator" | "optionGenerator">, schema: z4.ZodType, instruction: string): Promise<AIMessage> {
+    getOptionNodeSchema(): z4.ZodTypeAny {
+        if (!this.structuredOutputSchema) {
+            return zodOptionSchema;
+        }
+
+        return zodOptionSchema.extend({
+            zodSchema: this.structuredOutputSchema
+        });
+    }
+
+    async callableUnitInvokeStructured(unitName: keyof Pick<TreeOfThoughtsConfig, "evaluator" | "thoughtGenerator" | "optionGenerator">, schema: z4.ZodTypeAny, instruction: string): Promise<AIMessage> {
         const u = this.config[unitName];
+        const schemaDescription = typeof (schema as any).toJSONSchema === "function"
+            ? `\n\n# Output Schema\n${JSON.stringify((schema as any).toJSONSchema(), null, 2)}\n\nYou've to generate output follows output schema`
+            : "";
         const systemMessage: MessagesVariations = {
             type: "system",
-            content: instruction
+            content: `${instruction}${schemaDescription}`
         };
 
         if (u instanceof ReActAgent) {
             u.agentConfig.messages = [systemMessage];
-            const result = await u.invokeStructuredOutput(schema, 3);
+            const result = await u.invokeStructuredOutput(schema, this.structuredOutputMaxRecallTries);
             const lastMsg = result.messages[result.messages.length - 1] as AIMessage;
             
             if (!result.messages.length || lastMsg.type !== "ai" || !lastMsg.structuredOutput) {
@@ -145,7 +162,7 @@ export class TreeOfThoughts {
             return lastMsg;
         }
         else if ((u as CustomCallUnit)?.type === "custom-callunit") {
-            for (let i = 0; i < 3; i++) {
+            for (let i = 0; i < this.structuredOutputMaxRecallTries; i++) {
                 try {
                     const lastMessages = await (u as CustomCallUnit).invokeStructuredOutput([systemMessage]);
                     const lastMsg = lastMessages[lastMessages.length - 1] as AIMessage;
@@ -153,15 +170,15 @@ export class TreeOfThoughts {
                         return lastMsg;
                     }
                 } catch (e) {
-                    if (i === 2) throw e;
+                    if (i === this.structuredOutputMaxRecallTries - 1) throw e;
                 }
             }
-            throw new Error(`Failed to generate structured output for ${unitName} after 3 tries`);
+            throw new Error(`Failed to generate structured output for ${unitName} after ${this.structuredOutputMaxRecallTries} tries`);
         }
         else if ((u as AgentModel)?.typeAPI === "model") {
             const model = u as OpenAI;
             model.config.messages = [systemMessage];
-            const result = await model.invokeStructuredOutput(schema, 3);
+            const result = await model.invokeStructuredOutput(schema, this.structuredOutputMaxRecallTries);
             const lastMsg = result.answer[result.answer.length - 1] as AIMessage;
             
             if (!lastMsg || lastMsg.type !== "ai" || !lastMsg.structuredOutput) {
@@ -173,7 +190,7 @@ export class TreeOfThoughts {
         else if (u instanceof ResourceAugmentedGeneration || (u as any)?.type === "rag-chain") {
             const result = await (u as ResourceAugmentedGeneration<any, any, any, any, any, any, any>).invoke({
                 method: "invokeStructuredOutput",
-                params: [schema, 3]
+                params: [schema, this.structuredOutputMaxRecallTries]
             });
 
             const list = 'answer' in result ? result.answer : result.messages;
@@ -188,7 +205,48 @@ export class TreeOfThoughts {
         else throw new Error("Unsupported CallUnit type");
     }
 
+    /** Invoke to get output */
     async invoke() {
         return await this.config.graphSearchAlgorithm.logic(this);
+    }
+
+    /** Invoke to get the structured output */
+    async invokeStructuredOutput<Schema extends z4.ZodTypeAny>(
+        schema: Schema,
+        maxRecallTries?: number
+    ): Promise<LogicReturnType<z4.infer<Schema>>> {
+        const previousSchema = this.structuredOutputSchema;
+        const previousMaxRecallTries = this.structuredOutputMaxRecallTries;
+
+        this.structuredOutputSchema = schema;
+        this.structuredOutputMaxRecallTries = Math.max(1, maxRecallTries ?? 3);
+
+        try {
+            const result = await this.invoke();
+            const optionsById = new Map(result.allOptions.map(option => [option.id, option]));
+
+            const validateStructuredOutput = (option: OptionNode): void => {
+                if (!Object.prototype.hasOwnProperty.call(option, "zodSchema")) {
+                    const matchingOption = optionsById.get(option.id);
+                    if (matchingOption && Object.prototype.hasOwnProperty.call(matchingOption, "zodSchema")) {
+                        option.zodSchema = matchingOption.zodSchema;
+                    }
+                }
+
+                if (!Object.prototype.hasOwnProperty.call(option, "zodSchema")) {
+                    throw new Error(`Option ${option.id} did not contain the requested structured output`);
+                }
+
+                option.zodSchema = schema.parse(option.zodSchema);
+            };
+
+            result.allOptions.forEach(validateStructuredOutput);
+            validateStructuredOutput(result.theBestOption);
+
+            return result as LogicReturnType<z4.infer<Schema>>;
+        } finally {
+            this.structuredOutputSchema = previousSchema;
+            this.structuredOutputMaxRecallTries = previousMaxRecallTries;
+        }
     }
 }

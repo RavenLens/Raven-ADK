@@ -1,17 +1,13 @@
 
 import z4 from "zod/v4";
-import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
+import { OptionNode, ThoughtNode, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { TreeOfThoughts } from "../ToT";
-import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
+import { createGenerateOptionsSchema, createTheBestOptionSchema, LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
 interface BestFirst_GenerateOptions {
     options: OptionNode[];
 }
-
-const zodGenerateOptionsSchema: z4.ZodType<BestFirst_GenerateOptions> = z4.object({
-    options: z4.array(zodOptionSchema).describe("List with generated options")
-})
 
 interface BestFirst_NewThoughtsSchema {
     thoughts: ThoughtNode[]
@@ -24,10 +20,6 @@ const zodNewThoughtsSchema: z4.ZodType<BestFirst_NewThoughtsSchema> = z4.object(
 interface BestFirst_TheBestOption {
     theBestOption: OptionNode[];
 }
-
-const zodTheBestOptionSchema: z4.ZodType<BestFirst_TheBestOption> = z4.object({
-    theBestOption: z4.array(zodOptionSchema).describe("The best option selected")
-})
 
 interface BestFirst_RateNodesResponse {
     ratings: { id: string; rate: any }[];
@@ -52,6 +44,10 @@ interface FrontierNode {
     score: number;
 }
 
+/**
+ * Structured-output notation: the global frontier and final selection retain
+ * option values validated against TreeOfThoughts.invokeStructuredOutput's schema.
+ */
 export class BestFirstToT implements StrategySchema {
     static name = "BestFirst-ToT";
     private ToT: TreeOfThoughts | undefined = undefined;
@@ -130,7 +126,11 @@ Generate thoughts that continue this reasoning path.
 
         // 1. Initial Generation
         const initialOptionsPrompt = `Generate ${totClass.config.initialOptionsCount} initial options for: ${totClass.config.query}`;
-        const optResult = await totClass.callableUnitInvokeStructured("optionGenerator", zodGenerateOptionsSchema, initialOptionsPrompt);
+        const optResult = await totClass.callableUnitInvokeStructured(
+            "optionGenerator",
+            createGenerateOptionsSchema(totClass.getOptionNodeSchema()),
+            initialOptionsPrompt
+        );
         const options = (optResult.structuredOutput as BestFirst_GenerateOptions).options;
         options.forEach(o => {
             o.id = randomUUID();
@@ -240,7 +240,11 @@ Generate thoughts that continue this reasoning path.
 
     private async selectFinalBest(chains: any[]): Promise<OptionNode> {
         const systemPrompt = `Select the best final option from these reasoning chains: ${JSON.stringify(chains, null, 4)}`;
-        const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTheBestOptionSchema, systemPrompt);
+        const result = await this.ToT!.callableUnitInvokeStructured(
+            "evaluator",
+            createTheBestOptionSchema(this.ToT!.getOptionNodeSchema()),
+            systemPrompt
+        );
         const best = (result.structuredOutput as BestFirst_TheBestOption).theBestOption[0];
         await this.ToT!.emitEvent("finalOptionSelected", best);
         return best;

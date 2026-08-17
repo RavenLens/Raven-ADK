@@ -32,7 +32,7 @@ export interface AgenticEvaluatorEvents {
     loop_iteration: (iteration: number) => any;
 }
 
-type AEvalConfig = Omit<ReActAgentConfig<any, any, any>, "messages">;
+export type AEvalConfig = Omit<ReActAgentConfig<any, any, any>, "messages">;
 
 export class AgenticEvaluator implements AgenticEvaluatorSchema {
     messages: MessagesVariations[];

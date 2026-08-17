@@ -1,3 +1,5 @@
+> Check [FactChecker docs for more](../../../../documentation/FactChecker.md)
+
 ## Usecase
 - Verify truthness of the specified thing
 

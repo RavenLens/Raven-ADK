@@ -1,24 +1,16 @@
 import z4 from "zod/v4";
-import { OptionNode, ThoughtNode, zodOptionSchema, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
+import { OptionNode, ThoughtNode, zodRateSchema, zodThoughtNodeSchema } from "../nodes";
 import { DEFAULT_THOUGHTS_DEPTH, DEFAULTS_THOUGHTS_COUNT, TreeOfThoughts } from "../ToT";
-import { LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
+import { createGenerateOptionsSchema, createTheBestOptionSchema, createTopKOptionsSchema, LogicReturnType, ReasoningChain, StrategySchema } from "./strategy";
 import { randomUUID } from "node:crypto";
 
 interface MultiBeam_GenerateOptions {
     options: OptionNode[];
 }
 
-const zodGenerateOptionsSchema: z4.ZodType<MultiBeam_GenerateOptions> = z4.object({
-    options: z4.array(zodOptionSchema).describe("List with generated options")
-})
-
 interface MultiBeam_EvaluateTopKOptionsSchema {
     topOptions: OptionNode[];
 }
-
-const zodTopKOptions: z4.ZodType<MultiBeam_EvaluateTopKOptionsSchema> = z4.object({
-    topOptions: z4.array(zodOptionSchema).describe("List with Top-K options where k is the number")
-})
 
 interface MultiBeam_EvaluateTopThoughtsSchema {
     topThoughts: ThoughtNode[];
@@ -39,10 +31,6 @@ const zodNewThoughtsSchema: z4.ZodType<MultiBeam_NewThoughsSchema> = z4.object({
 interface MultiBeam_TheBestOption {
     theBestOption: OptionNode[];
 }
-
-const zodTheBestOptionSchema: z4.ZodType<MultiBeam_TheBestOption> = z4.object({
-    theBestOption: z4.array(zodOptionSchema).describe("The best option selected")
-})
 
 interface MultiBeam_RateNodesResponse {
     ratings: { id: string; rate: any }[];
@@ -69,6 +57,10 @@ export interface MultiBeamConfig {
     pruneAtBegining?: boolean;
 }
 
+/**
+ * Structured-output notation: each beam retains a schema-valid option value
+ * through global pruning and final beam selection.
+ */
 export class MultiBeamToT implements StrategySchema {
     static name = "MultiBeam-ToT";
     private ToT: TreeOfThoughts | undefined = undefined;
@@ -159,11 +151,15 @@ ${JSON.stringify(options, null, 4)}
 
 # Output Requirement
 Return the selected top-${this.config.topK} options strictly adhering to the following schema:
-${zodTopKOptions.toJSONSchema()}
+            ${createTopKOptionsSchema(this.ToT!.getOptionNodeSchema()).toJSONSchema()}
             `
     
     
-            const topKOptionsObj = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTopKOptions, systemPrompt);
+            const topKOptionsObj = await this.ToT!.callableUnitInvokeStructured(
+                "evaluator",
+                createTopKOptionsSchema(this.ToT!.getOptionNodeSchema()),
+                systemPrompt
+            );
             const structured = topKOptionsObj.structuredOutput as MultiBeam_EvaluateTopKOptionsSchema;
     
             if (!structured || !Array.isArray(structured.topOptions)) {
@@ -207,7 +203,11 @@ ${this.ToT!.config.query}
 Note: Do NOT provide ratings (\`initialRate\` field nor \`finalRate\`) at this stage; focus on the ID and the content.
         `
         const promises = Array.from({ length: this.ToT!.config.initialOptionsCount }, () =>
-            this.ToT!.callableUnitInvokeStructured("optionGenerator", zodGenerateOptionsSchema, prompt)
+            this.ToT!.callableUnitInvokeStructured(
+                "optionGenerator",
+                createGenerateOptionsSchema(this.ToT!.getOptionNodeSchema()),
+                prompt
+            )
         );
         const results = await Promise.all(promises);
         const optionsFlat = results.flatMap(res => (res.structuredOutput as MultiBeam_GenerateOptions).options);
@@ -305,10 +305,14 @@ ${JSON.stringify(allReasoningChains, null, 4)}
 
 # Output Requirement
 Return the best option strictly adhering to the following schema. Ensure the \`justification\` field is populated.
-${zodTheBestOptionSchema.toJSONSchema()}
+${createTheBestOptionSchema(this.ToT!.getOptionNodeSchema()).toJSONSchema()}
         `;
 
-        const result = await this.ToT!.callableUnitInvokeStructured("evaluator", zodTheBestOptionSchema, systemPrompt);
+        const result = await this.ToT!.callableUnitInvokeStructured(
+            "evaluator",
+            createTheBestOptionSchema(this.ToT!.getOptionNodeSchema()),
+            systemPrompt
+        );
         const structured = result.structuredOutput as MultiBeam_TheBestOption;
         
         if (!structured || !Array.isArray(structured.theBestOption) || structured.theBestOption.length === 0) {

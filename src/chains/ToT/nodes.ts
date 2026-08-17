@@ -21,11 +21,13 @@ export const zodRateSchema = z4.object({
     justification: z4.string().describe("Justification of your decision")
 }).describe("Rate schema")
 
-export interface OptionNode {
+export interface OptionNode<StructuredOutput = unknown> {
     /** Unique id used to track the decision took for node */
     id: string;
     type: "option-node";
     content: string;
+    /** Parsed user-facing structured output associated with this option */
+    zodSchema?: StructuredOutput;
     /** Rate is attached in 2nd operation after original generation */
     initialRate?: Rate;
     /** Rate is  */
@@ -34,10 +36,11 @@ export interface OptionNode {
     justification?: string;
 }
 
-export const zodOptionSchema: z4.ZodType<OptionNode> = z4.object({
+export const zodOptionSchema = z4.object({
     id: z4.string().describe("Identifier of existsing option node from your awareness"),
     type: z4.enum(["option-node"]).describe("type of option node"),
     content: z4.string().describe("Description of the candidate solution/option"),
+    zodSchema: z4.unknown().optional().describe("Structured output associated with this option when requested"),
     initialRate: zodRateSchema.optional().describe("Score compoind at the begining to calculate the best option without having thoights present"),
     finalRate: zodRateSchema.optional().describe("Rating floating point 0.0 - 1.0 score generated for the option at the end by comparing all thoughts"),
     justification: z4.string().optional().describe("Justification for the selection if it was picked as the best final option")
