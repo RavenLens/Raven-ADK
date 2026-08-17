@@ -1,4 +1,4 @@
-import { SupportedLanguageName } from "./mutual";
+import { SupportedLanguageName } from "../mutual";
 
 export interface ASTParseResult {
     tree: unknown;

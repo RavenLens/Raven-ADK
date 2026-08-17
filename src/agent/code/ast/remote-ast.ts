@@ -6,7 +6,7 @@ import type {
     ASTTransformResult,
     ASTUtility
 } from "./ast";
-import type { SupportedLanguageName } from "./mutual";
+import type { SupportedLanguageName } from "../mutual";
 
 export interface RemoteASTUtilityConfig {
     baseUrl: string;

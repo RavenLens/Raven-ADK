@@ -1,10 +1,10 @@
 
-import type { DeterministicMemorySchema, ToolBasedMemorySchema } from "../../memory";
-import type { AgentModel, ConfiguredMemory, ReActAgentPluginSpec } from "../../ReAct.agent";
-import type { SchemaSkillStore } from "../../skills/stores/schema";
-import type { CodeExecutionSandboxSchema, Tool } from "../../tools";
-import type { HITLTransportSchema } from "../../tools/hitl/hitlToolSchema";
-import type { MCP } from "../../tools/mcp/mcpTools";
+import type { DeterministicMemorySchema, ToolBasedMemorySchema } from "../../../memory";
+import type { AgentModel, ConfiguredMemory, ReActAgentPluginSpec } from "../../../ReAct.agent";
+import type { SchemaSkillStore } from "../../../skills/stores/schema";
+import type { CodeExecutionSandboxSchema, Tool } from "../../../tools";
+import type { HITLTransportSchema } from "../../../tools/hitl/hitlToolSchema";
+import type { MCP } from "../../../tools/mcp/mcpTools";
 import type {
 	CodeActPlanConfig,
 	CodeActSandboxConfig,
