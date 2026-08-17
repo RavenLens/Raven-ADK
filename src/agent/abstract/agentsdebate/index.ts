@@ -1,8 +1,7 @@
 import { DeterministicMemorySchema, ToolBasedMemorySchema } from "../../memory";
-import { ReActAgent, ReActAgentPluginSpec } from "../../ReAct.agent";
+import { ReActAgent } from "../../ReAct.agent";
 import { AIMessage, MessagesVariations } from "../../state";
 import { Tool } from "../../tools";
-import { AgenticEvaluator } from "../..";
 import z from "zod/v4";
 import { AgentsDebateEvents, AgentsDebateLoopEvent } from "./events";
 import { AgentCommunicationStageRecord, HandoffExecution, InvokeConsultationOptions, InvokeConsultationResult, InvokeCritiqueOptions, InvokeCritiqueResult, InvokeHandoffOptions, InvokeHandoffResult } from "./config";
@@ -967,6 +966,7 @@ export class AgentsDebate<
         // Ask the conclusion agent to synthesize the handoff results into the final answer.
         this.emitEvent("conclusion_start", conclusionInput);
         let conclusion: DebateAgentResponse;
+
         try {
             conclusion = await this.invokeWithTimeLimit(
                 conclusionAgent.agentLogic,

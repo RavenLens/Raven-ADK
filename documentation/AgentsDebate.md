@@ -3,6 +3,7 @@
 `AgentsDebate` coordinates structured-output agents around one task. The implemented workflows are consultation, critique, and handoff. Multi-agent agreement is evidence for a solution, not proof that the solution is correct; applications may still need a domain-specific evaluator or verifier.
 
 ## Participant Contract
+Define participant as the runner of agent logic
 
 Each `AgentDebateType` has:
 
@@ -11,6 +12,10 @@ Each `AgentDebateType` has:
 - `agentLogic`: a `ReActAgent` or an object implementing `invokeStructuredOutput(schema, options)`.
 - `tokenizer`: a function used for token-boundary accounting.
 - `debateBoundary`: optional per-agent token, time, and round limits.
+
+Use ready participants
+- Use ReActAgent
+or define your own participant
 
 Participants return the structured `DebateAgentResponse` protocol for workflow execution:
 
@@ -182,5 +187,3 @@ Consultation and debate stages preserve participant names, messages, and timesta
 - `ReActAgent` for model reasoning and tool use.
 - `AgenticEvaluator` elsewhere in an application for judging results.
 - Custom structured participants for deterministic or remote workflows.
-
-The repository includes OpenAI live integration tests for `invokeDebateAgent`, `invokeConsultation`, `invokeCritique`, and `invokeHandoff`. They run when `OPENAI_API_KEY` is configured and are skipped in offline test runs.
