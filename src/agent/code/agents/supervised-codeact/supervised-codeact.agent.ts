@@ -5,12 +5,17 @@ import type { SchemaSkillStore } from "../../../skills/stores/schema";
 import type { CodeExecutionSandboxSchema, Tool } from "../../../tools";
 import type { HITLTransportSchema } from "../../../tools/hitl/hitlToolSchema";
 import type { MCP } from "../../../tools/mcp/mcpTools";
+import { ASTUtility } from "../../ast/ast";
+import { LSPClient } from "../../lsp/lsp";
 import type {
+	CodeActInvokeOptions,
 	CodeActPlanConfig,
 	CodeActSandboxConfig,
 	CodeActValidationCommand,
 	CodeActWorkspaceConfig
 } from "../codeact/codeact.agent";
+import { CodeActSchema } from "../schema";
+import { CodeActState } from "../shared";
 
 /** A worker that implements a task or coordinates work inside a group. */
 export type WorkerSubrole = "worker" | "coordinator-of-group";
@@ -273,6 +278,17 @@ export interface SupervisedCodeActConfig<
 	tools?: Tool<any, any>[];
 	/** MCP servers available to the supervised run. */
 	mcp?: MCP[];
+	/**
+	 * List with LSP utilities
+	 * is a language-intelligence protocol for operations such as diagnostics, hover, definition lookup, references, rename, and completion
+	*/
+	lsp?: LSPClient[];
+	
+	/** 
+	 * List with AST utilities
+	 * is a syntax-tree capability, usually local and language/parser-specific, for parsing, querying, and optionally transforming source code
+	*/
+	ast?: ASTUtility[];
 	/** Optional system instructions shared by the supervised run. */
 	systemPrompt?: string;
 	/** Optional bounded plan settings inherited from the CodeAct contract. */
@@ -298,12 +314,30 @@ export class SupervisedCodeActAgent<
 	Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>,
 	HITL extends HITLTransportSchema,
 	Sandbox extends CodeExecutionSandboxSchema
-> {
+> implements CodeActSchema<CodeActInvokeOptions, Promise<CodeActState>> {
 	protected pattern: "supervised-codeact" = "supervised-codeact";
 	/** Configuration captured by this agent instance. */
 	config: SupervisedCodeActConfig<Skills, Memory, HITL, Sandbox>;
 
+	/** 
+     * `null` - for first run
+     * 
+     * Overriden once `invoke` is executed - persists to the next `invoke` method execution
+	*/
+	state: CodeActState | null = null;
+
 	constructor(config: SupervisedCodeActConfig<Skills, Memory, HITL, Sandbox>) {
 		this.config = config;
 	}
+
+	/** TODO: */
+	async invoke(options: CodeActInvokeOptions): Promise<CodeActState> {
+        void options;
+        throw new Error("CodeActAgent.invoke is not implemented yet.");
+    }
+
+    /** Perform rollback of agent changes from given state */
+    async rollback(state: CodeActState) {
+        return false;
+    }
 }

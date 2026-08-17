@@ -192,7 +192,7 @@ export interface CodeActEvents<ReturnType = void | Promise<void>> extends ReActA
     validation_command_end: (command: CodeActValidationCommand) => ReturnType;
 }
 
-export class CodeActAgent<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema, Sandbox extends CodeExecutionSandboxSchema> implements CodeActSchema <CodeActInvokeOptions, Promise<CodeActState>> {
+export class CodeActAgent<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema, Sandbox extends CodeExecutionSandboxSchema> implements CodeActSchema<CodeActInvokeOptions, Promise<CodeActState>> {
     protected pattern: "codeact" = "codeact";
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     config: CodeActConfig<Skills, Memory, HITL, Sandbox>;
