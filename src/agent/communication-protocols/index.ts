@@ -1,1 +1,2 @@
-export * as CommunicationProtocolSchema from "./schema"
+export * as Protocols from "./protocols"
+export * as ProtocolsSchema from "./schema";

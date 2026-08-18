@@ -1,0 +1,1 @@
+export const PROTOCOL_NAME = "A2A (Agent-to-Agent Protocol by GOOGLE)";
