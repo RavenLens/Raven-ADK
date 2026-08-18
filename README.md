@@ -13,6 +13,8 @@
 
 > Join to out community on [discord](https://discord.gg/XJed3eKn4v)
 
+> **We seek for contributors🚀!**. Join to our [discord](https://discord.gg/XJed3eKn4v) and check for more in [Contribution Evangel](./CONTRIBUTION.md)
+
 <!-- Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor. -->
 
 #### RavenADK as default supports these SOTA Agentic patterns:
@@ -42,6 +44,11 @@
 - AEval - Agentic evaluation for scoring responses and guiding improvements - [check](./documentation/AEval.md)
 - FactChecker - Verify the truthfulness of specified information - [check](./documentation/FactChecker.md)
 - AgentsDebate - Debate among agents the next step to take - [check](./documentation/AgentsDebate.md)
+
+## [Showcases](https://github.com/RavenLens/RavenADK-Showcase.git)
+We made few projects proves **RavenADK** capabilities in real world business-scenario apps
+
+Check showcase projects in [Showcases Repo](https://github.com/RavenLens/RavenADK-Showcase.git)
 
 ## Installation
 ```bash
