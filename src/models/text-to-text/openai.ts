@@ -8,7 +8,6 @@ import { AIMessage, CompactionMessage, ToolMessage, ReasoningMessage, MessagesVa
 import { ReasoningEffort } from "openai/resources";
 import { invokeStructuredOutputWithRetries } from "./structuredOutput";
 import { compactMessagesWithStructuredOutput } from "./structuredOutput";
-import { randomUUID } from "node:crypto";
 
 export interface OpenAIConfig extends LLMConfig {
     reasoningEffort?: ReasoningEffort | null;
@@ -334,7 +333,7 @@ export class OpenAI implements StandardLLMShema {
         // Map output for answer
         const calledToolsMessage = answerTools.map(toolCall => {
             const casted = toolCall as any;
-            const toolId = casted.call_id || casted.id || `call_${randomUUID().slice(0, 8)}`;
+            const toolId = casted.call_id || casted.id || `call_${globalThis.crypto.randomUUID().slice(0, 8)}`;
             
             // Handle both Model-neutral 'input' and Chat-specific 'arguments' or 'function_call.arguments'
             let content = casted.input || casted.arguments;
