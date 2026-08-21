@@ -29,8 +29,8 @@ These are the protocol surfaces currently represented in the repository:
 
 | Protocol | Focus | Documentation and implementation status |
 | --- | --- | --- |
-| [A2A (Agent-to-Agent)](./a2a/README.md) | Interoperable communication between local or remote agents. | The RavenADK protocol namespace exists; the guide is being expanded. |
-| [ACP (Agent Communication Protocol)](./acp/README.md) | Communication for edge and local agentic systems. | The RavenADK protocol namespace exists; the guide is being expanded. |
+| [A2A (Agent-to-Agent)](./a2a/README.md) | HTTP JSON-RPC communication with remote agents. | Outbound client binding implemented; inbound server queue is not yet included. |
+<!-- | [ACP (Agent Communication Protocol)](./acp/README.md) | Communication for edge and local agentic systems. | The RavenADK protocol namespace exists; the guide is being expanded. | -->
 <!-- | [G4A](./g4a/README.md) | Agent treats agents pool  | -->
 | Custom Protocols with RavenADK bindings | An application-specific protocol mapped to the RavenADK communication model. | Use the canonical concepts below as the compatibility boundary with whatever protocol you wish to hug. |
 
@@ -55,6 +55,46 @@ surfaces so a host application can choose who controls communication:
 Tools should expose constrained protocol operations rather than raw HTTP,
 MQTT, WebRTC, or other transport clients. Plugins and host code can enforce
 security and resource policy before anything leaves the local agent boundary.
+
+### ReActAgent Example
+
+Any object satisfying `ProtocolBinding` can be supplied to ReActAgent. The A2A
+factory creates such an object:
+
+```ts
+import { A2A } from "@ravenlens/raven-adk";
+import { ReActAgent } from "@ravenlens/raven-adk/agents";
+
+const protocol = A2A.createBinding({
+	endpoint: "https://remote-agent.example.com/rpc",
+	participant: {
+		id: "local-agent",
+		name: "Local ReAct Agent",
+		capabilities: ["delegate_task", "consult_agents"]
+	}
+});
+
+const agent = new ReActAgent({
+	model,
+	systemPrompt: "Use delegated research when it improves the answer.",
+	messages: [],
+	tools: [],
+	communicationProtocols: [protocol]
+});
+
+await agent.invoke("Ask a specialist to review this question.");
+```
+
+During construction, ReActAgent subscribes to the protocol client's canonical
+events and registers delegation and consultation tools. A delegation tool calls
+`client.delegate()`, then awaits the returned `TaskHandle.wait()` before
+returning its tool output. This keeps remote work inside the normal ReAct
+Reason/Act/Observe loop and prevents the invocation from completing before the
+remote task reaches a terminal state.
+
+The A2A binding currently covers outbound work. ReActAgent's `serve()` method
+requires a binding with an inbound `queue`; an A2A binding must be paired with a
+server-side transport and adapter before it can receive remote tasks.
 
 ## Core Communication Flows
 
@@ -95,47 +135,24 @@ events to those entries.
 
 | Event name | Emitted when |
 | --- | --- |
-| `task_queued` | A task is accepted into a local or remote work queue. |
-| `task_accepted` | A participant accepts responsibility for the task. |
-| `task_started` | Task execution begins. |
+| `activity_started` | A protocol activity begins processing. |
+| `task_submitted` | A task is accepted by the remote protocol. |
 | `task_progress` | A participant reports progress before the task reaches a terminal state. |
 | `task_completed` | A task finishes successfully and produces a result. |
 | `task_failed` | A task cannot complete because execution returned an error. |
-| `task_rejected` | A participant or policy refuses the task before execution. |
-| `task_cancellation_requested` | A caller requests that task execution stop. |
-| `task_aborted` | Task execution stops before producing a normal completion. |
-| `handoff_start` | Responsibility for a task or task fragment is being transferred. |
-| `handoff_end` | A handoff workflow finishes and returns its result. |
-| `handoff_error` | A handoff workflow fails. |
-| `consultation_start` | An agent requests advice while retaining task responsibility. |
-| `consultation_end` | A consultation workflow returns its result. |
-| `consultation_error` | A consultation workflow fails. |
-| `critique_start` | An agent requests a review of work or a result. |
-| `critique_end` | A critique workflow returns its result. |
-| `critique_error` | A critique workflow fails. |
-| `discovery_start` | Agent, skill, tool, or knowledge discovery begins. |
-| `discovery_end` | Discovery returns available capabilities or resources. |
-| `discovery_error` | Discovery fails. |
-| `message_sent` | A protocol message is sent to another participant. |
-| `message_received` | A protocol message is received from another participant. |
-| `tool_invoked` | A communication-related tool is requested. |
-| `tool_executed` | A communication-related tool returns an output. |
-| `artifact_created` | A task creates an artifact. |
-| `artifact_attached` | An artifact is attached to a message or task result. |
-| `approval_requested` | A task requires human or policy approval. |
-| `approval_resolved` | An approval request is accepted, rejected, or otherwise resolved. |
+| `task_cancelled` | A task is cancelled by a caller or participant. |
+| `agent_discovered` | An agent card matches a discovery request. |
+| `message_published` | A protocol message is published independently of task completion. |
+| `authentication_required` | The protocol requires credentials or another authentication step. |
+| `error` | The protocol encounters a transport-level or binding-level error. |
 
-The event contract is exposed through two complementary methods:
+The event contract is exposed through `onEvent` on `ProtocolClient`. Protocol
+bindings emit normalized events internally; consumers do not need to know which
+transport produced them.
 
 | Method | Used by | Responsibility |
 | --- | --- | --- |
 | `onEvent` | The application or protocol consumer | Register a typed listener for events and react to progress, results, errors, or cancellation. |
-| `emitEvent` | Internal protocol and agent logic | Emit a typed event to the registered listeners after local or bound protocol work changes state. |
-
-Users listen to events through `onEvent`; they do not need to know whether the
-event came from an in-process agent, a remote binding, or a particular
-transport. `emitEvent` is an internal implementation mechanism used to publish
-the canonical event, including events normalized from a protocol binding.
 
 Cancellation should be explicit and propagate through the same task identity
 used for invocation, so local queues and remote bindings can stop or reconcile
@@ -175,8 +192,8 @@ execution without changing its task semantics.
 ## Documentation Map
 
 - [A2A overview](./a2a/README.md)
-- [ACP overview](./acp/README.md)
-- [G4A overview](./g4a/README.md)
+<!-- - [ACP overview](./acp/README.md)
+- [G4A overview](./g4a/README.md) -->
 - [Communication architecture notes](../../src/agent/communication-protocols/Vision.md)
 
 The A2A and ACP pages are intentionally linked from this overview while their
