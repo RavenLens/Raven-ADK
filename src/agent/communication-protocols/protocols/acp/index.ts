@@ -1,1 +1,0 @@
-export const PROTOCOL_NAME = "ACP (Agents Communication Protocol by IBB)";

@@ -12,7 +12,6 @@ local and remote agents. The model must be usable by:
 The common model is then mapped to external protocols and transports such as:
 
 - A2A
-- ACP
 
 ## Support
 Communication protocols have to support these patterns:
