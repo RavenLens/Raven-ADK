@@ -3,12 +3,11 @@ import { Anthropic } from "../models/text-to-text/anthropic";
 import { InvokeOptions, LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/text-to-text/openai";
 import { Google } from "../models/text-to-text/google";
-import { SchemaSkillStore } from "./skills/stores/schema";
+import type { SchemaSkillStore } from "./skills/stores/schema.js";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
-import { MCPTool } from "./tools/mcp/mcpTools";
 import { Tool } from "./tools/tools";
-import { RunPod } from "../models/text-to-text/runpod";
+import type { RunPod } from "../models/text-to-text/runpod.js";
 import z from "zod";
 import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
@@ -1718,15 +1717,15 @@ export class ReActAgent
                         this.emitEvent("tool_invoked", toolName, toolParams);
 
                         try {
-                            const toolOutputExecution = await this.abortable.runAbortable(() => definedTool instanceof MCPTool
-                                ? definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
+                            const toolOutputExecution = await this.abortable.runAbortable(() => "isMCPTool" in definedTool
+                                ? (definedTool as unknown as Tool<any, any> & { invokeFromMCP(args: Record<string, unknown>): Promise<string> }).invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
                                 : definedTool.invoke(toolParams as never));
 
                             if (toolOutputExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
                                 return ABORTED_OPERATION;
                             }
 
-                            const toolOutput = toolOutputExecution;
+                            const toolOutput = toolOutputExecution as string;
                             this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
 
                             return {
