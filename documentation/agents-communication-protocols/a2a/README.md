@@ -19,7 +19,118 @@ It is a client binding. It does not create an HTTP server or provide an inbound
 `ProtocolTaskQueue` yet, so it cannot by itself be used as the inbound source
 for `ReActAgent.serve()`.
 
-## ReActAgent Usage
+## Using `serve()` with A2A
+
+`ReActAgent.serve()` is the inbound worker side of the protocol boundary. It
+does not listen on an HTTP port itself. Instead, it consumes tasks from
+`protocol.queue`:
+
+```ts
+const processedTasks = await agent.serve(a2aServerBinding, {
+	signal: shutdownController.signal,
+	maxTasks: 100,
+	continueOnError: true
+});
+```
+
+For this to work, `a2aServerBinding` must provide a server-side
+`ProtocolTaskQueue`. The A2A HTTP handler should enqueue an incoming request and
+return or stream the assigned task ID. A long-running worker should run
+`serve()` and publish the result from `queue.complete()` or `queue.fail()` back
+through the A2A task endpoint:
+
+```text
+incoming A2A message/send
+		|
+		v
+queue.enqueue(request) -> task ID returned to caller
+		|
+		v
+agent.serve(binding)
+		|
+		+--> queue.dequeue() -> ReActAgent.invoke()
+		|
+		+--> queue.complete(task ID, result)
+			  or queue.fail(task ID, error)
+		|
+		v
+remote caller reads tasks/get or receives a streamed update
+```
+
+The binding supplied to `serve()` must have this shape:
+
+```ts
+import { ProtocolsSchema } from "@ravenlens/raven-adk";
+
+const a2aServerBinding: ProtocolsSchema.Schema = {
+	name: "A2A server",
+	version: "1.0",
+	client: a2aClient,
+	queue: a2aInboundQueue,
+	participant: {
+		id: "research-agent",
+		name: "Research Agent",
+		capabilities: ["delegate_task"]
+	}
+};
+
+await agent.serve(a2aServerBinding, {
+	signal: shutdownController.signal
+});
+```
+
+`a2aInboundQueue` is owned by the HTTP server integration and must implement
+`enqueue`, `dequeue`, `complete`, `fail`, `cancel`, and `size` from
+`ProtocolTaskQueue`. `dequeue()` should wait while there is no work and wake
+when the A2A handler enqueues a request or the abort signal is triggered.
+
+The current `A2A.createBinding()` implementation does not create
+`a2aInboundQueue` or an HTTP server, so this server binding is an integration
+point to implement in the host application. With the current code, use
+`createBinding()` for outbound calls to another A2A agent; use `serve()` only
+after pairing the local ReActAgent with a server-side A2A transport and queue.
+
+## Choosing Between `invoke()` and `serve()`
+
+Use `invoke()` when your application owns the current user request and the
+ReActAgent may decide to ask another agent for help. The A2A binding is placed
+in `communicationProtocols`; ReActAgent exposes delegation and consultation as
+tools, and the model chooses whether to call them during this finite run.
+
+Use `serve()` when this ReActAgent is itself an A2A participant that must accept
+tasks from other agents. `serve()` is a worker loop: it waits on an inbound
+`ProtocolTaskQueue`, calls the ReAct graph for each queued request, and reports
+the result back through the queue. It is normally started as a separate,
+long-running process alongside the HTTP A2A server.
+
+| Method | Use it for | Required A2A capability |
+| --- | --- | --- |
+| `invoke()` | A local user or orchestrator starts a finite run and may delegate outward. | `client`; `createBinding()` is sufficient. |
+| `serve()` | The local agent receives and processes work submitted by external agents. | `queue`; the current client-only `createBinding()` is not sufficient. |
+
+The two methods can be used by the same application when it both delegates work
+and accepts work:
+
+```ts
+// Outbound/orchestrator path.
+const answer = await agent.invoke({
+	messages: [{
+		type: "user",
+		content: "Compare the latest findings on Mars water reservoirs."
+	}]
+});
+
+// Inbound/worker path, using a server-side binding with an A2A-backed queue.
+const processed = await agent.serve(a2aServerBinding, {
+	signal: shutdownController.signal
+});
+```
+
+Do not call `serve()` with the result of `A2A.createBinding()` alone. That
+factory creates an outbound client binding without `queue`, so `serve()` will
+throw `Protocol "..." does not provide an inbound task queue.`
+
+## ReActAgent `invoke()` Usage
 
 The binding returned by `A2A.createBinding()` can be passed directly to the
 `communicationProtocols` option:
@@ -48,7 +159,12 @@ const agent = new ReActAgent({
 	communicationProtocols: [a2a]
 });
 
-const result = await agent.invoke("Compare the latest findings on Mars water reservoirs.");
+const result = await agent.invoke({
+	messages: [{
+		type: "user",
+		content: "Compare the latest findings on Mars water reservoirs."
+	}]
+});
 ```
 
 When the agent is constructed, ReActAgent registers two tools for this binding:
