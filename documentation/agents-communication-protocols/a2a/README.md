@@ -16,7 +16,7 @@ The binding currently supports outbound communication:
 - canonical lifecycle events and task result mapping.
 
 It is a client binding. It does not create an HTTP server or provide an inbound
-`ProtocolTaskQueue` yet, so it cannot by itself be used as the inbound source
+`ProtocolTaskQueueSchema` yet, so it cannot by itself be used as the inbound source
 for `ReActAgent.serve()`.
 
 ## Using `serve()` with A2A
@@ -34,7 +34,7 @@ const processedTasks = await agent.serve(a2aServerBinding, {
 ```
 
 For this to work, `a2aServerBinding` must provide a server-side
-`ProtocolTaskQueue`. The A2A HTTP handler should enqueue an incoming request and
+`ProtocolTaskQueueSchema`. The A2A HTTP handler should enqueue an incoming request and
 return or stream the assigned task ID. A long-running worker should run
 `serve()` and publish the result from `queue.complete()` or `queue.fail()` back
 through the A2A task endpoint:
@@ -81,7 +81,7 @@ await agent.serve(a2aServerBinding, {
 
 `a2aInboundQueue` is owned by the HTTP server integration and must implement
 `enqueue`, `dequeue`, `complete`, `fail`, `cancel`, and `size` from
-`ProtocolTaskQueue`. `dequeue()` should wait while there is no work and wake
+`ProtocolTaskQueueSchema`. `dequeue()` should wait while there is no work and wake
 when the A2A handler enqueues a request or the abort signal is triggered.
 
 The current `A2A.createBinding()` implementation does not create
@@ -99,7 +99,7 @@ tools, and the model chooses whether to call them during this finite run.
 
 Use `serve()` when this ReActAgent is itself an A2A participant that must accept
 tasks from other agents. `serve()` is a worker loop: it waits on an inbound
-`ProtocolTaskQueue`, calls the ReAct graph for each queued request, and reports
+`ProtocolTaskQueueSchema`, calls the ReAct graph for each queued request, and reports
 the result back through the queue. It is normally started as a separate,
 long-running process alongside the HTTP A2A server.
 

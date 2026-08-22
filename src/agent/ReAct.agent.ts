@@ -16,7 +16,7 @@ import {
     DeterministicMemorySchema
 } from "./memory/schema/deterministicMemorySchema";
 import { ToolBasedMemorySchema } from "./memory/schema/toolMemorySchema";
-import { ProtocolsSchema } from "./communication-protocols";
+import { AgentCommunicationProtocolsSchema } from "./communication-protocols";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -192,7 +192,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     /** It's list with agent plugins are going to be execute and can */
     plugins?: ReActAgentPluginSpec[];
     /** Specify protocol schema */
-    communicationProtocols?: ProtocolsSchema.Schema[];
+    communicationProtocols?: AgentCommunicationProtocolsSchema.Schema[];
     /** Specify list with tools */
     tools: Tool<any, any>[];
     /** specify this schema to use the Human In The Loop */
@@ -211,9 +211,16 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     abort?: AbortSignal;
 }
 
+/** Options for `.serve` method of ReAct Agent */
 export interface ReActAgentServeOptions {
+    /** Use to specify the abort signal ends the serve loop */
     signal?: AbortSignal;
+    /** After accomplishement of given tasks the `serve` method is finished */
     maxTasks?: number;
+    /**  Whether error should cause the brake of execution
+     * 
+     * @default false - agent continues when error occurs
+     */
     continueOnError?: boolean;
 }
 
@@ -234,7 +241,8 @@ export interface ReActAgentEvents extends SkillEvents {
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
     plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: PluginResultEvent) => void | Promise<void>;
     plugin_error: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], error: unknown) => void | Promise<void>;
-    protocol_event: (protocolName: string, eventName: ProtocolsSchema.CommunicateEvents, taskId?: ProtocolsSchema.TaskId, eventArgs?: unknown[]) => void | Promise<void>;
+    /** Event emitted once protocol is used */
+    protocol_event: (protocolName: string, eventName: AgentCommunicationProtocolsSchema.CommunicateEvents, taskId?: AgentCommunicationProtocolsSchema.TaskId, eventArgs?: unknown[]) => void | Promise<void>;
     subagent_called: (role: string, instruction: string) => void | Promise<void>;
     subagent_result: (role: string, instruction: string, result: ReActAgentInvokeResult) => void | Promise<void>;
     subagent_reasoning: (role: string, content: string) => void | Promise<void>;
@@ -967,8 +975,9 @@ export class ReActAgent
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     private AnyEventListeners: Set<ReActAgentAnyEventListener> = new Set();
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
-    agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     private readonly ReActAgentMemoryInterface: ReActAgentMemory<Memory>;
+    /** Config for the agent */
+    agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
     /** It's overall amount of used tokens by the ReAct agent */
     usedTokens: LLMAnswer["tokens"];
@@ -2040,7 +2049,8 @@ export class ReActAgent
         for (const protocol of this.agentConfig.communicationProtocols ?? []) {
             const participantId = protocol.participant?.id ?? protocol.adapter?.describe().id;
 
-            for (const eventName of Object.keys({
+            // Propagate events to other agents
+            const eventNames = Object.keys({
                 activity_started: true,
                 task_submitted: true,
                 task_progress: true,
@@ -2051,13 +2061,15 @@ export class ReActAgent
                 message_published: true,
                 authentication_required: true,
                 error: true
-            }) as ProtocolsSchema.CommunicateEvents[]) {
+            } as Record<AgentCommunicationProtocolsSchema.CommunicateEvents, boolean>) as AgentCommunicationProtocolsSchema.CommunicateEvents[];
+            
+            for (const eventName of eventNames) {
                 protocol.client.onEvent(eventName, (...eventArgs: unknown[]) => {
                     const taskId = eventArgs
                         .flatMap(eventArg => eventArg && typeof eventArg === "object" && "taskId" in eventArg
-                            ? [(eventArg as { taskId?: ProtocolsSchema.TaskId }).taskId]
+                            ? [(eventArg as { taskId?: AgentCommunicationProtocolsSchema.TaskId }).taskId]
                             : typeof eventArg === "string" && eventName === "task_failed" ? [eventArg] : [])
-                        .find((candidate): candidate is ProtocolsSchema.TaskId => candidate !== undefined);
+                        .find((candidate): candidate is AgentCommunicationProtocolsSchema.TaskId => candidate !== undefined);
 
                     this.emitEvent("protocol_event", protocol.name, eventName, taskId, eventArgs);
                 });
@@ -2067,7 +2079,7 @@ export class ReActAgent
                 continue;
             }
 
-            const createRequest = (to: string, message: string, activity: ProtocolsSchema.PossibleActivityName): ProtocolsSchema.TaskRequest => ({
+            const createRequest = (to: string, message: string, activity: AgentCommunicationProtocolsSchema.PossibleActivityName): AgentCommunicationProtocolsSchema.TaskRequest => ({
                 from: participantId,
                 to,
                 activity,
@@ -2080,6 +2092,7 @@ export class ReActAgent
                 }
             });
 
+            // Delegation tool
             const delegateTool = new Tool(
                 async ({ to, message }: { to: string; message: string }) => {
                     const handle = await protocol.client.delegate(createRequest(to, message, "delegate_task"));
@@ -2100,6 +2113,7 @@ export class ReActAgent
                 this.agentConfig.tools.push(delegateTool);
             }
 
+            // Consult tool definition
             const consultTool = new Tool(
                 async ({ participants, message }: { participants: string[]; message: string }) => {
                     const result = await protocol.client.consult({
@@ -2732,7 +2746,7 @@ export class ReActAgent
      * closure, or the configured `maxTasks` limit.
      */
     async serve(
-        protocol: ProtocolsSchema.Schema,
+        protocol: AgentCommunicationProtocolsSchema.Schema,
         options: ReActAgentServeOptions = {}
     ): Promise<number> {
         if (!protocol.queue) {
@@ -2765,7 +2779,7 @@ export class ReActAgent
                     .reverse()
                     .find((message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai");
 
-                const result: ProtocolsSchema.TaskResult = invocation.state.isAborted
+                const result: AgentCommunicationProtocolsSchema.TaskResult = invocation.state.isAborted
                     ? {
                         taskId: queuedTask.taskId,
                         status: "cancelled"
@@ -2787,16 +2801,18 @@ export class ReActAgent
 
                 await protocol.queue.complete(queuedTask.taskId, result);
             } catch (error) {
-                const protocolError: ProtocolsSchema.ProtocolError = {
+                const protocolError: AgentCommunicationProtocolsSchema.ProtocolError = {
                     code: "agent_execution_failed",
                     message: error instanceof Error ? error.message : String(error),
                     retryable: true
                 };
+
                 await protocol.queue.fail(queuedTask.taskId, protocolError);
 
                 if (options.continueOnError === false) {
                     throw error;
                 }
+                else console.warn("Serve method got an error: ", error)
             }
 
             processedTasks++;
