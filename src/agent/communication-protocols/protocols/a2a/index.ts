@@ -16,8 +16,11 @@ import type {
 	TaskResult,
 	TaskSnapshot,
 	TaskStatus,
-	Usage
+	Usage,
+	ProtocolTaskQueue,
+	QueuedTask
 } from "../../schema";
+import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 
 /** Name used by the A2A protocol binding. */
 export const PROTOCOL_NAME = "A2A (Agent-to-Agent Protocol by GOOGLE)";
@@ -44,6 +47,23 @@ export interface A2AProtocolOptions {
 	discoveryEndpoints?: string[];
 }
 
+export interface A2AHttpServerOptions {
+	/** Binding exposed by this server. A queue is added when one is not supplied. */
+	binding: ProtocolBinding;
+	/** Agent card returned by the well-known discovery endpoint. */
+	agent: AgentDescriptor;
+	/** Optional path for JSON-RPC requests. Defaults to `/a2a`. */
+	path?: string;
+}
+
+export interface A2AHttpServer {
+	readonly binding: ProtocolBinding;
+	readonly queue: ProtocolTaskQueue;
+	readonly httpServer: Server;
+	listen(port: number, host?: string): Promise<void>;
+	close(): Promise<void>;
+}
+
 interface JsonRpcResponse {
 	/** JSON-RPC result or normalized remote error returned by an A2A endpoint. */
 	result?: JsonObject;
@@ -51,6 +71,66 @@ interface JsonRpcResponse {
 }
 
 const TERMINAL_STATES = new Set<TaskStatus>(["completed", "failed", "cancelled"]);
+
+/** Minimal in-memory queue suitable for a local A2A worker or an adapter implementation. */
+export class A2ATaskQueue implements ProtocolTaskQueue {
+	private readonly pending: QueuedTask[] = [];
+	private readonly results = new Map<string, TaskResult>();
+	private readonly waiters: Array<(task: QueuedTask | undefined) => void> = [];
+	private sequence = 0;
+
+	async enqueue(request: TaskRequest): Promise<string> {
+		const taskId = request.taskId ?? `a2a-task-${++this.sequence}`;
+		const task = { taskId, request: { ...request, taskId }, enqueuedAt: now() };
+		const waiter = this.waiters.shift();
+		if (waiter) waiter(task);
+		else this.pending.push(task);
+		return taskId;
+	}
+
+	async dequeue(signal?: AbortSignal): Promise<QueuedTask | undefined> {
+		const task = this.pending.shift();
+		if (task) return task;
+		if (signal?.aborted) return undefined;
+		return new Promise(resolve => {
+			const waiter = (queuedTask: QueuedTask | undefined) => {
+				signal?.removeEventListener("abort", onAbort);
+				resolve(queuedTask);
+			};
+			const onAbort = () => {
+				const index = this.waiters.indexOf(waiter);
+				if (index >= 0) this.waiters.splice(index, 1);
+				resolve(undefined);
+			};
+			this.waiters.push(waiter);
+			signal?.addEventListener("abort", onAbort, { once: true });
+		});
+	}
+
+	async complete(taskId: string, result: TaskResult): Promise<void> {
+		this.results.set(taskId, result);
+	}
+
+	async fail(taskId: string, error: ProtocolError): Promise<void> {
+		this.results.set(taskId, { taskId, status: "failed", error });
+	}
+
+	async cancel(taskId: string, reason?: string): Promise<void> {
+		this.results.set(taskId, {
+			taskId,
+			status: "cancelled",
+			error: reason ? { code: "cancelled", message: reason } : undefined
+		});
+	}
+
+	size(): number {
+		return this.pending.length;
+	}
+
+	getResult(taskId: string): TaskResult | undefined {
+		return this.results.get(taskId);
+	}
+}
 
 /** Narrows unknown wire values to an object for defensive protocol parsing. */
 function asObject(value: unknown): JsonObject {
@@ -344,6 +424,92 @@ export function createA2ABinding(options: A2AProtocolOptions): ProtocolBinding {
 		version: options.version ?? "1.0",
 		client,
 		participant: options.participant
+	};
+}
+
+function readJson(request: IncomingMessage): Promise<JsonObject> {
+	return new Promise((resolve, reject) => {
+		let body = "";
+		request.setEncoding("utf8");
+		request.on("data", chunk => body += chunk);
+		request.on("end", () => {
+			try { resolve(asObject(JSON.parse(body || "{}"))); }
+			catch (error) { reject(error); }
+		});
+		request.on("error", reject);
+	});
+}
+
+function writeJson(response: ServerResponse, status: number, body: JsonObject): void {
+	response.writeHead(status, { "content-type": "application/json" });
+	response.end(JSON.stringify(body));
+}
+
+/** Creates a Node HTTP A2A endpoint backed by a queue consumed by `ReActAgent.serve`. */
+export function createA2AHttpServer(options: A2AHttpServerOptions): A2AHttpServer {
+	const queue = options.binding.queue ?? new A2ATaskQueue();
+	const binding: ProtocolBinding = { ...options.binding, queue };
+	const tasks = new Map<string, TaskStatus>();
+	const path = options.path ?? "/a2a";
+	const httpServer = createHttpServer(async (request, response) => {
+		try {
+			if (request.method === "GET" && request.url === "/.well-known/agent-card.json") {
+				writeJson(response, 200, options.agent as unknown as JsonObject);
+				return;
+			}
+			if (request.method !== "POST" || new URL(request.url ?? "/", "http://localhost").pathname !== path) {
+				writeJson(response, 404, { error: "Not found" });
+				return;
+			}
+			const payload = await readJson(request);
+			const method = asString(payload.method);
+			const params = asObject(payload.params);
+			const id = payload.id;
+			const rpc = (result: JsonObject) => writeJson(response, 200, { jsonrpc: "2.0", id, result });
+			if (method === "message/send") {
+				const message = asObject(params.message);
+				const text = extractText(message);
+				const metadata = asObject(message.metadata);
+				const raven = asObject(metadata.raven);
+				const taskId = await queue.enqueue({
+					from: asString(raven.from, "unknown"),
+					to: asString(raven.to, options.agent.id),
+					activity: "delegate_task",
+					message: text,
+					metadata: params.metadata && typeof params.metadata === "object" ? params.metadata as JsonObject : undefined
+				});
+				tasks.set(taskId, "working");
+				rpc({ id: taskId, status: { state: "working" } });
+				return;
+			}
+			if (method === "tasks/get") {
+				const taskId = asString(params.id);
+				const result = queue instanceof A2ATaskQueue ? queue.getResult(taskId) : undefined;
+				const status = result?.status ?? tasks.get(taskId) ?? "working";
+				rpc({ id: taskId, status: { state: status }, ...(result?.message ? { message: result.message } : {}) });
+				return;
+			}
+			if (method === "tasks/cancel") {
+				const taskId = asString(params.id);
+				await queue.cancel(taskId, asString(asObject(params.metadata).reason) || undefined);
+				tasks.set(taskId, "cancelled");
+				rpc({ id: taskId, status: { state: "cancelled" } });
+				return;
+			}
+			writeJson(response, 200, { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not supported" } });
+		} catch (error) {
+			writeJson(response, 400, { jsonrpc: "2.0", error: { code: -32602, message: error instanceof Error ? error.message : String(error) } });
+		}
+	});
+	return {
+		binding,
+		queue,
+		httpServer,
+		listen: (port, host) => new Promise((resolve, reject) => {
+			httpServer.once("error", reject);
+			httpServer.listen(port, host, () => resolve());
+		}),
+		close: () => new Promise((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()))
 	};
 }
 
