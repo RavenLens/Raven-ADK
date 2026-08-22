@@ -4,6 +4,8 @@ export default defineConfig({
 	entry: {
 		index: "src/index.ts",
 		agents: "src/agent/public.ts",
+		"agent/communication-protocols/index": "src/agent/communication-protocols/index.ts",
+		"agent/communication-protocols/protocols/index": "src/agent/communication-protocols/protocols/index.ts",
 		models: "src/models/index.ts",
 		"models/server": "src/models/server.ts",
 		tools: "src/agent/tools/public.ts",

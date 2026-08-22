@@ -1,6 +1,6 @@
 {
   "name": "@ravenlens/raven-adk",
-  "version": "0.0.13",
+  "version": "0.0.14-alpha.2",
   "description": "AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightful UI assemblies gorgeous UX. Made by RavenAlliance",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
@@ -59,6 +59,16 @@
       "types": "./dist/agent/index.d.ts",
       "import": "./dist/agents.js",
       "require": "./dist/agents.cjs"
+    },
+    "./communication-protocols": {
+      "types": "./dist/agent/communication-protocols/index.d.ts",
+      "import": "./dist/agent/communication-protocols/index.js",
+      "require": "./dist/agent/communication-protocols/index.cjs"
+    },
+    "./communication-protocols/protocols": {
+      "types": "./dist/agent/communication-protocols/protocols/index.d.ts",
+      "import": "./dist/agent/communication-protocols/protocols/index.js",
+      "require": "./dist/agent/communication-protocols/protocols/index.cjs"
     },
     "./rlm": {
       "types": "./dist/agent/RLM/index.d.ts",
