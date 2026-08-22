@@ -498,7 +498,7 @@ export function createA2AHttpServer(options: A2AHttpServerOptions): A2AHttpServe
 			}
 			writeJson(response, 200, { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not supported" } });
 		} catch (error) {
-			writeJson(response, 400, { jsonrpc: "2.0", error: { code: -32602, message: error instanceof Error ? error.message : String(error) } });
+			writeJson(response, 400, { jsonrpc: "2.0", error: { code: -32602, message: "Invalid A2A request" } });
 		}
 	});
 	return {
