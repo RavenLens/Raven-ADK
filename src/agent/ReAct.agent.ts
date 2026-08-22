@@ -17,6 +17,7 @@ import {
 } from "./memory/schema/deterministicMemorySchema";
 import { ToolBasedMemorySchema } from "./memory/schema/toolMemorySchema";
 import { AgentCommunicationProtocolsSchema } from "./communication-protocols";
+import { ProtocolBinding } from "./communication-protocols/agentProtocols/agentProtocolSchema";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -2746,7 +2747,7 @@ export class ReActAgent
      * closure, or the configured `maxTasks` limit.
      */
     async serve(
-        protocol: AgentCommunicationProtocolsSchema.Schema,
+        protocol: AgentCommunicationProtocolsSchema.Schema | ProtocolBinding,
         options: ReActAgentServeOptions = {}
     ): Promise<number> {
         if (!protocol.queue) {

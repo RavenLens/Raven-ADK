@@ -17,7 +17,8 @@ import type {
 	TaskSnapshot,
 	TaskStatus,
 	Usage,
-	QueuedTask
+	QueuedTask,
+	AgentCommunicationProtocolFactory
 } from "../agentProtocolSchema";
 import { createHttpProtocolServer, type A2AHttpServer, type A2AHttpServerOptions } from "../../communicationProtocols/protocols/http";
 import type { CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
@@ -458,7 +459,7 @@ export function createA2AHttpServer(options: A2AHttpServerOptions): A2AHttpServe
 }
 
 /** Namespace-compatible export for callers that prefer a protocol factory object. */
-export const A2A = {
+export const A2A: AgentCommunicationProtocolFactory<A2AProtocolOptions> = {
 	name: PROTOCOL_NAME,
 	createBinding: createA2ABinding
 };

@@ -304,3 +304,34 @@ export interface ProtocolBinding {
 
 /** A configured protocol exposed to an agent or orchestrator. */
 export interface Schema extends ProtocolBinding {}
+
+/**
+ * Use to maintain consistent factory shape among the protocols. This is the
+ * definition of a protocol factory, while `ProtocolBinding` is its configured
+ * runtime instance.
+ */
+export interface AgentCommunicationProtocolFactory<CreateBindingOptions> {
+    /** Optional display name; the configured binding remains the runtime authority. */
+    readonly name?: string;
+    /** Protocol versions understood by this factory. */
+    readonly versions?: readonly string[];
+    /** Transports that can carry this protocol, such as HTTP or Kafka. */
+    readonly transports?: readonly string[];
+    /** Activities exposed by the protocol. */
+    readonly activities?: readonly PossibleActivityName[];
+    /** Whether the factory can create a binding with an inbound work queue. */
+    readonly supportsInboundQueue?: boolean;
+    /** Stable identifier used to distinguish this protocol from other factories. */
+    readonly identifier?: string;
+    /** URL for protocol documentation or its formal specification. */
+    readonly documentationUrl?: string;
+    /** Discovery metadata advertised by the protocol implementation. */
+    readonly discoveryMetadata?: Readonly<Record<string, unknown>>;
+    /** Runtime or feature constraints required by the protocol implementation. */
+    readonly compatibility?: Readonly<Record<string, unknown>>;
+    /** This function has to return the protocol binding for specified agent protocol */
+    createBinding: (options: CreateBindingOptions) => ProtocolBinding | Promise<ProtocolBinding>;
+}
+
+/** Alias for `AgentCommunicationProtocolFactory` */
+export type AgentProtocolDefinition<CreateBindingOptions> = AgentCommunicationProtocolFactory<CreateBindingOptions>;

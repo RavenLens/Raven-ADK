@@ -15,9 +15,9 @@ The binding currently supports outbound communication:
 - cancellation through `tasks/cancel`;
 - canonical lifecycle events and task result mapping.
 
-It is a client binding. It does not create an HTTP server or provide an inbound
-`ProtocolTaskQueueSchema` yet, so it cannot by itself be used as the inbound source
-for `ReActAgent.serve()`.
+The binding also has an HTTP server factory. `createA2AHttpServer()` uses the
+reusable HTTP transport wrapper and provides an inbound
+`ProtocolTaskQueueSchema` for `ReActAgent.serve()`.
 
 ## Using `serve()` with A2A
 
@@ -60,35 +60,30 @@ remote caller reads tasks/get or receives a streamed update
 The binding supplied to `serve()` must have this shape:
 
 ```ts
-import { ProtocolsSchema } from "@ravenlens/raven-adk";
+import { A2A, createA2AHttpServer } from "@ravenlens/raven-adk";
 
-const a2aServerBinding: ProtocolsSchema.Schema = {
-	name: "A2A server",
-	version: "1.0",
-	client: a2aClient,
-	queue: a2aInboundQueue,
-	participant: {
+const a2aServer = createA2AHttpServer({
+	binding: A2A.createBinding({ endpoint: "http://localhost:8080/a2a" }),
+	agent: {
 		id: "research-agent",
 		name: "Research Agent",
 		capabilities: ["delegate_task"]
 	}
-};
+});
+
+await a2aServer.listen(8080, "127.0.0.1");
+const a2aServerBinding = a2aServer.binding;
 
 await agent.serve(a2aServerBinding, {
 	signal: shutdownController.signal
 });
 ```
 
-`a2aInboundQueue` is owned by the HTTP server integration and must implement
-`enqueue`, `dequeue`, `complete`, `fail`, `cancel`, and `size` from
-`ProtocolTaskQueueSchema`. `dequeue()` should wait while there is no work and wake
-when the A2A handler enqueues a request or the abort signal is triggered.
-
-The current `A2A.createBinding()` implementation does not create
-`a2aInboundQueue` or an HTTP server, so this server binding is an integration
-point to implement in the host application. With the current code, use
-`createBinding()` for outbound calls to another A2A agent; use `serve()` only
-after pairing the local ReActAgent with a server-side A2A transport and queue.
+The server creates an in-memory queue when the supplied binding does not have
+one. Pass a durable or distributed implementation of `ProtocolTaskQueueSchema`
+in the binding when work must survive process restarts or be shared by
+multiple workers. Use `createBinding()` alone for outbound calls; use the
+server binding for `serve()`.
 
 ## Choosing Between `invoke()` and `serve()`
 
@@ -127,8 +122,8 @@ const processed = await agent.serve(a2aServerBinding, {
 ```
 
 Do not call `serve()` with the result of `A2A.createBinding()` alone. That
-factory creates an outbound client binding without `queue`, so `serve()` will
-throw `Protocol "..." does not provide an inbound task queue.`
+factory creates an outbound client binding without `queue`; use
+`createA2AHttpServer()` or provide a queue-backed binding instead.
 
 ## ReActAgent `invoke()` Usage
 

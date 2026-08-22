@@ -29,7 +29,7 @@ These are the protocol surfaces currently represented in the repository:
 
 | Protocol | Focus | Documentation and implementation status |
 | --- | --- | --- |
-| [A2A (Agent-to-Agent)](./a2a/README.md) | HTTP JSON-RPC communication with remote agents. | Outbound client binding implemented; inbound server queue is not yet included. |
+| [A2A (Agent-to-Agent)](./a2a/README.md) | HTTP JSON-RPC communication with remote agents. | Outbound client binding and the reusable inbound HTTP server wrapper are implemented. |
 <!-- | [ACP (Agent Communication Protocol)](./acp/README.md) | Communication for edge and local agentic systems. | The RavenADK protocol namespace exists; the guide is being expanded. | -->
 <!-- | [G4A](./g4a/README.md) | Agent treats agents pool  | -->
 | Custom Protocols with RavenADK bindings | An application-specific protocol mapped to the RavenADK communication model. | Use the canonical concepts below as the compatibility boundary with whatever protocol you wish to hug. |
@@ -37,6 +37,97 @@ These are the protocol surfaces currently represented in the repository:
 Protocol names describe different wire-level or topology choices. They should
 not change the way an agent reasons about a task, reports a result, or handles
 cancellation.
+
+## Extensibility
+
+RavenADK separates the agent protocol from the communication protocol and its
+transport. This allows a custom protocol to be added without changing
+`ReActAgent`, the agent execution loop, or the canonical task model.
+
+### Define a Custom Agent Protocol
+
+An **agent protocol** defines how agents communicate with one another at the
+wire or application level: how agents are discovered, how a task is delegated,
+how messages and results are represented, and how status or cancellation is
+translated. Examples include A2A or an application-specific protocol.
+
+Implement the public `ProtocolClient` contract from
+[`agentProtocolSchema.ts`](../../src/agent/communication-protocols/agentProtocols/agentProtocolSchema.ts)
+and expose the result as a `ProtocolBinding`. The binding must provide the
+canonical client operations and event contract, while translating the native
+protocol into RavenADK types such as `TaskRequest`, `TaskSnapshot`,
+`TaskResult`, and `ProtocolError`.
+
+The schema has to be followed because RavenADK agents implement their
+communication logic against that contract. Reusing the schema lets an agent
+delegate, consult, observe events, handle cancellation, and process results
+without knowing whether the remote participant uses A2A, a custom protocol, or
+another wire format.
+
+### Define a Custom Communication Protocol
+
+A **communication protocol** is a wrapper that carries an agent protocol over
+a transport. It may use HTTP, JSON-RPC, Kafka, RabbitMQ, MQTT, WebRTC, an
+in-process channel, or another mechanism. The wrapper is responsible for
+serialization, authentication, retries, connection handling, and translating
+transport requests into the selected agent protocol.
+
+Use the types in
+[`communicationProtocolSchema.ts`](../../src/agent/communication-protocols/communicationProtocols/communicationProtocolSchema.ts)
+to implement a transport adapter. `CommunicationProtocolAdapter` receives a
+normalized `CommunicationRequest` and returns a normalized
+`CommunicationResponse`; `HttpProtocolServer` can expose that adapter over
+HTTP. The transport can therefore change without changing the agent protocol
+or the agent implementation.
+
+The layers compose like this:
+
+```ts
+import { createHttpProtocolServer } from "@ravenlens/raven-adk/communication-protocols";
+import { InMemoryProtocolTaskQueueSchema } from "@ravenlens/raven-adk/communication-protocols";
+
+const binding: ProtocolBinding = {
+	name: "Custom agent protocol",
+	version: "1.0",
+	client: customClient,
+	queue: new InMemoryProtocolTaskQueueSchema()
+};
+
+const server = createHttpProtocolServer({
+	binding,
+	agent: { id: "worker", name: "Worker Agent" },
+	path: "/communication",
+	adapter: customHttpAdapter
+});
+
+await server.listen(8080, "127.0.0.1");
+```
+
+`customClient` implements the agent protocol, `customHttpAdapter` translates
+the transport request into that protocol, and the queue connects inbound work
+to the agent worker.
+
+### Define a Custom Queue
+
+Use a queue when work may outlive the current model step, needs asynchronous
+processing, or must be handled by a separate or parallel worker. A queue
+decouples request intake from agent execution: the communication wrapper
+enqueues a `TaskRequest`, the agent worker dequeues it, and the worker publishes
+completion, failure, or cancellation using the same task ID.
+
+Implement [`ProtocolTaskQueueSchema`](../../src/agent/communication-protocols/queues/queueSchema.ts)
+with `enqueue`, `dequeue`, `complete`, `fail`, `cancel`, and `size`. The schema
+is storage-independent, so a custom queue may use PostgreSQL, Redis, MongoDB,
+S3, or another suitable backend. Follow the schema because the communication
+protocol and `ReActAgent.serve()` already implement their queue interaction
+against these operations; a different contract would require protocol- or
+agent-specific integration code.
+
+See the [custom protocol guide](./custom-protocol/README.md), the
+[agent-protocol notes](../../src/agent/communication-protocols/agentProtocols/README.md),
+the [communication-protocol notes](../../src/agent/communication-protocols/communicationProtocols/README.md),
+and the [queue guide](../../src/agent/communication-protocols/queues/README.md)
+for the individual extension points.
 
 ## RavenADK Integration
 
@@ -92,9 +183,10 @@ returning its tool output. This keeps remote work inside the normal ReAct
 Reason/Act/Observe loop and prevents the invocation from completing before the
 remote task reaches a terminal state.
 
-The A2A binding currently covers outbound work. ReActAgent's `serve()` method
-requires a binding with an inbound `queue`; an A2A binding must be paired with a
-server-side transport and adapter before it can receive remote tasks.
+The A2A client binding covers outbound work, while
+`createA2AHttpServer()` pairs the A2A adapter with an inbound queue for
+`ReActAgent.serve()`. Other agent protocols can use the same transport wrapper
+by supplying their own `CommunicationProtocolAdapter`.
 
 ## Core Communication Flows
 
