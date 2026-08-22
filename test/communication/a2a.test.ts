@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { A2AProtocolClient, createA2ABinding, PROTOCOL_NAME } from "../../src/agent/communication-protocols/protocols/a2a";
+import { A2AProtocolClient, createA2AHttpServer, createA2ABinding, PROTOCOL_NAME } from "../../src/agent/communication-protocols/protocols/a2a";
 
 function jsonResponse(body: unknown): Response {
     return new Response(JSON.stringify(body), {
@@ -111,5 +111,56 @@ describe("A2A protocol binding", () => {
         const request = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
         expect(request).toMatchObject({ method: "tasks/cancel", params: { id: "task-1", metadata: { reason: "No longer needed" } } });
         expect(cancelled).toHaveBeenCalledWith(expect.objectContaining({ taskId: "task-1", reason: "No longer needed" }));
+    });
+
+    it("serves inbound A2A requests through a queue consumed by ReActAgent.serve", async () => {
+        const service = createA2AHttpServer({
+            binding: createA2ABinding({ endpoint: "http://localhost" }),
+            agent: { id: "worker", name: "Worker Agent", capabilities: ["delegate_task"] }
+        });
+        await service.listen(0, "127.0.0.1");
+        const address = service.httpServer.address();
+        if (!address || typeof address === "string") throw new Error("Server did not bind to a port");
+        const endpoint = `http://127.0.0.1:${address.port}/a2a`;
+
+        const request = fetch(endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+                jsonrpc: "2.0",
+                id: 1,
+                method: "message/send",
+                params: {
+                    message: {
+                        parts: [{ kind: "text", text: "Calculate 2 + 2" }],
+                        metadata: { raven: { from: "orchestrator", to: "worker" } }
+                    }
+                }
+            })
+        });
+        const queued = await service.queue.dequeue();
+        expect(queued?.request).toMatchObject({
+            from: "orchestrator",
+            to: "worker",
+            message: "Calculate 2 + 2"
+        });
+        await service.queue.complete(queued!.taskId, {
+            taskId: queued!.taskId,
+            status: "completed",
+            message: { id: "answer", role: "agent", content: "4" }
+        });
+        const accepted = await (await request).json();
+        expect(accepted.result).toMatchObject({ id: queued!.taskId, status: { state: "working" } });
+
+        const task = await (await fetch(endpoint, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tasks/get", params: { id: queued!.taskId } })
+        })).json();
+        expect(task.result).toMatchObject({ status: { state: "completed" }, message: { content: "4" } });
+
+        const card = await (await fetch(`${endpoint.replace("/a2a", "")}/.well-known/agent-card.json`)).json();
+        expect(card).toMatchObject({ id: "worker", name: "Worker Agent" });
+        await service.close();
     });
 });
