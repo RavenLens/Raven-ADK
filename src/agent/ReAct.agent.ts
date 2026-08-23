@@ -3,12 +3,11 @@ import { Anthropic } from "../models/text-to-text/anthropic";
 import { InvokeOptions, LLMAnswer } from "../models/mutual";
 import { OpenAI } from "../models/text-to-text/openai";
 import { Google } from "../models/text-to-text/google";
-import { SchemaSkillStore } from "./skills/stores/schema";
+import type { SchemaSkillStore } from "./skills/stores/schema.js";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
-import { MCPTool } from "./tools/mcp/mcpTools";
 import { Tool } from "./tools/tools";
-import { RunPod } from "../models/text-to-text/runpod";
+import type { RunPod } from "../models/text-to-text/runpod.js";
 import z from "zod";
 import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
@@ -17,6 +16,8 @@ import {
     DeterministicMemorySchema
 } from "./memory/schema/deterministicMemorySchema";
 import { ToolBasedMemorySchema } from "./memory/schema/toolMemorySchema";
+import { AgentCommunicationProtocolsSchema } from "./communication-protocols";
+import { ProtocolBinding } from "./communication-protocols/agentProtocols/agentProtocolSchema";
 
 export type AgentModel = OpenAI | Anthropic | RunPod | Google;
 
@@ -191,6 +192,9 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     memory?: ConfiguredMemory<Memory> | ConfiguredMemory<Memory>[];
     /** It's list with agent plugins are going to be execute and can */
     plugins?: ReActAgentPluginSpec[];
+    /** Specify protocol schema */
+    communicationProtocols?: AgentCommunicationProtocolsSchema.Schema[];
+    /** Specify list with tools */
     tools: Tool<any, any>[];
     /** specify this schema to use the Human In The Loop */
     hitl?: HITL;
@@ -206,6 +210,19 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     parallelTools?: boolean;
     /** Use to elegenatly abort actions */
     abort?: AbortSignal;
+}
+
+/** Options for `.serve` method of ReAct Agent */
+export interface ReActAgentServeOptions {
+    /** Use to specify the abort signal ends the serve loop */
+    signal?: AbortSignal;
+    /** After accomplishement of given tasks the `serve` method is finished */
+    maxTasks?: number;
+    /**  Whether error should cause the brake of execution
+     * 
+     * @default false - agent continues when error occurs
+     */
+    continueOnError?: boolean;
 }
 
 export interface ReActAgentEvents extends SkillEvents {
@@ -225,6 +242,8 @@ export interface ReActAgentEvents extends SkillEvents {
     plugin_invoking: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"]) => void | Promise<void>;
     plugin_result: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], result: PluginResultEvent) => void | Promise<void>;
     plugin_error: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], error: unknown) => void | Promise<void>;
+    /** Event emitted once protocol is used */
+    protocol_event: (protocolName: string, eventName: AgentCommunicationProtocolsSchema.CommunicateEvents, taskId?: AgentCommunicationProtocolsSchema.TaskId, eventArgs?: unknown[]) => void | Promise<void>;
     subagent_called: (role: string, instruction: string) => void | Promise<void>;
     subagent_result: (role: string, instruction: string, result: ReActAgentInvokeResult) => void | Promise<void>;
     subagent_reasoning: (role: string, content: string) => void | Promise<void>;
@@ -957,8 +976,9 @@ export class ReActAgent
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
     private AnyEventListeners: Set<ReActAgentAnyEventListener> = new Set();
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
-    agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     private readonly ReActAgentMemoryInterface: ReActAgentMemory<Memory>;
+    /** Config for the agent */
+    agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
     agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
     /** It's overall amount of used tokens by the ReAct agent */
     usedTokens: LLMAnswer["tokens"];
@@ -1067,6 +1087,9 @@ export class ReActAgent
                 }
             }
         }
+
+        // Registered protocol
+        this.registerCommunicationProtocols();
 
         // Subagents are configured and will be spawned as graph nodes below
         // System prompt is dynamically generated in buildWrappedSystemPrompt()
@@ -1704,15 +1727,15 @@ export class ReActAgent
                         this.emitEvent("tool_invoked", toolName, toolParams);
 
                         try {
-                            const toolOutputExecution = await this.abortable.runAbortable(() => definedTool instanceof MCPTool
-                                ? definedTool.invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
+                            const toolOutputExecution = await this.abortable.runAbortable(() => "isMCPTool" in definedTool
+                                ? (definedTool as unknown as Tool<any, any> & { invokeFromMCP(args: Record<string, unknown>): Promise<string> }).invokeFromMCP((toolParams ?? {}) as Record<string, unknown>)
                                 : definedTool.invoke(toolParams as never));
 
                             if (toolOutputExecution === ABORTED_OPERATION || this.abortable.isAbortRequested()) {
                                 return ABORTED_OPERATION;
                             }
 
-                            const toolOutput = toolOutputExecution;
+                            const toolOutput = toolOutputExecution as string;
                             this.emitEvent("tool_executed", toolName, toolParams, toolOutput);
 
                             return {
@@ -2015,6 +2038,105 @@ export class ReActAgent
         this.cachedToolsCount = this.agentConfig.tools.length;
         this.cachedSubagentsCount = this.agentConfig.subagents?.length ?? 0;
         return result;
+    }
+
+    /**
+     * Registers configured protocol clients as ReAct tools and forwards their
+     * lifecycle events with the protocol name and remote task correlation ID.
+     * Use this during agent construction so the model can delegate or consult
+     * external agents through the normal awaited tool-execution loop.
+     */
+    private registerCommunicationProtocols(): void {
+        for (const protocol of this.agentConfig.communicationProtocols ?? []) {
+            const participantId = protocol.participant?.id ?? protocol.adapter?.describe().id;
+
+            // Propagate events to other agents
+            const eventNames = Object.keys({
+                activity_started: true,
+                task_submitted: true,
+                task_progress: true,
+                task_completed: true,
+                task_failed: true,
+                task_cancelled: true,
+                agent_discovered: true,
+                message_published: true,
+                authentication_required: true,
+                error: true
+            } as Record<AgentCommunicationProtocolsSchema.CommunicateEvents, boolean>) as AgentCommunicationProtocolsSchema.CommunicateEvents[];
+            
+            for (const eventName of eventNames) {
+                protocol.client.onEvent(eventName, (...eventArgs: unknown[]) => {
+                    const taskId = eventArgs
+                        .flatMap(eventArg => eventArg && typeof eventArg === "object" && "taskId" in eventArg
+                            ? [(eventArg as { taskId?: AgentCommunicationProtocolsSchema.TaskId }).taskId]
+                            : typeof eventArg === "string" && eventName === "task_failed" ? [eventArg] : [])
+                        .find((candidate): candidate is AgentCommunicationProtocolsSchema.TaskId => candidate !== undefined);
+
+                    this.emitEvent("protocol_event", protocol.name, eventName, taskId, eventArgs);
+                });
+            }
+
+            if (!participantId) {
+                continue;
+            }
+
+            const createRequest = (to: string, message: string, activity: AgentCommunicationProtocolsSchema.PossibleActivityName): AgentCommunicationProtocolsSchema.TaskRequest => ({
+                from: participantId,
+                to,
+                activity,
+                message: {
+                    id: `${participantId}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+                    role: "agent",
+                    content: message,
+                    sender: participantId,
+                    recipient: to
+                }
+            });
+
+            // Delegation tool
+            const delegateTool = new Tool(
+                async ({ to, message }: { to: string; message: string }) => {
+                    const handle = await protocol.client.delegate(createRequest(to, message, "delegate_task"));
+                    const result = await handle.wait();
+                    return JSON.stringify(result);
+                },
+                {
+                    toolName: `${protocol.name}_delegate_task`,
+                    toolDescription: `Delegate a task through the ${protocol.name} protocol and wait until the remote agent completes or fails it.`,
+                    toolArguments: z.object({
+                        to: z.string(),
+                        message: z.string()
+                    })
+                }
+            );
+
+            if (!this.agentConfig.tools.some(tool => tool.toolConfig.toolName === delegateTool.toolConfig.toolName)) {
+                this.agentConfig.tools.push(delegateTool);
+            }
+
+            // Consult tool definition
+            const consultTool = new Tool(
+                async ({ participants, message }: { participants: string[]; message: string }) => {
+                    const result = await protocol.client.consult({
+                        ...createRequest(participantId, message, "consult_agents"),
+                        participants
+                    });
+                    return JSON.stringify(result);
+                },
+                {
+                    toolName: `${protocol.name}_consult_agents`,
+                    toolDescription: `Consult multiple agents through the ${protocol.name} protocol and wait for their result.`,
+                    toolArguments: z.object({
+                        participants: z.array(z.string()),
+                        message: z.string()
+                    })
+                }
+            );
+
+            if (!this.agentConfig.tools.some(tool => tool.toolConfig.toolName === consultTool.toolConfig.toolName)) {
+                this.agentConfig.tools.push(consultTool);
+            }
+        }
     }
 
     private getMaximumReasoningRecalls(): number {
@@ -2614,6 +2736,90 @@ export class ReActAgent
     
     async invoke(options?: InvokeOptions): Promise<ReActAgentInvokeResult> {
         return await this.runGraph(undefined, options);
+    }
+
+    /**
+     * Continuously consumes inbound tasks from a protocol queue and executes
+     * each task through the ReAct graph before publishing its result. Use this
+     * for a protocol-facing worker; normal `invoke()` remains a finite request.
+     * The worker waits in `dequeue()` while the queue is empty, processes one
+     * task at a time, reports completion or failure, and stops on abort, queue
+     * closure, or the configured `maxTasks` limit.
+     */
+    async serve(
+        protocol: AgentCommunicationProtocolsSchema.Schema | ProtocolBinding,
+        options: ReActAgentServeOptions = {}
+    ): Promise<number> {
+        if (!protocol.queue) {
+            throw new Error(`Protocol "${protocol.name}" does not provide an inbound task queue.`);
+        }
+
+        const signal = options.signal ?? this.agentConfig.abort;
+        const maxTasks = options.maxTasks ?? Number.POSITIVE_INFINITY;
+        let processedTasks = 0;
+
+        while (!signal?.aborted && processedTasks < maxTasks) {
+            const queuedTask = await protocol.queue.dequeue(signal);
+            if (!queuedTask) {
+                break;
+            }
+
+            const taskMessage = typeof queuedTask.request.message === "string"
+                ? queuedTask.request.message
+                : queuedTask.request.message.content;
+
+            try {
+                const invocation = await this.invoke({
+                    messages: [{
+                        type: "user",
+                        content: taskMessage
+                    }]
+                });
+
+                const outputMessage = [...invocation.messages]
+                    .reverse()
+                    .find((message): message is Extract<MessagesVariations, { type: "ai" }> => message.type === "ai");
+
+                const result: AgentCommunicationProtocolsSchema.TaskResult = invocation.state.isAborted
+                    ? {
+                        taskId: queuedTask.taskId,
+                        status: "cancelled"
+                    }
+                    : {
+                        taskId: queuedTask.taskId,
+                        status: "completed",
+                        message: outputMessage ? {
+                            id: `${queuedTask.taskId}:result`,
+                            role: "agent",
+                            content: outputMessage.content ?? "",
+                            taskId: queuedTask.taskId
+                        } : undefined,
+                        usage: {
+                            inputTokens: this.usedTokens.input,
+                            outputTokens: this.usedTokens.output
+                        }
+                    };
+
+                await protocol.queue.complete(queuedTask.taskId, result);
+            } catch (error) {
+                const protocolError: AgentCommunicationProtocolsSchema.ProtocolError = {
+                    code: "agent_execution_failed",
+                    message: error instanceof Error ? error.message : String(error),
+                    retryable: true
+                };
+
+                await protocol.queue.fail(queuedTask.taskId, protocolError);
+
+                if (options.continueOnError === false) {
+                    throw error;
+                }
+                else console.warn("Serve method got an error: ", error)
+            }
+
+            processedTasks++;
+        }
+
+        return processedTasks;
     }
 
     async invokeStream(options?: InvokeOptions): Promise<AsyncIterable<ReActAgentStreamChunk>> {
