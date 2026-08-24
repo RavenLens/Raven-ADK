@@ -1,3 +1,5 @@
+import { SchemaSkillStore } from "../../skills/stores/schema";
+import { Tool } from "../../tools";
 import { ProtocolTaskQueueSchema } from "../queues/queueSchema";
 
 /**
@@ -14,7 +16,8 @@ export type StandardizedActivityName =
     | "seek_knowledge"
     | "get_agent_status"
     | "publish_message"
-    | "publish_state";
+    | "publish_state"
+    | "communication_custom_tool";
 
 /** @deprecated Use `StandardizedActivityName`. */
 export type StandarizedActivityNames = StandardizedActivityName;
@@ -27,7 +30,7 @@ export type MessageId = string;
 export type ArtifactId = string;
 
 /** Describes an agent that can be discovered or addressed through a protocol. */
-export interface AgentDescriptor {
+export interface AgentDescriptor<Skills extends (SchemaSkillStore | string)[] = any[]> {
     /** Stable identifier used to address the agent in protocol requests. */
     id: AgentId;
     /** Human-readable name presented to other agents and clients. */
@@ -37,7 +40,7 @@ export interface AgentDescriptor {
     /** Protocol activities that the agent can perform. */
     capabilities?: PossibleActivityName[];
     /** Skills or domains that can be used to match discovery requests. */
-    skills?: string[];
+    skills?: Skills; // FIXME: Specify real skill object
     /** Optional endpoint where the agent can be reached directly. */
     endpoint?: string;
     /** Protocol-specific metadata that does not belong to the common contract. */
@@ -252,6 +255,10 @@ export interface CommunicationEventMap {
     message_published: (message: Message) => void | Promise<void>;
     /** Emitted when the protocol requires credentials or another authentication step. */
     authentication_required: (details?: Record<string, unknown>) => void | Promise<void>;
+    /** Emitted when custom tool is used */
+    custom_use_communication_tool: (toolName: string, params?: Record<string, any>) => void | Promise<void>;
+    /** Emitted when custom tool returns output */
+    custom_output_communication_tool: (toolName: string, output: string) => void | Promise<void>;
     /** Emitted when the protocol encounters an error not specific to task failure. */
     error: (error: ProtocolError, taskId?: TaskId) => void | Promise<void>;
 }
@@ -263,6 +270,11 @@ export type CommunicateEvents = keyof CommunicationEventMap;
  * this contract and translate it to their own transport and wire format.
 */
 export interface ProtocolClient {
+    /**
+     * Define custom communication tools will be pasted to the entry leverages tools and has implemented support
+     * Each tool usage and output causes trigger event with `communication_tool` suffix
+    */
+    customCommunicationTools?: Tool<any, any>[];
     /** Finds external agents that match the requested capability, skill, or query. */
     discover(request: DiscoveryRequest): Promise<DiscoveryResult>;
     /** Submits work to a specific external agent and returns a handle for tracking its task. */
@@ -290,6 +302,10 @@ export interface AgentAdapter {
 export interface ProtocolBinding {
     /** Protocol name */
     name: string;
+    /**
+     * Optional Instruction for the entity is going to use protocol. Is attached to the system prompt of agent or the entity
+    */
+    systemPrompt?: string;
     /** Protocol Version */
     version: string;
     /** outbound communication with other agents */

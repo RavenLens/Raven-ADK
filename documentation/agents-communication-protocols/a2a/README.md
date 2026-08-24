@@ -125,6 +125,68 @@ Do not call `serve()` with the result of `A2A.createBinding()` alone. That
 factory creates an outbound client binding without `queue`; use
 `createA2AHttpServer()` or provide a queue-backed binding instead.
 
+## Using A2A with a Custom Communication Protocol
+
+HTTP is the default server transport because `createA2AHttpServer()` wraps the
+shared communication adapter in a JSON HTTP endpoint. A2A is not coupled to
+HTTP, though. A custom transport should normalize its incoming payload to
+`CommunicationRequest`, call the A2A adapter with a queue-backed binding, and
+serialize the returned `CommunicationResponse` in the transport's native way:
+
+```ts
+import {
+	A2A_AgentsCommunicationProtocol as A2A,
+	CommunicationProtocolWrapperSchema,
+	Queues
+} from "@ravenlens/raven-adk";
+import type { CommunicationRequest } = CommunicationProtocolWrapperSchema;
+
+const agent = new ReActAgent({ /** Options */ });
+
+const binding = A2A.createBinding({ endpoint: "http://unused-for-custom-transport" });
+const queue = new Queues.QueuesLib.InMemoryProtocolTaskQueueSchema();
+const adapter = A2A.createA2ACommunicationAdapter(
+	// Description for agents 
+	{
+		id: "worker",
+		name: "Worker Agent",
+		capabilities: ["delegate_task"]
+	}
+);
+
+/**
+ * Entry point implemented by the custom transport for each incoming message.
+ * It translates the transport payload into the shared request contract and
+ * delegates A2A task handling to the reusable adapter.
+ */
+async function handleCustomMessage(payload: CustomMessage): Promise<unknown> {
+	const request: CommunicationRequest = {
+		id: payload.id,
+		method: payload.type, // "message/send", "tasks/get", or "tasks/cancel"
+		params: payload.params
+	};
+
+	// Use to listend `CommunicationResult` response after each retrival
+	const handlingResult = await adapter.handle(request, { binding, queue });
+
+	return handlingResult;
+}
+
+const a2aServerBinding = { ...binding, queue };
+await agent.serve(a2aServerBinding, { signal: shutdownController.signal });
+```
+
+- `handleCustomMessage` is an application-defined transport callback, not a
+	RavenADK method. Rename it or connect it to the callback used by your
+	WebSocket, Kafka, RabbitMQ, or other custom transport implementation.
+
+The custom transport owns connection handling, authentication, serialization,
+retries, and discovery exposure. The adapter owns A2A task semantics and uses
+the same queue operations as the default HTTP server. For a durable or shared
+worker, replace `InMemoryProtocolTaskQueueSchema` with your implementation of
+`ProtocolTaskQueueSchema`. The transport must pass the same queue to the
+adapter and to `agent.serve()`.
+
 ## ReActAgent `invoke()` Usage
 
 The binding returned by `A2A.createBinding()` can be passed directly to the

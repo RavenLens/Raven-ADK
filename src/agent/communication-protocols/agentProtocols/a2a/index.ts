@@ -21,7 +21,7 @@ import type {
 	AgentCommunicationProtocolFactory
 } from "../agentProtocolSchema";
 import { createHttpProtocolServer, type A2AHttpServer, type A2AHttpServerOptions } from "../../communicationProtocols/protocols/http";
-import type { CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
+import type { CommunicationProtocolAdapter, CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
 import { ProtocolTaskQueueSchema } from "../../queues/queueSchema";
 
 /** Name used by the A2A protocol binding. */
@@ -416,45 +416,66 @@ export function createA2ABinding(options: A2AProtocolOptions): ProtocolBinding {
 	};
 }
 
-/** Creates a Node HTTP A2A endpoint backed by a queue consumed by `ReActAgent.serve`. */
+export type A2ACommunicationRequest = CommunicationRequest<"message/send" | "tasks/get" | "tasks/cancel">
+
+/** 
+ * Creates a transport-independent A2A adapter backed by the supplied queue.
+ * 
+ * @param tasks - setup from exterior to monitor the tasks were bound
+*/
+export function createA2ACommunicationAdapter(agent: AgentDescriptor, tasks: Map<string, TaskStatus> = new Map()): CommunicationProtocolAdapter {
+	return {
+		handle: async (request: A2ACommunicationRequest, context): Promise<CommunicationResponse> => {
+			const params = request.params;
+			
+			if (request.method === "message/send") {
+				const message = asObject(params.message);
+				const metadata = asObject(message.metadata);
+				const raven = asObject(metadata.raven);
+				
+				const taskId = await context.queue.enqueue({
+					from: asString(raven.from, "unknown"),
+					to: asString(raven.to, agent.id),
+					activity: "delegate_task",
+					message: extractText(message),
+					metadata: asObject(params.metadata)
+				});
+				
+				tasks.set(taskId, "working");
+				
+				return { result: { id: taskId, status: { state: "working" } } };
+			}
+			
+			if (request.method === "tasks/get") {
+				const taskId = asString(params.id);
+				const queueWithResults = context.queue as ProtocolTaskQueueSchema & { getResult?: (id: string) => TaskResult | undefined };
+				const result = queueWithResults.getResult?.(taskId);
+				const status = result?.status ?? tasks.get(taskId) ?? "working";
+				
+				return { result: { id: taskId, status: { state: status }, ...(result?.message ? { message: result.message } : {}) } };
+			}
+
+			if (request.method === "tasks/cancel") {
+				const taskId = asString(params.id);
+
+				await context.queue.cancel(taskId, asString(asObject(params.metadata).reason) || undefined);
+				
+				tasks.set(taskId, "cancelled");
+				
+				return { result: { id: taskId, status: { state: "cancelled" } } };
+			}
+
+			return { error: { code: -32601, message: "Method not supported" } };
+		}
+	};
+}
+
+/** Creates the default Node HTTP A2A endpoint backed by a queue consumed by `ReActAgent.serve`. */
 export function createA2AHttpServer(options: A2AHttpServerOptions): A2AHttpServer {
-	const tasks = new Map<string, TaskStatus>();
 	return createHttpProtocolServer({
 		...options,
 		path: options.path ?? "/a2a",
-		adapter: {
-			handle: async (request: CommunicationRequest, context): Promise<CommunicationResponse> => {
-				const params = request.params;
-				if (request.method === "message/send") {
-					const message = asObject(params.message);
-					const metadata = asObject(message.metadata);
-					const raven = asObject(metadata.raven);
-					const taskId = await context.queue.enqueue({
-						from: asString(raven.from, "unknown"),
-						to: asString(raven.to, options.agent.id),
-						activity: "delegate_task",
-						message: extractText(message),
-						metadata: asObject(params.metadata)
-					});
-					tasks.set(taskId, "working");
-					return { result: { id: taskId, status: { state: "working" } } };
-				}
-				if (request.method === "tasks/get") {
-					const taskId = asString(params.id);
-					const queueWithResults = context.queue as ProtocolTaskQueueSchema & { getResult?: (id: string) => TaskResult | undefined };
-					const result = queueWithResults.getResult?.(taskId);
-					const status = result?.status ?? tasks.get(taskId) ?? "working";
-					return { result: { id: taskId, status: { state: status }, ...(result?.message ? { message: result.message } : {}) } };
-				}
-				if (request.method === "tasks/cancel") {
-					const taskId = asString(params.id);
-					await context.queue.cancel(taskId, asString(asObject(params.metadata).reason) || undefined);
-					tasks.set(taskId, "cancelled");
-					return { result: { id: taskId, status: { state: "cancelled" } } };
-				}
-				return { error: { code: -32601, message: "Method not supported" } };
-			}
-		}
+		adapter: createA2ACommunicationAdapter(options.agent)
 	});
 }
 

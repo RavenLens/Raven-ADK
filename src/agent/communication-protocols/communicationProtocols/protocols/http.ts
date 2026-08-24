@@ -56,7 +56,10 @@ function writeJson(response: ServerResponse, status: number, body: Record<string
 	response.end(JSON.stringify(body));
 }
 
-/** Exposes any communication-protocol adapter over a small JSON HTTP envelope. */
+/** 
+ * Exposes any communication-protocol adapter over a small JSON HTTP envelope.
+ * Updates the Queue of agent
+*/
 export function createHttpProtocolServer(options: HttpProtocolServerOptions): HttpProtocolServer {
 	const queue = options.binding.queue ?? new InMemoryProtocolTaskQueueSchema();
 	const binding: ProtocolBinding = { ...options.binding, queue };

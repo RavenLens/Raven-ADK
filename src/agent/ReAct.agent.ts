@@ -2734,6 +2734,14 @@ export class ReActAgent
         };
     }
     
+    /**
+     * Invoke is about to launch the agent
+     * 
+     * - Launched agent when has specified `communicationProtocols` uses these protocols in the outbound mode - where messages and tasks of communication protocol can be send to different agents but never retrived
+     * 
+     * @param options - options for agent runtime
+     * @returns 
+     */
     async invoke(options?: InvokeOptions): Promise<ReActAgentInvokeResult> {
         return await this.runGraph(undefined, options);
     }
