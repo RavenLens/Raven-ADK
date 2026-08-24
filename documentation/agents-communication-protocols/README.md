@@ -32,7 +32,7 @@ These are the protocol surfaces currently represented in the repository:
 | [A2A (Agent-to-Agent)](./a2a/README.md) | HTTP JSON-RPC communication with remote agents. | Outbound client binding and the reusable inbound HTTP server wrapper are implemented. |
 <!-- | [ACP (Agent Communication Protocol)](./acp/README.md) | Communication for edge and local agentic systems. | The RavenADK protocol namespace exists; the guide is being expanded. | -->
 <!-- | [G4A](./g4a/README.md) | Agent treats agents pool  | -->
-| Custom Protocols with RavenADK bindings | An application-specific protocol mapped to the RavenADK communication model. | Use the canonical concepts below as the compatibility boundary with whatever protocol you wish to hug. |
+| [Custom Protocols with RavenADK bindings](./custom-protocol/README.md) | An application-specific protocol mapped to the RavenADK communication model. | Use the canonical concepts below as the compatibility boundary with whatever protocol you wish to hug. |
 
 Protocol names describe different wire-level or topology choices. They should
 not change the way an agent reasons about a task, reports a result, or handles
@@ -45,6 +45,8 @@ transport. This allows a custom protocol to be added without changing
 `ReActAgent`, the agent execution loop, or the canonical task model.
 
 ### Define a Custom Agent Protocol
+
+> Check how to implement custom protocol in [Custom Protocol Document](./custom-protocol/README.md)
 
 An **agent protocol** defines how agents communicate with one another at the
 wire or application level: how agents are discovered, how a task is delegated,

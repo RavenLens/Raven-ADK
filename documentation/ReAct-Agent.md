@@ -16,6 +16,72 @@ The `ReActAgent` is a standalone agent in RavenADK designed to follow the ReAct 
 - **Optimized Execution**: Features internal reasoning recalls and optimized tool resolution to minimize unnecessary turns.
 - **Plugins**: Use [Chat-Compaction Plugin](./compaction/Readme.md) and/or [TODO Plugin](./Todo-Plugin.md) and make your own/use community plugins to extend how does model behave
 
+## Communication with other Agents internal/external
+
+Configure one or more communication protocol bindings with `communicationProtocols` to let the agent communicate with external agents. The binding's `systemPrompt` is added to the agent's system prompt, and its protocol tools and `customCommunicationTools` are added to the agent's tools.
+
+```typescript
+import { ReActAgent } from "@ravenlens/raven-adk/agents";
+import { A2A } from "@ravenlens/raven-adk";
+import { OpenAI } from "@ravenlens/raven-adk/models";
+
+const a2a = A2A.createBinding({
+    endpoint: "https://research-agent.example.com/rpc",
+    participant: {
+        id: "planner-agent",
+        name: "Planner Agent",
+        capabilities: ["delegate_task", "consult_agents"]
+    },
+    pollingIntervalMs: 500,
+    waitTimeoutMs: 120_000
+});
+
+const reactAgent = new ReActAgent({
+    model: new OpenAI({
+        model: "gpt-5.6-sol",
+        apiKey: process.env.OPENAI_API_KEY
+    }),
+    systemPrompt: "Use the A2A research agent when external expertise is needed.",
+    messages: [],
+    tools: [],
+    communicationProtocols: [a2a]
+});
+
+// ReActAgent automatically adds A2A delegate and consultation tools.
+reactAgent.onEvent("protocol_event", (protocolName, eventName, taskId, eventArgs) => {
+    console.log({ protocolName, eventName, taskId, eventArgs });
+});
+
+const result = await reactAgent.invoke({
+    messages: [{
+        type: "user",
+        content: "Ask the research agent for the latest findings on Mars water reservoirs."
+    }]
+});
+
+console.log("Final answer:", result.messages.at(-1)?.content);
+```
+
+> Check more about communication protocols at [Communication Protocols](./agents-communication-protocols/README.md)
+
+- `invoke()` is the outbound communication path. It does not consume an inbound queue: when the model calls a protocol tool, the agent waits for the protocol result and can use the returned answer in the rest of its reasoning loop.
+
+- `serve()` is the inbound worker path. It retrieves tasks from a protocol queue, invokes the ReAct agent for each task, and completes the queued task with the generated outcome. A binding must provide `queue` to use `serve()`.
+
+## Multiple Skills
+
+The `skills` configuration accepts one skill store or an array of skill stores. When multiple stores are provided, the agent exposes the exploration, script, and management tools from all stores and includes each store's available-skill information in the system prompt.
+
+```typescript
+const reactAgent = new ReActAgent({
+    model,
+    systemPrompt: "You are a capable assistant.",
+    messages: [],
+    tools: [],
+    skills: [sessionSkills, sharedSkills]
+});
+```
+
 ## Execution Flow
 
 The `ReActAgent` follows a sophisticated execution flow designed for efficiency:
