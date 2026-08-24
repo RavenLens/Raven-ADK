@@ -61,7 +61,10 @@ Adapters are transport implementations, not HITL strategies. See [LocalHITL.md](
 and [SocketHITL.md](SocketHITL.md) for adapter-specific setup.
 
 <!-- ## HITL Internal Events
-Each class implements custom class that  -->
+Each class implements custom class that
+
+TODO: 
+-->
 
 ## HITL listeners
 
