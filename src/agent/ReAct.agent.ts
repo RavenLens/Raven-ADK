@@ -185,7 +185,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
      * Skills is the set of skills the agent can use to perform some action
      * In CASCADE (https://arxiv.org/abs/2512.23880) scenario -> agent can develop his own skills
     */
-    skills?: Skills;
+    skills?: Skills | Skills[];
     /**
      * It's the agent memory he developed for specific user session or for organization
     */
@@ -979,7 +979,7 @@ export class ReActAgent
     private readonly ReActAgentMemoryInterface: ReActAgentMemory<Memory>;
     /** Config for the agent */
     agentConfig: ReActAgentConfig<Skills, Memory, HITL>;
-    agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox> | undefined = undefined;
+    agentSkillsInterface: SkillsInterface<Skills, HITL, SkillsSandbox>[] = [];
     /** It's overall amount of used tokens by the ReAct agent */
     usedTokens: LLMAnswer["tokens"];
 
@@ -1009,10 +1009,11 @@ export class ReActAgent
         });
 
         // Skills
-        this.agentSkillsInterface = config.skills ? new SkillsInterface({
-            ...config.skills.config,
-            skillStorage: config.skills,
-        }) : undefined;
+        const skillStores = config.skills ? (Array.isArray(config.skills) ? config.skills : [config.skills]) : [];
+        this.agentSkillsInterface = skillStores.map(skillStore => new SkillsInterface({
+            ...skillStore.config,
+            skillStorage: skillStore,
+        }));
 
         this.ReActAgentMemoryInterface = new ReActAgentMemory<Memory>(config.memory, {
             host: this.agentConfig,
@@ -1041,16 +1042,12 @@ export class ReActAgent
         }
 
         // Add skills exploration feature to standalone agent
-        if (this.agentSkillsInterface) {
-            const exploreSkillTools = this.agentSkillsInterface.createExploreSkillsAgentTools();
-            const executeSkillTools = this.agentSkillsInterface.createSkillScriptExecuteTools();
-            const managementSkillsTools = this.agentSkillsInterface?.createManageSkillAgentTools();
-
-            const newTools = [
-                ...exploreSkillTools,
-                ...executeSkillTools,
-                ...(managementSkillsTools || [])
-            ];
+        if (this.agentSkillsInterface.length) {
+            const newTools = this.agentSkillsInterface.flatMap(skills => [
+                ...skills.createExploreSkillsAgentTools(),
+                ...skills.createSkillScriptExecuteTools(),
+                ...skills.createManageSkillAgentTools()
+            ]);
 
             for (const tool of newTools) {
                 if (!this.agentConfig.tools.find(t => t.toolConfig.toolName === tool.toolConfig.toolName)) {
@@ -1070,9 +1067,11 @@ export class ReActAgent
             ] as SkillEventNames[];
 
             for (const possibleSkillEvent of skillEventNames) {
-                this.agentSkillsInterface.onEvent(possibleSkillEvent, (...args: any[]) => {
-                    this.emitEvent(possibleSkillEvent as any, ...args)
-                })
+                for (const skills of this.agentSkillsInterface) {
+                    skills.onEvent(possibleSkillEvent, (...args: any[]) => {
+                        this.emitEvent(possibleSkillEvent as any, ...args)
+                    })
+                }
             }
         }
 
@@ -1996,16 +1995,41 @@ export class ReActAgent
 
         let baseSystemPrompt = REACT_SYSTEM_PROMPT;
 
-        if (this.agentSkillsInterface) {
+        if (this.agentSkillsInterface.length) {
             baseSystemPrompt += `\n\n## Explore your skills and use them according to this specification:\n${SkillsInterface.exploreSkillsPrompt}`;
             baseSystemPrompt += `\n\n## Execute skill scripts and CLI commands according to this specification:\n${SkillsInterface.executeSkillScriptsPrompt}`;
 
-            if (this.agentSkillsInterface.config.dynamicSkillCreation || this.agentSkillsInterface.config.dynamicSkillRelocation || this.agentSkillsInterface.config.dynamicSkillRemoval) {
-                baseSystemPrompt += `\n\n## Create and manage skills as needed according to this specification:\n${this.agentSkillsInterface.createSkillsManagementPrompt()}`;
-            }
+            for (const skills of this.agentSkillsInterface) {
+                if (skills.config.dynamicSkillCreation || skills.config.dynamicSkillRelocation || skills.config.dynamicSkillRemoval) {
+                    baseSystemPrompt += `\n\n## Create and manage skills as needed according to this specification:\n${skills.createSkillsManagementPrompt()}`;
+                }
 
-            const getListOfAvaibalbeSkills = await this.agentSkillsInterface.getListOfAvailableSkillsString();
-            baseSystemPrompt += `\n\n## Available skills list:\n${getListOfAvaibalbeSkills}`;
+                const availableSkills = await skills.getListOfAvailableSkillsString();
+                baseSystemPrompt += `\n\n## Available skills list:\n${availableSkills}`;
+            }
+        }
+
+        // Implemented communication skills
+        const configuredProtocols = this.agentConfig.communicationProtocols ?? [];
+        if (configuredProtocols.length) {
+            baseSystemPrompt += "\n\n## Communication protocols\n";
+            baseSystemPrompt += "Use the communication tools below when another agent or external system can provide information or perform work. Wait for tool results and use them as evidence in your response.\n";
+            for (const protocol of configuredProtocols) {
+                const customToolNames = (protocol.client.customCommunicationTools ?? [])
+                    .map(tool => tool.toolConfig.toolName);
+                const hasParticipant = Boolean(protocol.participant?.id ?? protocol.adapter?.describe().id);
+                const toolNames = [
+                    ...(hasParticipant ? [
+                        `${protocol.name}_delegate_task`,
+                        `${protocol.name}_consult_agents`
+                    ] : []),
+                    ...customToolNames
+                ];
+                baseSystemPrompt += `- Protocol "${protocol.name}"${protocol.version ? ` (version ${protocol.version})` : ""}: ${protocol.systemPrompt ?? "communicate with external agents through its available tools."}\n`;
+                if (toolNames.length) {
+                    baseSystemPrompt += `  Available tools: ${toolNames.map(name => `"${name}"`).join(", ")}\n`;
+                }
+            }
         }
 
         if (memoryPrompt) {
@@ -2061,9 +2085,12 @@ export class ReActAgent
                 agent_discovered: true,
                 message_published: true,
                 authentication_required: true,
+                custom_use_communication_tool: true,
+                custom_output_communication_tool: true,
                 error: true
             } as Record<AgentCommunicationProtocolsSchema.CommunicateEvents, boolean>) as AgentCommunicationProtocolsSchema.CommunicateEvents[];
             
+            // Register events for tools communication protocol client to be passed as `protocl_event`
             for (const eventName of eventNames) {
                 protocol.client.onEvent(eventName, (...eventArgs: unknown[]) => {
                     const taskId = eventArgs
@@ -2074,6 +2101,12 @@ export class ReActAgent
 
                     this.emitEvent("protocol_event", protocol.name, eventName, taskId, eventArgs);
                 });
+            }
+
+            for (const tool of protocol.client.customCommunicationTools ?? []) {
+                if (!this.agentConfig.tools.some(registeredTool => registeredTool.toolConfig.toolName === tool.toolConfig.toolName)) {
+                    this.agentConfig.tools.push(tool);
+                }
             }
 
             if (!participantId) {
@@ -2734,6 +2767,14 @@ export class ReActAgent
         };
     }
     
+    /**
+     * Invoke is about to launch the agent
+     * 
+    * - When `communicationProtocols` are configured, protocol tools send outbound messages and await remote answers during this invocation.
+     * 
+     * @param options - options for agent runtime
+     * @returns 
+     */
     async invoke(options?: InvokeOptions): Promise<ReActAgentInvokeResult> {
         return await this.runGraph(undefined, options);
     }

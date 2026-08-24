@@ -14,9 +14,9 @@ import type {
 import { ProtocolTaskQueueSchema } from "../queues/queueSchema";
 
 /** Protocol-neutral request received by a transport adapter. */
-export interface CommunicationRequest {
+export interface CommunicationRequest<Method extends string = string> {
 	id: string | number | null;
-	method: string;
+	method: Method;
 	params: Record<string, unknown>;
 }
 

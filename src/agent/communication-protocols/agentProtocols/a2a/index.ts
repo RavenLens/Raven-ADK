@@ -21,10 +21,10 @@ import type {
 	AgentCommunicationProtocolFactory
 } from "../agentProtocolSchema";
 import { createHttpProtocolServer, type A2AHttpServer, type A2AHttpServerOptions } from "../../communicationProtocols/protocols/http";
-import type { CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
-import { ProtocolTaskQueueSchema } from "../../queues/queueSchema";
+import type { CommunicationProtocolAdapter, CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
+import { ProtocolQueueEventMap, ProtocolTaskQueueSchema } from "../../queues/queueSchema";
 
-/** Name used by the A2A protocol binding. */
+/** Name used by the A2A protocol binding. This defines the agent-to-agent protocol name. */
 export const PROTOCOL_NAME = "A2A (Agent-to-Agent Protocol by GOOGLE)";
 
 type JsonObject = Record<string, unknown>;
@@ -62,7 +62,23 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 	private readonly pending: QueuedTask[] = [];
 	private readonly results = new Map<string, TaskResult>();
 	private readonly waiters: Array<(task: QueuedTask | undefined) => void> = [];
+	readonly listeners = new Map<keyof ProtocolQueueEventMap, Set<(...args: any[]) => void | Promise<void>>>();
 	private sequence = 0;
+
+	onEvent<K extends keyof ProtocolQueueEventMap>(event: K, listener: ProtocolQueueEventMap[K]): () => void {
+		const listeners = this.listeners.get(event) ?? new Set();
+		const callback = listener as (...args: any[]) => void | Promise<void>;
+		listeners.add(callback);
+		this.listeners.set(event, listeners);
+		return () => listeners.delete(callback);
+	}
+
+	emitEvent<K extends keyof ProtocolQueueEventMap>(event: K, ...eventArgs: Parameters<ProtocolQueueEventMap[K]>): boolean {
+		const listeners = this.listeners.get(event);
+		if (!listeners) return false;
+		for (const listener of listeners) void listener(...eventArgs);
+		return listeners.size > 0;
+	}
 
 	async enqueue(request: TaskRequest): Promise<string> {
 		const taskId = request.taskId ?? `a2a-task-${++this.sequence}`;
@@ -70,16 +86,21 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 		const waiter = this.waiters.shift();
 		if (waiter) waiter(task);
 		else this.pending.push(task);
+		this.emitEvent("task_enqueued", task);
 		return taskId;
 	}
 
 	async dequeue(signal?: AbortSignal): Promise<QueuedTask | undefined> {
 		const task = this.pending.shift();
-		if (task) return task;
+		if (task) {
+			this.emitEvent("task_dequeued", task);
+			return task;
+		}
 		if (signal?.aborted) return undefined;
 		return new Promise(resolve => {
 			const waiter = (queuedTask: QueuedTask | undefined) => {
 				signal?.removeEventListener("abort", onAbort);
+				if (queuedTask) this.emitEvent("task_dequeued", queuedTask);
 				resolve(queuedTask);
 			};
 			const onAbort = () => {
@@ -94,10 +115,12 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 
 	async complete(taskId: string, result: TaskResult): Promise<void> {
 		this.results.set(taskId, result);
+		this.emitEvent("task_completed", result);
 	}
 
 	async fail(taskId: string, error: ProtocolError): Promise<void> {
 		this.results.set(taskId, { taskId, status: "failed", error });
+		this.emitEvent("task_failed", taskId, error);
 	}
 
 	async cancel(taskId: string, reason?: string): Promise<void> {
@@ -106,6 +129,7 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 			status: "cancelled",
 			error: reason ? { code: "cancelled", message: reason } : undefined
 		});
+		this.emitEvent("task_cancelled", { taskId, reason, requestedAt: now() });
 	}
 
 	size(): number {
@@ -285,7 +309,7 @@ function toA2AMessage(request: TaskRequest): JsonObject {
 
 /** JSON-RPC client that maps A2A tasks to Raven's canonical protocol schema. */
 export class A2AProtocolClient implements ProtocolClient {
-	private readonly listeners = new Map<keyof CommunicationEventMap, Set<(...args: any[]) => void | Promise<void>>>();
+	readonly listeners = new Map<keyof CommunicationEventMap, Set<(...args: any[]) => void | Promise<void>>>();
 	private requestNumber = 0;
 	private readonly requestFetch: typeof globalThis.fetch;
 
@@ -348,7 +372,39 @@ export class A2AProtocolClient implements ProtocolClient {
 		await this.emit("task_cancelled", cancellation);
 	}
 
-	/** Registers a typed event listener and returns an unsubscribe function. */
+	/** Emits an event synchronously for custom communication tools. */
+	emitEvent<K extends keyof CommunicationEventMap>(eventName: K, ...eventArgs: Parameters<CommunicationEventMap[K]>): boolean {
+		const listeners = this.listeners.get(eventName) ?? new Set();
+		for (const listener of listeners) void listener(...eventArgs);
+		return listeners.size > 0;
+	}
+
+	/**
+	 * Registers a typed event listener and returns an unsubscribe function.
+	 *
+	 * @example
+	 * ```ts
+	 * const binding = A2A.createBinding({
+	 *     endpoint: "https://research.example.com/a2a",
+	 *     participant: { id: "planner", name: "Planning Agent" }
+	 * });
+	 *
+	 * const stopListening = binding.client.onEvent("task_completed", result => {
+	 *     console.log(`A2A task ${result.taskId} completed`, result.message);
+	 * });
+	 *
+	 * binding.client.onEvent("task_failed", (taskId, error) => {
+	 *     console.error(`A2A task ${taskId} failed: ${error.message}`);
+	 * });
+	 *
+	 * // Remove the first listener when it is no longer needed.
+	 * stopListening();
+	 * ```
+	 *
+	 * The same listener API is available on custom protocol clients. When the
+	 * binding is attached to ReActAgent, its events are also forwarded through
+	 * the agent's `protocol_event` event.
+	 */
 	onEvent<K extends keyof CommunicationEventMap>(event: K, listener: CommunicationEventMap[K]): () => void {
 		const listeners = this.listeners.get(event) ?? new Set();
 		listeners.add(listener as (...args: any[]) => void | Promise<void>);
@@ -416,45 +472,66 @@ export function createA2ABinding(options: A2AProtocolOptions): ProtocolBinding {
 	};
 }
 
-/** Creates a Node HTTP A2A endpoint backed by a queue consumed by `ReActAgent.serve`. */
+export type A2ACommunicationRequest = CommunicationRequest<"message/send" | "tasks/get" | "tasks/cancel">
+
+/** 
+ * Creates a transport-independent A2A adapter backed by the supplied queue.
+ * 
+ * @param tasks - setup from exterior to monitor the tasks were bound
+*/
+export function createA2ACommunicationAdapter(agent: AgentDescriptor, tasks: Map<string, TaskStatus> = new Map()): CommunicationProtocolAdapter {
+	return {
+		handle: async (request: A2ACommunicationRequest, context): Promise<CommunicationResponse> => {
+			const params = request.params;
+			
+			if (request.method === "message/send") {
+				const message = asObject(params.message);
+				const metadata = asObject(message.metadata);
+				const raven = asObject(metadata.raven);
+				
+				const taskId = await context.queue.enqueue({
+					from: asString(raven.from, "unknown"),
+					to: asString(raven.to, agent.id),
+					activity: "delegate_task",
+					message: extractText(message),
+					metadata: asObject(params.metadata)
+				});
+				
+				tasks.set(taskId, "working");
+				
+				return { result: { id: taskId, status: { state: "working" } } };
+			}
+			
+			if (request.method === "tasks/get") {
+				const taskId = asString(params.id);
+				const queueWithResults = context.queue as ProtocolTaskQueueSchema & { getResult?: (id: string) => TaskResult | undefined };
+				const result = queueWithResults.getResult?.(taskId);
+				const status = result?.status ?? tasks.get(taskId) ?? "working";
+				
+				return { result: { id: taskId, status: { state: status }, ...(result?.message ? { message: result.message } : {}) } };
+			}
+
+			if (request.method === "tasks/cancel") {
+				const taskId = asString(params.id);
+
+				await context.queue.cancel(taskId, asString(asObject(params.metadata).reason) || undefined);
+				
+				tasks.set(taskId, "cancelled");
+				
+				return { result: { id: taskId, status: { state: "cancelled" } } };
+			}
+
+			return { error: { code: -32601, message: "Method not supported" } };
+		}
+	};
+}
+
+/** Creates the default Node HTTP A2A endpoint backed by a queue consumed by `ReActAgent.serve`. */
 export function createA2AHttpServer(options: A2AHttpServerOptions): A2AHttpServer {
-	const tasks = new Map<string, TaskStatus>();
 	return createHttpProtocolServer({
 		...options,
 		path: options.path ?? "/a2a",
-		adapter: {
-			handle: async (request: CommunicationRequest, context): Promise<CommunicationResponse> => {
-				const params = request.params;
-				if (request.method === "message/send") {
-					const message = asObject(params.message);
-					const metadata = asObject(message.metadata);
-					const raven = asObject(metadata.raven);
-					const taskId = await context.queue.enqueue({
-						from: asString(raven.from, "unknown"),
-						to: asString(raven.to, options.agent.id),
-						activity: "delegate_task",
-						message: extractText(message),
-						metadata: asObject(params.metadata)
-					});
-					tasks.set(taskId, "working");
-					return { result: { id: taskId, status: { state: "working" } } };
-				}
-				if (request.method === "tasks/get") {
-					const taskId = asString(params.id);
-					const queueWithResults = context.queue as ProtocolTaskQueueSchema & { getResult?: (id: string) => TaskResult | undefined };
-					const result = queueWithResults.getResult?.(taskId);
-					const status = result?.status ?? tasks.get(taskId) ?? "working";
-					return { result: { id: taskId, status: { state: status }, ...(result?.message ? { message: result.message } : {}) } };
-				}
-				if (request.method === "tasks/cancel") {
-					const taskId = asString(params.id);
-					await context.queue.cancel(taskId, asString(asObject(params.metadata).reason) || undefined);
-					tasks.set(taskId, "cancelled");
-					return { result: { id: taskId, status: { state: "cancelled" } } };
-				}
-				return { error: { code: -32601, message: "Method not supported" } };
-			}
-		}
+		adapter: createA2ACommunicationAdapter(options.agent)
 	});
 }
 
@@ -463,3 +540,4 @@ export const A2A: AgentCommunicationProtocolFactory<A2AProtocolOptions> = {
 	name: PROTOCOL_NAME,
 	createBinding: createA2ABinding
 };
+

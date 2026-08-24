@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { A2AProtocolClient, createA2AHttpServer, createA2ABinding, PROTOCOL_NAME } from "../../src/agent/communication-protocols/protocols/a2a";
+import { A2AProtocolClient, createA2ACommunicationAdapter, createA2AHttpServer, createA2ABinding, PROTOCOL_NAME } from "../../src/agent/communication-protocols/agentProtocols/a2a";
+import { InMemoryProtocolTaskQueueSchema } from "../../src/agent/communication-protocols/queues/queue-types";
 
 function jsonResponse(body: unknown): Response {
     return new Response(JSON.stringify(body), {
@@ -162,5 +163,46 @@ describe("A2A protocol binding", () => {
         const card = await (await fetch(`${endpoint.replace("/a2a", "")}/.well-known/agent-card.json`)).json();
         expect(card).toMatchObject({ id: "worker", name: "Worker Agent" });
         await service.close();
+    });
+
+    it("exposes the inbound adapter for non-HTTP communication transports", async () => {
+        const queue = new InMemoryProtocolTaskQueueSchema();
+        const adapter = createA2ACommunicationAdapter({ id: "worker", name: "Worker Agent" });
+
+        const response = await adapter.handle({
+            id: "request-1",
+            method: "message/send",
+            params: {
+                message: {
+                    parts: [{ kind: "text", text: "Use the custom transport" }],
+                    metadata: { raven: { from: "caller", to: "worker" } }
+                }
+            }
+        }, {
+            binding: createA2ABinding({ endpoint: "http://localhost" }),
+            queue
+        });
+
+        const queued = await queue.dequeue();
+        expect(response).toMatchObject({ result: { id: queued?.taskId, status: { state: "working" } } });
+        expect(queued?.request).toMatchObject({ from: "caller", to: "worker", message: "Use the custom transport" });
+    });
+
+    it("emits queue lifecycle events and supports unsubscribing", async () => {
+        const queue = new InMemoryProtocolTaskQueueSchema();
+        const events: string[] = [];
+        const removeEnqueuedListener = queue.onEvent("task_enqueued", task => events.push(`enqueued:${task.taskId}`));
+        queue.onEvent("task_dequeued", task => events.push(`dequeued:${task.taskId}`));
+        queue.onEvent("task_completed", result => events.push(`completed:${result.taskId}`));
+
+        const taskId = await queue.enqueue({ from: "caller", to: "worker", message: "Run the task" });
+        const queued = await queue.dequeue();
+        await queue.complete(taskId, { taskId, status: "completed" });
+
+        expect(events).toEqual([`enqueued:${taskId}`, `dequeued:${taskId}`, `completed:${taskId}`]);
+        removeEnqueuedListener();
+        await queue.enqueue({ from: "caller", to: "worker", message: "Do not notify this listener" });
+        expect(events).toHaveLength(3);
+        expect(queued?.taskId).toBe(taskId);
     });
 });

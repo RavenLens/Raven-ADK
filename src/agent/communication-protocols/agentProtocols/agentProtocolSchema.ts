@@ -1,4 +1,8 @@
+import z from "zod";
+import { SchemaSkillStore } from "../../skills/stores/schema";
+import { Tool, ToolConfig } from "../../tools";
 import { ProtocolTaskQueueSchema } from "../queues/queueSchema";
+import { ToolLogic } from "../../tools/tools";
 
 /**
  * Operations that can be exposed by a protocol binding or adapted into an
@@ -14,7 +18,8 @@ export type StandardizedActivityName =
     | "seek_knowledge"
     | "get_agent_status"
     | "publish_message"
-    | "publish_state";
+    | "publish_state"
+    | "communication_custom_tool";
 
 /** @deprecated Use `StandardizedActivityName`. */
 export type StandarizedActivityNames = StandardizedActivityName;
@@ -27,7 +32,7 @@ export type MessageId = string;
 export type ArtifactId = string;
 
 /** Describes an agent that can be discovered or addressed through a protocol. */
-export interface AgentDescriptor {
+export interface AgentDescriptor<Skills extends (SchemaSkillStore | string)[] = any[]> {
     /** Stable identifier used to address the agent in protocol requests. */
     id: AgentId;
     /** Human-readable name presented to other agents and clients. */
@@ -37,7 +42,7 @@ export interface AgentDescriptor {
     /** Protocol activities that the agent can perform. */
     capabilities?: PossibleActivityName[];
     /** Skills or domains that can be used to match discovery requests. */
-    skills?: string[];
+    skills?: Skills; // FIXME: Specify real skill object
     /** Optional endpoint where the agent can be reached directly. */
     endpoint?: string;
     /** Protocol-specific metadata that does not belong to the common contract. */
@@ -252,6 +257,55 @@ export interface CommunicationEventMap {
     message_published: (message: Message) => void | Promise<void>;
     /** Emitted when the protocol requires credentials or another authentication step. */
     authentication_required: (details?: Record<string, unknown>) => void | Promise<void>;
+    /**
+     * Emitted when a custom communication tool configured on a ReActAgent is invoked.
+     *
+     * @example
+    * // ProtocolCustomClientTool wraps tool logic and produces protocol events
+    * // before and after the underlying communication operation runs.
+    * const customTool = new ProtocolCustomClientTool(
+    *     protocol,
+    *     async ({ question }) => {
+    *         const task = await externalAgentClient.delegate({
+    *             from: "planner",
+    *             to: "research-agent",
+    *             activity: "delegate_task",
+    *             message: question
+    *         });
+    *         const result = await task.wait();
+    *         return result.message?.content ?? "The external agent returned no answer.";
+    *     },
+    *     {
+    *         toolName: "ask_external_agent",
+    *         toolDescription: "Ask a remote agent to answer a question.",
+    *         toolArguments: z.object({ question: z.string() })
+    *     }
+    * );
+    * const protocol = new CustomProtocol([customTool]);
+    *
+     * protocol.onEvent("custom_use_communication_tool", (protocolName, toolName) => {
+     *     console.log(`${protocolName}: ${toolName} started`);
+     * });
+     * protocol.onEvent("custom_output_communication_tool", (protocolName, toolName, output) => {
+     *     console.log(`${protocolName}: ${toolName} returned`, output);
+     * });
+     *
+     * const agent = new ReActAgent({
+     *     model,
+     *     systemPrompt: "Use the custom communication tool when appropriate.",
+     *     messages: [],
+     *     tools: [],
+     *     communicationProtocols: [{
+     *         name: "Custom Protocol",
+     *         version: "1.0",
+     *         client: protocol
+     *     }]
+     * });
+     * await agent.invoke({ messages: [{ type: "user", content: "Run the custom tool." }] });
+     */
+    custom_use_communication_tool: (protocolName: string | undefined, toolName: string, params?: Record<string, any>) => void | Promise<void>;
+    /** Emitted after a custom communication tool returns its string output. */
+    custom_output_communication_tool: (protocolName: string | undefined, toolName: string, output: string) => void | Promise<void>;
     /** Emitted when the protocol encounters an error not specific to task failure. */
     error: (error: ProtocolError, taskId?: TaskId) => void | Promise<void>;
 }
@@ -259,10 +313,42 @@ export interface CommunicationEventMap {
 export type CommunicateEvents = keyof CommunicationEventMap;
 
 /**
+ * Use by protocol implementation to implement tool is given to agent to represent communication tool usage
+ *  - usally it's used next to `tool` event call
+ * This tool emits the events from tool call and output to the `ProtocolClient`
+*/
+export class ProtocolCustomClientTool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> extends Tool<ToolArgs, ToolOutputSchema> {
+    constructor(protocol: ProtocolClient, toolLogic: ToolLogic<ToolArgs>, toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>) {
+        const toolLogicWrappedCommunicated = async (args: z.infer<ToolArgs>): Promise<string> => {
+            protocol.emitEvent("custom_use_communication_tool", protocol.protocolName, toolConfig.toolName);
+            const toolOutput = await toolLogic(args);
+            protocol.emitEvent("custom_output_communication_tool", protocol.protocolName, toolConfig.toolName, toolOutput);
+
+            return toolOutput;
+        }
+
+        super(toolLogicWrappedCommunicated, toolConfig);
+    }
+}
+
+/**
  * Protocol-neutral runtime API. A2A, ACP, GACP, and local protocols implement
  * this contract and translate it to their own transport and wire format.
 */
 export interface ProtocolClient {
+    /** Name of protocol same as is in the `ProtocolBinding` */
+    protocolName?: string;
+    /** List with event listened that onEvent has assigne and emitEvent has to trigger */
+    readonly listeners: Map<keyof CommunicationEventMap, Set<(...args: any[]) => void | Promise<void>>>;
+    /**
+     * Define custom communication tools will be pasted to the entry leverages tools and has implemented support
+     * - Use `ProtocolCustomClientTool` to make a events communicated out of the calls as the `custom_use_communication_tool` and `custom_output_communication_tool`
+     * - Usage of `Tool` class is correct but this ignores the events
+     * - Client specifies tools then is leveraged `convertToolToPrCustomClientTool` to make from them event triggering tools
+     * - Each tool usage and output causes trigger event with `communication_tool` suffix
+    * - These tools can use the communication adpater
+    */
+    customCommunicationTools?: (Tool<any, any> |  ProtocolCustomClientTool<any, any>)[];
     /** Finds external agents that match the requested capability, skill, or query. */
     discover(request: DiscoveryRequest): Promise<DiscoveryResult>;
     /** Submits work to a specific external agent and returns a handle for tracking its task. */
@@ -273,11 +359,24 @@ export interface ProtocolClient {
     getTask(taskId: TaskId): Promise<TaskSnapshot>;
     /** Requests cancellation of a remote task that is queued or still progressing. */
     cancel(taskId: TaskId, reason?: string): Promise<void>;
+    /**
+     * Emits event for the protocol
+     * - used by `customCommunicationTools` to produce the tool call event
+     */
+    emitEvent<K extends keyof CommunicationEventMap>(
+        eventName: K,
+        ...eventArgs: Parameters<CommunicationEventMap[K]>
+    ): void;
     /** Subscribes to a protocol event and returns a function that removes the subscription. */
     onEvent<K extends keyof CommunicationEventMap>(
         event: K,
         listener: CommunicationEventMap[K]
     ): () => void;
+}
+
+/** Converts common tools into event-emitting ProtocolCustomClientTool instances for a protocol client. */
+export function convertToolsToProtocolTools(protocol: ProtocolClient, tools: Tool<any, any>[]): ProtocolCustomClientTool<any, any>[] {
+    return tools.map(tool => new ProtocolCustomClientTool(protocol, tool.toolLogic, tool.toolConfig));
 }
 
 export interface AgentAdapter {
@@ -290,6 +389,10 @@ export interface AgentAdapter {
 export interface ProtocolBinding {
     /** Protocol name */
     name: string;
+    /**
+     * Optional Instruction for the entity is going to use protocol. Is attached to the system prompt of agent or the entity
+    */
+    systemPrompt?: string;
     /** Protocol Version */
     version: string;
     /** outbound communication with other agents */
@@ -303,7 +406,7 @@ export interface ProtocolBinding {
 }
 
 /** A configured protocol exposed to an agent or orchestrator. */
-export interface Schema extends ProtocolBinding {}
+export interface Schema extends ProtocolBinding { }
 
 /**
  * Use to maintain consistent factory shape among the protocols. This is the

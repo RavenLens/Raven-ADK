@@ -32,7 +32,7 @@ These are the protocol surfaces currently represented in the repository:
 | [A2A (Agent-to-Agent)](./a2a/README.md) | HTTP JSON-RPC communication with remote agents. | Outbound client binding and the reusable inbound HTTP server wrapper are implemented. |
 <!-- | [ACP (Agent Communication Protocol)](./acp/README.md) | Communication for edge and local agentic systems. | The RavenADK protocol namespace exists; the guide is being expanded. | -->
 <!-- | [G4A](./g4a/README.md) | Agent treats agents pool  | -->
-| Custom Protocols with RavenADK bindings | An application-specific protocol mapped to the RavenADK communication model. | Use the canonical concepts below as the compatibility boundary with whatever protocol you wish to hug. |
+| [Custom Protocols with RavenADK bindings](./custom-protocol/README.md) | An application-specific protocol mapped to the RavenADK communication model. | Use the canonical concepts below as the compatibility boundary with whatever protocol you wish to hug. |
 
 Protocol names describe different wire-level or topology choices. They should
 not change the way an agent reasons about a task, reports a result, or handles
@@ -45,6 +45,8 @@ transport. This allows a custom protocol to be added without changing
 `ReActAgent`, the agent execution loop, or the canonical task model.
 
 ### Define a Custom Agent Protocol
+
+> Check how to implement custom protocol in [Custom Protocol Document](./custom-protocol/README.md)
 
 An **agent protocol** defines how agents communicate with one another at the
 wire or application level: how agents are discovered, how a task is delegated,
@@ -122,6 +124,30 @@ S3, or another suitable backend. Follow the schema because the communication
 protocol and `ReActAgent.serve()` already implement their queue interaction
 against these operations; a different contract would require protocol- or
 agent-specific integration code.
+
+Queues also expose typed lifecycle events through `onEvent` and `emitEvent`.
+Subscribe to `task_enqueued`, `task_dequeued`, `task_completed`,
+`task_failed`, `task_cancelled`, or `error` for monitoring, tracing, metrics,
+or transport notifications. `onEvent` returns an unsubscribe function:
+
+```ts
+const stopObserving = binding.queue?.onEvent("task_failed", (taskId, error) => {
+	console.error(`Queue task ${taskId} failed: ${error.message}`);
+});
+
+stopObserving?.();
+```
+
+Listeners receive canonical `QueuedTask`, `TaskResult`, `ProtocolError`, and
+`Cancellation` payloads rather than storage-specific records. Implementations
+should emit events after the corresponding operation succeeds and dispatch
+listener promises without delaying queue operations.
+
+Custom queues must implement every method in `ProtocolTaskQueueSchema`, keep
+task IDs stable across retries, and add its typed listener map plus `onEvent`
+and `emitEvent` methods. Emit enqueue and dequeue events when work is accepted
+and claimed, then the matching terminal event after `complete`, `fail`, or
+`cancel` is stored. Emit `error` for unexpected storage or delivery failures.
 
 See the [custom protocol guide](./custom-protocol/README.md), the
 [agent-protocol notes](../../src/agent/communication-protocols/agentProtocols/README.md),
