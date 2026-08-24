@@ -192,7 +192,7 @@ export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extend
     memory?: ConfiguredMemory<Memory> | ConfiguredMemory<Memory>[];
     /** It's list with agent plugins are going to be execute and can */
     plugins?: ReActAgentPluginSpec[];
-    /** Specify protocol schema */
+    /** Communication protocols list */
     communicationProtocols?: AgentCommunicationProtocolsSchema.Schema[];
     /** Specify list with tools */
     tools: Tool<any, any>[];

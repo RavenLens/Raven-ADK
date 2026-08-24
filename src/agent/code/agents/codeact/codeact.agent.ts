@@ -1,6 +1,9 @@
+import { Graph, GraphMarkers } from "../../../../graph";
+import { AgentCommunicationProtocolsSchema } from "../../../communication-protocols";
 import { DeterministicMemorySchema, ToolBasedMemorySchema } from "../../../memory";
 import { AgentModel, ConfiguredMemory, ReActAgentEvents, ReActAgentPluginSpec } from "../../../ReAct.agent";
 import { SchemaSkillStore } from "../../../skills/stores/schema";
+import { AgentMessagesGraphState } from "../../../state";
 import { CodeExecutionSandboxSchema, Tool } from "../../../tools";
 import { HITLTransportSchema } from "../../../tools/hitl/hitlToolSchema";
 import { MCP } from "../../../tools/mcp/mcpTools";
@@ -32,6 +35,16 @@ export interface CodeActWorkspaceConfig {
         workerIsolation: "snapshot";
         applyMode: "serialized";
     }[];
+
+    /**
+     * Specification how to handle the error when error occurs. This is additional specification due to ``
+     * 
+     * - stop - halts further execution and produces `error`
+     * - ignore - ignores the error and starts to process other repositiories. Produces the error 
+     * 
+     * @default "stop"
+     */
+    listErrorStrategy?: "stop" | "ignore";
 }
 
 export interface CodeActPlanConfig {
@@ -56,11 +69,19 @@ export interface CodeActValidationConfig {
      * @default true
     */
     preConfiguredCommands: CodeActValidationCommand[];
-    /** Amount of comands used to repair the failure after first command try */
+}
+
+export interface CodeActSandboxSchema extends CodeExecutionSandboxSchema {
+    /** 
+     * Amount of comands used to repair the failure after first command try
+     * TODO: When corssed agent goes to other step and registers what isn't working
+     *  - either in logic of harness
+     *  - either in the model - by passing this param to the model
+    */
     maxRepairAttempts?: number;
 }
 
-export interface CodeActSandboxConfig<Sandbox extends CodeExecutionSandboxSchema> {
+export interface CodeActSandboxConfig<Sandbox extends CodeActSandboxSchema> {
     default: Sandbox;
     byLanguage: Record<SupportedLanguageName, Sandbox>;
 }
@@ -79,13 +100,24 @@ export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends D
     pattern: "codeact";
     model: AgentModel;
     systemPrompt: string;
+
     /** Specify Workspaces where agent can work */
     workspaces: CodeActWorkspaceConfig;
-    /** Specify plan where agent can work */
+
+    /** Specify plan where agent can work. Planning is executed always at the begining after snapshot of workspace directories */
     plan?: {
-        required: boolean;
+        /** Specify optionally as addition to planner system prompt */
+        systemPrompt?: string;
+        /**
+         * Model is used to make plan
+         * @default CodeActConfig.model - same model as this to produce the code
+         */
+        model?: AgentModel;
+        // /** Specify whether has to be planning executed at the begining @default true */
+        // required?: boolean;
         maxSteps: number;
     };
+    
     /**
      * writeMode: "proposal" lets an IDE show the patch before apply it. writeMode: "apply" applies approved changes directly. A future transaction mode may stage all changes and commit them atomically.
     */
@@ -119,6 +151,10 @@ export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends D
      * In CASCADE (https://arxiv.org/abs/2512.23880) scenario -> agent can develop his own skills
     */
     skills?: Skills[] | Skills;
+
+    /** Communication protocols list */
+    communicationProtocols?: AgentCommunicationProtocolsSchema.Schema[];
+    
     /**
      * Supports ReActAgent plugins full list with optionally additional invoke places and events. List with plugins will be invoked from space
      * Optional. 
@@ -133,7 +169,13 @@ export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends D
      * 
      * TODO: Configure HITL for the CodeAct and Supervised Code act - allow to apply additional fields - or use mutually when possilbe Hitl can get the config for **validation** additionally TODO: Add Hybrid HITL with configuration
      */
-    hitl?: HITL;
+    hitlConfig?: {
+        hitl: HITL;
+        /**
+         * Specifies how to handle the operations from  
+        */
+        hitlStrategy: "all" | "ignore" | ""
+    };
     /**
      * Memory for Coding Agent
      * 
@@ -150,8 +192,6 @@ export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends D
 
     /** As default is `false` boolean */
     parallelTools?: boolean;
-    // TODO: List with communication protocols for the Agents specify once communication protocols shape is done
-    // communicationProtocols: any;
 }
 
 /**
@@ -182,19 +222,25 @@ export type CodeActExecutionLifecyclePhases =
     | "conclude";
 
 export interface CodeActEvents<ReturnType = void | Promise<void>> extends ReActAgentEvents {
+    /** Thrown each time some kind of error happens */
+    error: (error: any, isExecutionStopped?: boolean) => ReturnType;
     /** Executed once `ReActAgentExecutionStatus` changes */
     execution_status_change: (status: ReActAgentExecutionStatus, codeactStatus: CodeActState) => ReturnType;
     /** Executed once `CodeActExecutionLifecyclePhases` changes */
     lifecylce_phase_change: (phase: CodeActExecutionLifecyclePhases, codeactStatus: CodeActState) => ReturnType;
-
     // For execution command
     validation_command_start: (command: CodeActValidationCommand) => ReturnType;
     validation_command_end: (command: CodeActValidationCommand) => ReturnType;
 }
 
+// List with defaults
+const DEFAULT_LIST_ERROR_STRATEGY: CodeActConfig<any, any, any, any>["workspaces"]["listErrorStrategy"] = "stop";
+
+// Logic
 export class CodeActAgent<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema, Sandbox extends CodeExecutionSandboxSchema> implements CodeActSchema<CodeActInvokeOptions, Promise<CodeActState>> {
     protected pattern: "codeact" = "codeact";
     private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private tools: Tool<any, any>[] = [];
     config: CodeActConfig<Skills, Memory, HITL, Sandbox>;
 
     /** 
@@ -206,6 +252,38 @@ export class CodeActAgent<Skills extends SchemaSkillStore, Memory extends Determ
 
     constructor(config: CodeActConfig<Skills, Memory, HITL, Sandbox>) {
         this.config = config;
+
+        // Assignes default error handling strategy for workspace list error - it's to be pasted before `validateWorkspaces`
+        if (!this.config.workspaces.listErrorStrategy) {
+            this.config.workspaces.listErrorStrategy = DEFAULT_LIST_ERROR_STRATEGY;
+        }
+
+        // Validates workspaces
+        this.validateWorkspaces();
+
+        // Snapshots
+        this.snapshotWorkspace();
+
+        // Logic Graph
+        const reactAgentGraph = new Graph<AgentMessagesGraphState>({});
+
+        /* reactAgentGraph
+            .addNode("executor", async state => {
+                
+            })
+            .addNode("sandbox", async state => {
+
+            });
+
+        if (this.config.plan) {
+            reactAgentGraph.addNode("plan", async state => {
+
+            })
+
+            reactAgentGraph
+                .addEdge(GraphMarkers.START, "plan")
+                .addEdge("plan", "executor");
+        } */
     }
 
     onEvent<EventName extends keyof CodeActEvents>(
@@ -228,6 +306,21 @@ export class CodeActAgent<Skills extends SchemaSkillStore, Memory extends Determ
         
     }
 
+    /** 
+     * Checks whether workspaces are in square with Config and assumptions
+     * TODO:
+     * 1. Check: Does file exists
+     * 2. Produce errors according to `workspaces.listErrorStrategy` when file doesn't exists or the folder
+    */
+    private async validateWorkspaces() {
+        /*  */
+    }
+    
+    /** Takes all files and snapshots its content */
+    private async snapshotWorkspace() {
+        
+    }
+
     /**
      * Overrrides the messages list
      * 
@@ -247,6 +340,7 @@ export class CodeActAgent<Skills extends SchemaSkillStore, Memory extends Determ
      * @param options 
      */
     async invoke(options: CodeActInvokeOptions): Promise<CodeActState> {
+        
         void options;
         throw new Error("CodeActAgent.invoke is not implemented yet.");
     }
