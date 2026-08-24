@@ -166,15 +166,15 @@ export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends D
     /**
      * Used to configure the tools asks and for additional informations
      * @default undefined
-     * 
-     * TODO: Configure HITL for the CodeAct and Supervised Code act - allow to apply additional fields - or use mutually when possilbe Hitl can get the config for **validation** additionally TODO: Add Hybrid HITL with configuration
-     */
+    */
     hitlConfig?: {
+        /** They */
         hitl: HITL;
         /**
-         * Specifies how to handle the operations from  
+         * Specifies how to handle the default operations from the CodeAct logic
+         * When not specified you're responsible to setup the tools you want to handle via the HITL by specify in the `hitl` specified handler
         */
-        hitlStrategy: "all" | "ignore" | ""
+        presetHitlStrategy?: "all" | "ignore";
     };
     /**
      * Memory for Coding Agent
@@ -264,9 +264,17 @@ export class CodeActAgent<Skills extends SchemaSkillStore, Memory extends Determ
         // Snapshots
         this.snapshotWorkspace();
 
+        // TODO: Define default tools
+        // TODO: Define these tools default names
+        // TODO: Define events from these tools calling
+
+        // TODO: HITL - define the hitl for these methods regard to `htilConfig.presetHitlStrategy`
+        
         // Logic Graph
         const reactAgentGraph = new Graph<AgentMessagesGraphState>({});
 
+        // TODO: Define plugins
+        
         /* reactAgentGraph
             .addNode("executor", async state => {
                 
