@@ -24,7 +24,7 @@ import { createHttpProtocolServer, type A2AHttpServer, type A2AHttpServerOptions
 import type { CommunicationProtocolAdapter, CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
 import { ProtocolQueueEventMap, ProtocolTaskQueueSchema } from "../../queues/queueSchema";
 
-/** Name used by the A2A protocol binding. */
+/** Name used by the A2A protocol binding. This defines the agent-to-agent protocol name. */
 export const PROTOCOL_NAME = "A2A (Agent-to-Agent Protocol by GOOGLE)";
 
 type JsonObject = Record<string, unknown>;
@@ -379,7 +379,32 @@ export class A2AProtocolClient implements ProtocolClient {
 		return listeners.size > 0;
 	}
 
-	/** Registers a typed event listener and returns an unsubscribe function. */
+	/**
+	 * Registers a typed event listener and returns an unsubscribe function.
+	 *
+	 * @example
+	 * ```ts
+	 * const binding = A2A.createBinding({
+	 *     endpoint: "https://research.example.com/a2a",
+	 *     participant: { id: "planner", name: "Planning Agent" }
+	 * });
+	 *
+	 * const stopListening = binding.client.onEvent("task_completed", result => {
+	 *     console.log(`A2A task ${result.taskId} completed`, result.message);
+	 * });
+	 *
+	 * binding.client.onEvent("task_failed", (taskId, error) => {
+	 *     console.error(`A2A task ${taskId} failed: ${error.message}`);
+	 * });
+	 *
+	 * // Remove the first listener when it is no longer needed.
+	 * stopListening();
+	 * ```
+	 *
+	 * The same listener API is available on custom protocol clients. When the
+	 * binding is attached to ReActAgent, its events are also forwarded through
+	 * the agent's `protocol_event` event.
+	 */
 	onEvent<K extends keyof CommunicationEventMap>(event: K, listener: CommunicationEventMap[K]): () => void {
 		const listeners = this.listeners.get(event) ?? new Set();
 		listeners.add(listener as (...args: any[]) => void | Promise<void>);
@@ -515,3 +540,4 @@ export const A2A: AgentCommunicationProtocolFactory<A2AProtocolOptions> = {
 	name: PROTOCOL_NAME,
 	createBinding: createA2ABinding
 };
+

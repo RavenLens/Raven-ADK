@@ -265,16 +265,67 @@ client.
 
 ## Events
 
-Register listeners with `client.onEvent()`. ReActAgent forwards these events as
-its `protocol_event` event with the protocol name and task ID when available.
+Register listeners with `client.onEvent()`. A2A maps remote task lifecycle
+updates to the canonical communication events. ReActAgent forwards these events
+as its `protocol_event` event with the protocol name and task ID when available.
 
 ```ts
-const unsubscribe = client.onEvent("task_progress", (task, message) => {
-	console.log(task.id, task.status, message?.content);
+const a2a = A2A.createBinding({
+	endpoint: "https://research-agent.example.com/rpc",
+	participant: {
+		id: "planner-agent",
+		name: "Planner Agent"
+	}
 });
 
-unsubscribe();
+// Listen directly on one A2A client.
+const stopProgressListener = a2a.client.onEvent("task_progress", (task, message) => {
+	console.log(`A2A task ${task.id} is ${task.status}`, message?.content);
+});
+
+a2a.client.onEvent("task_submitted", task => {
+	console.log(`A2A task submitted: ${task.id}`);
+});
+
+a2a.client.onEvent("task_completed", result => {
+	console.log(`A2A task completed: ${result.taskId}`, result.message?.content);
+});
+
+a2a.client.onEvent("task_failed", (taskId, error) => {
+	console.error(`A2A task failed: ${taskId}`, error.message);
+});
+
+// Remove a listener when the subscription is no longer needed.
+stopProgressListener();
+
+const agent = new ReActAgent({
+	model,
+	systemPrompt: "Use A2A research when it improves the answer.",
+	messages: [],
+	tools: [],
+	communicationProtocols: [a2a]
+});
+
+// Observe all events from this and any other configured protocol in one place.
+agent.onEvent("protocol_event", (protocolName, eventName, taskId, eventArgs) => {
+	console.log({ protocolName, eventName, taskId, eventArgs });
+});
+
+await agent.invoke({
+	messages: [{
+		type: "user",
+		content: "Ask the research agent for the latest Mars water findings."
+	}]
+});
 ```
 
-The canonical event names are defined by `CommunicationEventMap`; protocol
-implementations should map native A2A lifecycle events to that shared contract.
+- `task_submitted` is emitted after `message/send` returns a task snapshot.
+- `task_progress` can be used for intermediate task snapshots and messages.
+- `task_completed` and `task_failed` are emitted while the client polls the
+  remote task through `tasks/get`.
+- `task_cancelled` is emitted after a successful `tasks/cancel` request.
+- `ReActAgent.onEvent("protocol_event", ...)` receives the protocol name, the
+  canonical event name, an optional task ID, and the original event arguments.
+- The canonical event names and callback signatures are defined by
+  `CommunicationEventMap`; protocol implementations should map native A2A
+  lifecycle events to that shared contract.
