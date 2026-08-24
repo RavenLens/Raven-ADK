@@ -22,6 +22,7 @@
 - RLMs - Recursive approach to increase agent accuracy on large set of text with reducing significantly costs
 - **ToT (Tree-of-Thoughts)** - Advanced reasoning framework for exploring multiple solution paths with parallel evaluation and backtracking - [check](./documentation/chains/Tree-of-Thoughts%20(ToT).md)
 - **Agent Communication Protocols** - Discover agents, delegate tasks, exchange messages, and coordinate results through A2A or custom protocol bindings - [check](./documentation/agents-communication-protocols/README.md)
+    - Custom Protocols - define custom agent-communication protocols with ease by our standarized, extendable schema
 - **GACP** - Revolutionary **Graph Agent Communication Protocol** that changes how agents communicate and contribute to tasks and their **society** - [check](./documentation/gacp/GACP.md)
 - Skills
     - Exploring and applying
@@ -72,6 +73,7 @@ npm install @ravenlens/raven-adk
 - [MCP Integration](./documentation/MCP.md)
 - [HITL Support](./documentation/HITL.md)
 - [Agent Communication Protocols](./documentation/agents-communication-protocols/README.md)
+    - [Build Custom Communication Protocols](./documentation/agents-communication-protocols/custom-protocol/README.md)
 - [GACP (Agent Communication)](./documentation/gacp/GACP.md)
 - [Skills System](./documentation/Skills.md)
     - If enabled - overtime agent learns new skills
