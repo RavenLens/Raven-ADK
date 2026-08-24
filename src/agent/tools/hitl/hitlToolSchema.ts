@@ -54,8 +54,12 @@ export interface HITLTransportSchema {
     emitToolUsage: (toolName: string) => Promise<EmitToolUsageBody>;
     emitAcceptance?: (question: string, context?: string) => Promise<HITLToolAllowancePossibleAnswer>;
     
-    /** Describe how to use HITL Questioning tools */
+    /** 
+     * Describe how to use HITL Questioning tools
+     * This is passed as `systemPrompt` fragment to the agent is going to leverage this HITL module
+    */
     questionHITLPrompt: string;
+
     /**
      * Create set of Questioning tools for HITL
      */

@@ -1,12 +1,12 @@
 import * as z from "zod";
-import { tool, Tool } from "../tools";
+import { tool, Tool } from "../../tools";
 import {
     DEFAULT_ABC_ANSWERS_RANGE,
     EmitToolUsageBody,
     HITLConfigSchema,
     HITLToolAllowancePossibleAnswer,
     HITLTransportSchema,
-} from "./hitlToolSchema";
+} from "../hitlToolSchema";
 
 export const HITL_ABC_QUESTION_TOOL_NAME = "hitl_ask_abc_question";
 export const HITL_OPEN_QUESTION_TOOL_NAME = "hitl_ask_open_question";
