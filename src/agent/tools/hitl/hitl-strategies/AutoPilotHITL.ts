@@ -1,11 +1,10 @@
 import z from "zod";
 import { HITL, Tool } from "../..";
 import { ReActAgent } from "../../../ReAct.agent";
-import { HITLTransportSchema } from "../hitlToolSchema";
+import { HITLToolInstanceProbe, HITLTransportSchema } from "../hitlToolSchema";
 import { HITLConfig } from "./DefaultHITL";
 
 export type HITLJudgeOutcome = "use-hitl" | "omit";
-export type AutoPilotHITLToolInstanceProbe = { toolInstance: Tool<any, any>, params: Record<string, any>; };
 export type AutoPilotHITLErrorBehaviour = "throw" | "console.error";
 
 export interface AutoPilotToolUsageOutcome {
@@ -41,20 +40,42 @@ export class AutoPilotHITL extends HITL.HITL implements HITLTransportSchema {
      * @throws - errors when judge Agent thrown internal error (from its logic) or it didn't return the structured output as was demanded by `invokeStructuredOutput` schema
      */
     private async judgeToolUsage(
-        tool: AutoPilotHITLToolInstanceProbe,
+        tool: HITLToolInstanceProbe,
         errorBehaviour: AutoPilotHITLErrorBehaviour = "console.error",
         instructionForActionJudegement?: string,
     ): Promise<HITLJudgeOutcome> {
         try {
-            // 1. TODO: Prepare the system prompt and question for ReActAgent
+            // 1. Prepare the system prompt and question for ReActAgent
+            const { toolName, toolDescription, toolArguments, toolOutputSchema } = tool.toolInstance.toolConfig;
             this.hitlAgent.agentConfig.messages = [
                 {
                     type: "system",
-                    content: "" // TODO: Instruct how to judge it
+                    content: [
+                        "You are a safety judge for an AI agent's proposed tool invocation.",
+                        "Decide whether a human must approve the action before it runs.",
+                        "Return exactly one structured result: \"use-hitl\" when the action is destructive, irreversible, security-sensitive, privacy-sensitive, financially consequential, externally visible, or ambiguous; return \"omit\" only when the action is clearly safe to run without human approval.",
+                        "Judge the specific invocation, including its parameters and the tool's documented behavior. Treat uncertainty as a reason to use HITL.",
+                        "Do not execute the tool, do not alter its parameters, and do not return any result other than the requested structured output."
+                    ].join("\n")
                 },
                 {
                     type: "user",
-                    content: "" // TODO: USe `tool` and `instructionForActionJudegement`
+                    content: [
+                        "Evaluate this proposed tool invocation:",
+                        "",
+                        "#tool",
+                        JSON.stringify({
+                            name: toolName,
+                            description: toolDescription,
+                            argumentsSchema: z.toJSONSchema(toolArguments),
+                            outputSchema: toolOutputSchema ? z.toJSONSchema(toolOutputSchema) : undefined,
+                            params: tool.params
+                        }, null, 2),
+                        "",
+                        "#instructionForActionJudegement",
+                        "Is additional instruction proposed for you",
+                        instructionForActionJudegement?.trim() || "No additional instruction was provided."
+                    ].join("\n")
                 }
             ];
     
@@ -98,20 +119,54 @@ export class AutoPilotHITL extends HITL.HITL implements HITLTransportSchema {
      * 
      * @returns object - the tool usage has to be awaited 
      */
-    async emitToolUsageAutoPilot(tool: AutoPilotHITLToolInstanceProbe, judgeErrorBehaviour?: AutoPilotHITLErrorBehaviour | undefined): Promise<AutoPilotToolUsageOutcome> {
+    async emitToolUsageAutoPilot(
+        tool: HITLToolInstanceProbe,
+        judgeErrorBehaviour?: AutoPilotHITLErrorBehaviour,
+        instructionForActionJudegement?: string,
+    ): Promise<AutoPilotToolUsageOutcome> {
         // 1. Check whether tool can be used with hitl with a `judge`
-        const judgeEffect = await this.judgeToolUsage(tool, judgeErrorBehaviour);
+        const judgeEffect = await this.judgeToolUsage(tool, judgeErrorBehaviour, instructionForActionJudegement);
         
         if (judgeEffect === "use-hitl") {
             return {
                 judgeEffect: judgeEffect,
                 // Client has to await this by hand
-                toolUsageBody: super.emitToolUsage(tool.toolInstance.toolConfig.toolName), // TODO: Modify tool schema and Default HITL and here to send to client the tool params - to show more details to user about params and tool Definition
+                toolUsageBody: super.emitToolUsage(tool),
             }
 
         }
         else return {
             judgeEffect: judgeEffect
         };
+    }
+
+    /**
+     * Common HITL-schema wrapper for AutoPilot tool approval.
+     *
+     * Under the hood, this method delegates to {@link emitToolUsageAutoPilot}
+     * so the AutoPilot judge can decide whether the tool requires human
+     * approval. It exists to comply with the RavenADK logic that consumes the
+     * common HITL transport contract defined in `hitlToolSchema.ts`.
+     *
+     * When the judge accepts the tool for HITL (`use-hitl`), this returns the
+     * approval result produced by the regular HITL flow. That result contains
+    * the user's or configured delay-pass answer and its reason. When the
+    * judge does not allow HITL to be called (`omit`), this returns `{ answer:
+    * "deny", reason: "user_answer" }`. In this branch, `user_answer` is a
+    * schema-compatible fallback reason, not an answer supplied by the user;
+    * the denial prevents the tool from being executed.
+     *
+     * @param tool Tool instance and invocation parameters to evaluate.
+     * @returns The common RavenADK HITL approval result.
+     */
+    async emitToolUsage(tool: HITLToolInstanceProbe): Promise<HITL.SchemaTypes.EmitToolUsageBody> {
+        const autoPilotHITLResult = await this.emitToolUsageAutoPilot(tool);
+        if (autoPilotHITLResult.toolUsageBody) {
+            return autoPilotHITLResult.toolUsageBody;
+        }
+        else return { // Assume in respect to `emitToolUsageAutoPilot` logic that event here is `omit` that's why `toolUsageBody` is missing
+            answer: "deny",
+            reason: "user_answer" // Default is tool answer
+        }
     }
 }

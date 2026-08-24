@@ -43,6 +43,7 @@ export interface HITLConfigSchema {
 }
 
 export interface EmitToolUsageBody { answer: HITLToolAllowancePossibleAnswer; reason: "user_answer" | "delay_pass" }
+export type HITLToolInstanceProbe = { toolInstance: Tool<any, any>, params: Record<string, any>; };
 
 // TODO: Document the HITL in the HITL doc
 export interface HITLTransportSchema {
@@ -51,7 +52,7 @@ export interface HITLTransportSchema {
 
     emitAbcQuestion?: (question: string, abcOptions: [string, string][]) => Promise<[string, string]>;
     emitOpenQuestion?: (question: string) => Promise<string>;
-    emitToolUsage: (toolName: string) => Promise<EmitToolUsageBody>;
+    emitToolUsage: (tool: HITLToolInstanceProbe) => Promise<EmitToolUsageBody>;
     emitAcceptance?: (question: string, context?: string) => Promise<HITLToolAllowancePossibleAnswer>;
     
     /** 

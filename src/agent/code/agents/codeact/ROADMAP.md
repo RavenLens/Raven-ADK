@@ -21,6 +21,7 @@
 
         
         - Default Tools List:
+            - execute_command - it's to be the tool
             - read_directory
             - read_file
             - write_file - create new file, override or update - agent dedices whether to create or update the files

@@ -96,6 +96,12 @@ export interface CodeActInvokeOptions {
     abort?: AbortSignal;
 }
 
+/** TODO: fill this with default tool names */
+// TODO: 
+export const DEFAULT_TOOLS_NAMES = [
+    ""
+]
+
 export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema, Sandbox extends CodeExecutionSandboxSchema> {
     pattern: "codeact";
     model: AgentModel;
@@ -168,13 +174,35 @@ export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends D
      * @default undefined
     */
     hitlConfig?: {
-        /** They */
+        /** Hitl strategy */
         hitl: HITL;
         /**
          * Specifies how to handle the default operations from the CodeAct logic
          * When not specified you're responsible to setup the tools you want to handle via the HITL by specify in the `hitl` specified handler
         */
-        presetHitlStrategy?: "all" | "ignore";
+        hitlPreConfig: {
+            /**
+             * - accept-all - it gives all persmissions to hitl
+             * - use-hitl - it allows to use hitl for actions
+             */
+            hitlStrategy: "accept-all" | "use-hitl";
+            /**
+             * Whether usage of tools have to trigger HITL
+             * 
+             * - Behaviour depends on strategy e.g: AutoPilotHITL is going to evaluate whether action should cause to trigger the ask for persmission and accept all actions 
+            */
+            triggerOnTools?: boolean;
+            /** 
+             * Whether retry of action has to trigger HITL for acceptance
+             * It always triggers HITL even with `AutoPilotHITL`
+            */
+            triggerOnRetry?: boolean
+            /**
+             * Whether can be questions asked by agent - questions regard lacking informations or other stuff where agent decided to talk with human
+             * Agent gets a tool can be used to allow user to ask the questions
+            */
+            allowToAskQuestions?: boolean;
+        };
     };
     /**
      * Memory for Coding Agent

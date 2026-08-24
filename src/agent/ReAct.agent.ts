@@ -1619,23 +1619,29 @@ export class ReActAgent
                         const toolsRequiringApproval = state.callTools.tools
                             .map((toolCall, callIndex) => {
                                 const toolName = toolCall.tool_name ?? toolCall.tool_id;
+                                const definedTool = definedToolsByName.get(toolName);
 
-                                if (!toolsUsageConfig[toolName]) {
+                                if (!toolsUsageConfig[toolName] || !definedTool) {
                                     return null;
                                 }
 
                                 return {
                                     toolName,
+                                    definedTool,
+                                    params: toolCall.arguments ?? {},
                                     callIndex
                                 };
                             })
-                            .filter((approvalTarget): approvalTarget is { toolName: string; callIndex: number } => !!approvalTarget);
+                            .filter((approvalTarget): approvalTarget is { toolName: string; definedTool: Tool<any, any>; params: Record<string, any>; callIndex: number } => !!approvalTarget);
 
                         const approvalsExecution = await this.abortable.runAbortable(() => Promise.all(
-                            toolsRequiringApproval.map(async ({ toolName, callIndex }) => {
+                            toolsRequiringApproval.map(async ({ toolName, definedTool, params, callIndex }) => {
                                 try {
                                     this.emitEvent("hitl_triggered", "tool_usage", { toolName });
-                                    const allowance = await hitlTransport.emitToolUsage(toolName);
+                                    const allowance = await hitlTransport.emitToolUsage({
+                                        toolInstance: definedTool,
+                                        params
+                                    });
                                     this.emitEvent("hitl_result", "tool_usage", { toolName }, allowance);
                                     this.emitEvent("hitl_tool_approval", toolName, allowance);
 
