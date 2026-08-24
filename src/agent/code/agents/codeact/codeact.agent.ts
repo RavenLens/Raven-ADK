@@ -189,17 +189,19 @@ export interface CodeActConfig<Skills extends SchemaSkillStore, Memory extends D
             /**
              * Whether usage of tools have to trigger HITL
              * 
-             * - Behaviour depends on strategy e.g: AutoPilotHITL is going to evaluate whether action should cause to trigger the ask for persmission and accept all actions 
+             * Once specified HITL gets information that all default tools that names are specified in `DEFAULT_TOOLS_NAMES` are specified as a `HITL.config.toolsUsage` object. HITL logic then decides what to do when tool is called e.g: common HITL is going to be always triggered meanwhile `AutoPilotHITL` spawns agent decides whethere send ask to client
             */
-            triggerOnTools?: boolean;
+            triggerOnDefaultCodeActTools?: boolean;
+
             /** 
              * Whether retry of action has to trigger HITL for acceptance
              * It always triggers HITL even with `AutoPilotHITL`
             */
             triggerOnRetry?: boolean
+            
             /**
              * Whether can be questions asked by agent - questions regard lacking informations or other stuff where agent decided to talk with human
-             * Agent gets a tool can be used to allow user to ask the questions
+             * via Tool Handling - Agent gets a tool can be used to allow user to ask the questions
             */
             allowToAskQuestions?: boolean;
         };
