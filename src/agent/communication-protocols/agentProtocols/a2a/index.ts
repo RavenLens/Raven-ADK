@@ -285,7 +285,7 @@ function toA2AMessage(request: TaskRequest): JsonObject {
 
 /** JSON-RPC client that maps A2A tasks to Raven's canonical protocol schema. */
 export class A2AProtocolClient implements ProtocolClient {
-	private readonly listeners = new Map<keyof CommunicationEventMap, Set<(...args: any[]) => void | Promise<void>>>();
+	readonly listeners = new Map<keyof CommunicationEventMap, Set<(...args: any[]) => void | Promise<void>>>();
 	private requestNumber = 0;
 	private readonly requestFetch: typeof globalThis.fetch;
 
@@ -346,6 +346,13 @@ export class A2AProtocolClient implements ProtocolClient {
 		const cancellation: Cancellation = { taskId, reason, requestedAt: now() };
 
 		await this.emit("task_cancelled", cancellation);
+	}
+
+	/** Emits an event synchronously for custom communication tools. */
+	emitEvent<K extends keyof CommunicationEventMap>(eventName: K, ...eventArgs: Parameters<CommunicationEventMap[K]>): boolean {
+		const listeners = this.listeners.get(eventName) ?? new Set();
+		for (const listener of listeners) void listener(...eventArgs);
+		return listeners.size > 0;
 	}
 
 	/** Registers a typed event listener and returns an unsubscribe function. */
