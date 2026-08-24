@@ -20,7 +20,7 @@ HITL currently supports two interaction types.
 
 ## Architecture
 
-HITL is built around a single `HITL` class. It owns all HITL business logic:
+HITL is built around a single `HITLTransportSchema` interface serves as canvas for HITL utilities. It owns all HITL business logic:
 - building the questioning prompt,
 - tracking pending requests,
 - applying timeout fallbacks,
@@ -46,6 +46,22 @@ const agent = new ReActAgent({
     hitl
 });
 ```
+
+## HITL Versions
+RavenADK implements two HITL strategies. Both strategies use the common
+`HITLTransportSchema` contract and can use any `HITLAdapter`, including the
+local and Socket.io adapters described in the linked guides.
+
+| Strategy | Built on | Purpose | Documentation |
+|---|---|---|---|
+| `HITL` (Default HITL) | `HITLTransportSchema` | Requests human approval for configured tool calls and asks configured questions. | [DefaultHITL.md](DefaultHITL.md) |
+| `AutoPilotHITL` | `HITL` and `HITLTransportSchema` | Uses a judge agent to decide whether a tool call should be sent through the human approval flow or accepted right-away | [AutoPilotHITL.md](AutoPilotHITL.md) |
+
+Adapters are transport implementations, not HITL strategies. See [LocalHITL.md](LocalHITL.md)
+and [SocketHITL.md](SocketHITL.md) for adapter-specific setup.
+
+<!-- ## HITL Internal Events
+Each class implements custom class that  -->
 
 ## HITL listeners
 
@@ -87,13 +103,13 @@ const hitl = new HITL({
 
 > Because listeners are implemented on the `HITL` side, they are universally available for each adapter and independent from the adapter. You can switch from the socket.io adapter to a local adapter and keep the same listener logic without changes.
 
-## HITL events
+## HITL Communication Events
 
 The `HITL` class communicates with adapters through generic request/response messages. The events the adapter can receive (`HITLRequest`) and must answer (`HITLResponse`) are:
 
 | Request event      | Payload                                              | Response event        | Expected response shape                                   |
 |--------------------|------------------------------------------------------|-----------------------|-----------------------------------------------------------|
-| `tool-approval`    | `{ type: "tool-approval", toolName: string }`        | `tool-approval`       | `{ type: "tool-approval", answer: "allow" \| "deny" }`   |
+| `tool-approval`    | `{ type: "tool-approval", toolName: string, toolInstance: Tool, params: Record<string, any> }` | `tool-approval` | `{ type: "tool-approval", answer: "allow" \| "deny" }` |
 | `abc-question`     | `{ type: "abc-question", question: string, options: [string, string][] }` | `abc-answer` | `{ type: "abc-answer", option: string, optionLabel: string }` |
 | `open-question`    | `{ type: "open-question", question: string }`        | `open-answer`         | `{ type: "open-answer", answer: string }`                 |
 | `acceptance`       | `{ type: "acceptance", question: string, context?: string }` | `acceptance-answer` | `{ type: "acceptance-answer", answer: "allow" \| "deny" }` |
