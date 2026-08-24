@@ -123,6 +123,30 @@ protocol and `ReActAgent.serve()` already implement their queue interaction
 against these operations; a different contract would require protocol- or
 agent-specific integration code.
 
+Queues also expose typed lifecycle events through `onEvent` and `emitEvent`.
+Subscribe to `task_enqueued`, `task_dequeued`, `task_completed`,
+`task_failed`, `task_cancelled`, or `error` for monitoring, tracing, metrics,
+or transport notifications. `onEvent` returns an unsubscribe function:
+
+```ts
+const stopObserving = binding.queue?.onEvent("task_failed", (taskId, error) => {
+	console.error(`Queue task ${taskId} failed: ${error.message}`);
+});
+
+stopObserving?.();
+```
+
+Listeners receive canonical `QueuedTask`, `TaskResult`, `ProtocolError`, and
+`Cancellation` payloads rather than storage-specific records. Implementations
+should emit events after the corresponding operation succeeds and dispatch
+listener promises without delaying queue operations.
+
+Custom queues must implement every method in `ProtocolTaskQueueSchema`, keep
+task IDs stable across retries, and add its typed listener map plus `onEvent`
+and `emitEvent` methods. Emit enqueue and dequeue events when work is accepted
+and claimed, then the matching terminal event after `complete`, `fail`, or
+`cancel` is stored. Emit `error` for unexpected storage or delivery failures.
+
 See the [custom protocol guide](./custom-protocol/README.md), the
 [agent-protocol notes](../../src/agent/communication-protocols/agentProtocols/README.md),
 the [communication-protocol notes](../../src/agent/communication-protocols/communicationProtocols/README.md),

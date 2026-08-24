@@ -187,4 +187,22 @@ describe("A2A protocol binding", () => {
         expect(response).toMatchObject({ result: { id: queued?.taskId, status: { state: "working" } } });
         expect(queued?.request).toMatchObject({ from: "caller", to: "worker", message: "Use the custom transport" });
     });
+
+    it("emits queue lifecycle events and supports unsubscribing", async () => {
+        const queue = new InMemoryProtocolTaskQueueSchema();
+        const events: string[] = [];
+        const removeEnqueuedListener = queue.onEvent("task_enqueued", task => events.push(`enqueued:${task.taskId}`));
+        queue.onEvent("task_dequeued", task => events.push(`dequeued:${task.taskId}`));
+        queue.onEvent("task_completed", result => events.push(`completed:${result.taskId}`));
+
+        const taskId = await queue.enqueue({ from: "caller", to: "worker", message: "Run the task" });
+        const queued = await queue.dequeue();
+        await queue.complete(taskId, { taskId, status: "completed" });
+
+        expect(events).toEqual([`enqueued:${taskId}`, `dequeued:${taskId}`, `completed:${taskId}`]);
+        removeEnqueuedListener();
+        await queue.enqueue({ from: "caller", to: "worker", message: "Do not notify this listener" });
+        expect(events).toHaveLength(3);
+        expect(queued?.taskId).toBe(taskId);
+    });
 });

@@ -22,7 +22,7 @@ import type {
 } from "../agentProtocolSchema";
 import { createHttpProtocolServer, type A2AHttpServer, type A2AHttpServerOptions } from "../../communicationProtocols/protocols/http";
 import type { CommunicationProtocolAdapter, CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
-import { ProtocolTaskQueueSchema } from "../../queues/queueSchema";
+import { ProtocolQueueEventMap, ProtocolTaskQueueSchema } from "../../queues/queueSchema";
 
 /** Name used by the A2A protocol binding. */
 export const PROTOCOL_NAME = "A2A (Agent-to-Agent Protocol by GOOGLE)";
@@ -62,7 +62,23 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 	private readonly pending: QueuedTask[] = [];
 	private readonly results = new Map<string, TaskResult>();
 	private readonly waiters: Array<(task: QueuedTask | undefined) => void> = [];
+	readonly listeners = new Map<keyof ProtocolQueueEventMap, Set<(...args: any[]) => void | Promise<void>>>();
 	private sequence = 0;
+
+	onEvent<K extends keyof ProtocolQueueEventMap>(event: K, listener: ProtocolQueueEventMap[K]): () => void {
+		const listeners = this.listeners.get(event) ?? new Set();
+		const callback = listener as (...args: any[]) => void | Promise<void>;
+		listeners.add(callback);
+		this.listeners.set(event, listeners);
+		return () => listeners.delete(callback);
+	}
+
+	emitEvent<K extends keyof ProtocolQueueEventMap>(event: K, ...eventArgs: Parameters<ProtocolQueueEventMap[K]>): boolean {
+		const listeners = this.listeners.get(event);
+		if (!listeners) return false;
+		for (const listener of listeners) void listener(...eventArgs);
+		return listeners.size > 0;
+	}
 
 	async enqueue(request: TaskRequest): Promise<string> {
 		const taskId = request.taskId ?? `a2a-task-${++this.sequence}`;
@@ -70,16 +86,21 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 		const waiter = this.waiters.shift();
 		if (waiter) waiter(task);
 		else this.pending.push(task);
+		this.emitEvent("task_enqueued", task);
 		return taskId;
 	}
 
 	async dequeue(signal?: AbortSignal): Promise<QueuedTask | undefined> {
 		const task = this.pending.shift();
-		if (task) return task;
+		if (task) {
+			this.emitEvent("task_dequeued", task);
+			return task;
+		}
 		if (signal?.aborted) return undefined;
 		return new Promise(resolve => {
 			const waiter = (queuedTask: QueuedTask | undefined) => {
 				signal?.removeEventListener("abort", onAbort);
+				if (queuedTask) this.emitEvent("task_dequeued", queuedTask);
 				resolve(queuedTask);
 			};
 			const onAbort = () => {
@@ -94,10 +115,12 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 
 	async complete(taskId: string, result: TaskResult): Promise<void> {
 		this.results.set(taskId, result);
+		this.emitEvent("task_completed", result);
 	}
 
 	async fail(taskId: string, error: ProtocolError): Promise<void> {
 		this.results.set(taskId, { taskId, status: "failed", error });
+		this.emitEvent("task_failed", taskId, error);
 	}
 
 	async cancel(taskId: string, reason?: string): Promise<void> {
@@ -106,6 +129,7 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 			status: "cancelled",
 			error: reason ? { code: "cancelled", message: reason } : undefined
 		});
+		this.emitEvent("task_cancelled", { taskId, reason, requestedAt: now() });
 	}
 
 	size(): number {

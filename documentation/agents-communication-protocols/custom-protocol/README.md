@@ -268,8 +268,37 @@ The implementation may be in memory or backed by PostgreSQL, Redis, MongoDB,
 S3, or another system. The agent and wrapper depend on the schema operations,
 not on the storage technology.
 
+Queues also provide typed lifecycle events through `onEvent` and `emitEvent`.
+Subscribe with `onEvent` and remove the subscription with the returned function:
+
+```ts
+const stopQueueLogging = queue.onEvent("task_dequeued", task => {
+    console.log(`Worker claimed ${task.taskId}`);
+});
+
+queue.onEvent("task_cancelled", cancellation => {
+    console.log(`Task ${cancellation.taskId} was cancelled`);
+});
+
+stopQueueLogging();
+```
+
+The available queue events are `task_enqueued`, `task_dequeued`,
+`task_completed`, `task_failed`, `task_cancelled`, and `error`. Events use the
+canonical `QueuedTask`, `TaskResult`, `ProtocolError`, and `Cancellation`
+payloads. `emitEvent` returns `true` when listeners are present and dispatches
+async listeners without making queue operations wait for them.
+
+### Implement a Custom Queue
+
+For a durable or distributed custom queue, implement every operation in
+`ProtocolTaskQueueSchema` and the event methods. Replace the storage operations
+with database or broker calls, and emit only after each operation succeeds:
+
 ```ts
 class PostgresTaskQueue implements ProtocolTaskQueueSchema {
+	onEvent<K extends ProtocolQueueEvent>(event: K, listener: ProtocolQueueEventMap[K]): () => void { /* register listener */ throw new Error("not implemented"); }
+	emitEvent<K extends ProtocolQueueEvent>(event: K, ...args: Parameters<ProtocolQueueEventMap[K]>): boolean { /* notify listeners */ return false; }
 	async enqueue(request: TaskRequest): Promise<TaskId> { /* insert task */ }
 	async dequeue(signal?: AbortSignal): Promise<QueuedTask | undefined> { /* claim task */ }
 	async complete(taskId: TaskId, result: TaskResult): Promise<void> { /* store result */ }
