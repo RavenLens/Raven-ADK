@@ -50,6 +50,7 @@ const judgeAgent = new ReActAgent({
 
 const autoPilotHITL = new AutoPilotHITL(judgeAgent, {
 	adapter: hitlAdapter,
+    // Use `toolsUsage` to specify the list with tools for that AutoPilotHITL triggers logic of evaluation and human pass
 	toolsUsage: {
 		execute_command: { delayMs: 30_000, defaultAnswer: "deny" },
 		write_file: true,
@@ -92,13 +93,40 @@ const codeAct = new CodeActAgent({
 
 ```
 
-`model`, `codingTools`, `codingMemory`, `nodeSandbox`, and `ui` are
+- `model`, `codingTools`, `codingMemory`, `nodeSandbox`, and `ui` are
 application-provided values. When CodeAct proposes a configured action,
 `AutoPilotHITL` evaluates the tool definition and parameters first. Only when
 the judge returns `use-hitl` does the request reach the UI for approval. A
 judge result of `omit` returns a denial through the common HITL schema without
 asking the user. This snippet documents the current CodeAct configuration
 contract; `CodeActAgent.invoke` is not implemented yet.
+- `toolsUsage` - is specified as config param to `AutoPilotHITL` method and it has to have the list with tools for that HITL is triggered. **Only for that list HITL is going to be triggered**
+
+## Convergence
+
+Some RavenADK integrations do not yet comply with the newer AutoPilot HITL
+standard. In particular, `ReActAgent` currently calls the common
+`emitToolUsage` method through `HITLTransportSchema`; it does not yet call the
+dedicated AutoPilot judgement method. This keeps the existing agent logic
+compatible with the common HITL contract, but it means that the ReActAgent
+path does not explicitly express the newer AutoPilot convention.
+
+CodeAct uses `emitToolUsage` as a convergence point for the typical RavenADK
+HITL schema and its existing execution logic. This wrapper is needed for the
+common agent-facing contract and for scenarios where an integration expects a
+standard `HITLTransportSchema` implementation. Newer integrations that adopt
+AutoPilotHITL as the standard should use the dedicated
+`emitToolUsageAutoPilot` method instead. That method exposes the judge outcome
+(`use-hitl` or `omit`) and allows callers to provide AutoPilot-specific
+judgement options, including an instruction and error behavior.
+
+The two entry points therefore serve different compatibility levels:
+
+| Entry point | Intended role |
+|---|---|
+| `emitToolUsage` | Common, schema-compatible wrapper used by existing RavenADK agent logic and CodeAct convergence scenarios. |
+| `emitToolUsageAutoPilot` | Dedicated API for newer integrations that explicitly use the AutoPilot judge standard. |
+
 
 ## Setup
 
