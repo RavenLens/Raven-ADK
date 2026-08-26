@@ -23,6 +23,7 @@
 - **ToT (Tree-of-Thoughts)** - Advanced reasoning framework for exploring multiple solution paths with parallel evaluation and backtracking - [check](./documentation/chains/Tree-of-Thoughts%20(ToT).md)
 - **Agent Communication Protocols** - Discover agents, delegate tasks, exchange messages, and coordinate results through A2A or custom protocol bindings - [check](./documentation/agents-communication-protocols/README.md)
 - **GACP** - Revolutionary **Graph Agent Communication Protocol** that changes how agents communicate and contribute to tasks and their **society** - [check](./documentation/gacp/GACP.md)
+- **Session Budget Tokens** - Way to manage Models budget and handle the overflow in well planned fashion
 - Skills
     - Exploring and applying
     - Dynamic Skills solutions
@@ -62,6 +63,7 @@ npm install @ravenlens/raven-adk
 - [Overview](./documentation/Overview.md)
 - [Quickstart](./documentation/Quickstart.md)
 - [ReAct Agent](./documentation/ReAct-Agent.md)
+- [Session Budget Tokens](./documentation/BudgetTokens.md)
 - [Workflows](./documentation/Workflows.md)
     - [Graph](./documentation/Graph.md)
     - [SequentialRunner](./documentation/SequentialRunner.md)
