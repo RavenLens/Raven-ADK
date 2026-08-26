@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { MultipleAnswers } from "../../../src/agent/abstract/multianswers/multipleanswers";
-import { OpenAI } from "../../../src/models/openai";
+import { OpenAI } from "../../../src/models/text-to-text/openai";
 import { MessagesVariations } from "../../../src/agent/state";
 
 describe("MultipleAnswers Live Test", () => {

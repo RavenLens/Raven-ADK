@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { RunPod } from "../../src/models/runpod";
+import { RunPod } from "../../src/models/text-to-text/runpod";
 import { AIMessage } from "../../src/agent/state";
 
 const runpodApiKey = process.env.RUNPOD_API_KEY?.trim();

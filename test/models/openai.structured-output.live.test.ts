@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 import { AIMessage } from "../../src/agent/state";
 
 const openAIApiKey = process.env.OPENAI_API_KEY?.trim();

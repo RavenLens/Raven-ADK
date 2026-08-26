@@ -1,7 +1,8 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { ResourceAugmentedGeneration } from "../../src/augmented_generation/rag/RAG";
-import { OpenAI, OpenAIEmbedding } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
+import { OpenAIEmbedding } from "../../src/models/embeddings/openai";
 import { InMemoryRAGDb } from "../../src/augmented_generation/rag/vector_databases/inmemory";
 
 const openAIApiKey = process.env.OPENAI_API_KEY?.trim();

@@ -90,6 +90,7 @@ const customEmbedding: Mutual.EmbeddingModel = {
 * [OpenAI](#openai)
 * [Google (Gemini)](#google-gemini)
 * [Anthropic (Claude)](#anthropic-claude)
+* [Dummy Model](#dummy-model) - Model that is ideal for no-cost and fast testing without waiting for provider outcome
 * [RunPod](#runpod)
 
 ---
@@ -209,6 +210,63 @@ const result = await model.invoke();
 ```
 
 ---
+
+## Dummy Model
+`DummyModel` is a deterministic text-to-text model for unit tests and local agent-flow development.
+It does not call an external LLM. Configure `messagesFlow` with the responses the agent should receive
+in sequence. A response containing a `ToolMessage` causes `ReActAgent` to execute the matching tool and
+send its output into the next model invocation.
+
+```typescript
+import { z } from "zod";
+import { ReActAgent, Tool } from "@ravenlens/raven-adk/agents";
+import { DummyModel } from "@ravenlens/raven-adk/models";
+
+const lookup = new Tool(
+    async ({ key }: { key: string }) => `value for ${key}`,
+    {
+        toolName: "lookup",
+        toolDescription: "Look up a test value",
+        toolArguments: z.object({ key: z.string() })
+    }
+);
+
+const model = new DummyModel({
+    messagesFlow: [
+        {
+            messages: [],
+            answer: [{
+                type: "tool",
+                tool_id: "lookup-call",
+                tool_name: "lookup",
+                content: JSON.stringify({ key: "status" }),
+                arguments: { key: "status" }
+            }],
+            tokens: { input: 0, output: 0, reasoning: 0 }
+        },
+        {
+            messages: [],
+            answer: [{ type: "ai", content: "The lookup is complete." }],
+            tokens: { input: 0, output: 0, reasoning: 0 }
+        }
+    ]
+});
+
+const agent = new ReActAgent({
+    model,
+    systemPrompt: "Use the available tools when needed.",
+    messages: [{ type: "user", content: "Look up the status." }],
+    tools: [lookup],
+    withConclusion: false
+});
+
+const result = await agent.invoke();
+console.log(result.messages.at(-1)?.content); // The lookup is complete.
+```
+
+For dynamic scripts, use a callback that receives the invocation type and options. Use `reset()` to
+start `messagesFlow` again, and set `validateStructuredOutput: true` when structured test responses
+should be checked against the supplied Zod schema. Conversation messages are preserved by default.
 
 ## Thoughts (Reasoning)
 RavenADK provides a unified interface for models that support explicit reasoning (thoughts). This allows you to capture the model's "chain of thought" separately from its final answer.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ReActAgent, ReActAgentPluginSpec } from "../../src/agent/ReAct.agent";
-import { Google } from "../../src/models/google";
+import { Google } from "../../src/models/text-to-text/google";
 
 describe("ReActAgent Plugins", () => {
     it("executes plugins in the correct order and preserves state changes", async () => {

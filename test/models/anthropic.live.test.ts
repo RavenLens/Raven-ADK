@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
-import { Anthropic } from "../../src/models/anthropic";
+import { Anthropic } from "../../src/models/text-to-text/anthropic";
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY?.trim();
 const liveDescribe = anthropicApiKey ? describe : describe.skip;

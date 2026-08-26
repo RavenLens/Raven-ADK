@@ -2,7 +2,7 @@ import "dotenv/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { tool } from "../../src/agent/tools";
-import { Anthropic } from "../../src/models/anthropic";
+import { Anthropic } from "../../src/models/text-to-text/anthropic";
 
 const { anthropicCreateMock, anthropicStreamMock, anthropicBetaCreateMock, anthropicBetaStreamMock, anthropicCtorMock } = vi.hoisted(() => ({
     anthropicCreateMock: vi.fn(),

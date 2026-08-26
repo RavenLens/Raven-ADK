@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { ReActAgent } from "../../../src/agent/ReAct.agent";
-import { OpenAI } from "../../../src/models/openai";
+import { OpenAI } from "../../../src/models/text-to-text/openai";
 
 const openAIKey = (process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY)?.trim();
 const liveDescribe = (openAIKey && openAIKey.length > 0) ? describe : describe.skip;

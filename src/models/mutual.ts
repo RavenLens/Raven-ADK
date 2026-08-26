@@ -58,10 +58,10 @@ export interface CompactOptions {
     abort?: AbortSignal;
 }
 
-export interface StandardLLMShema {
+export interface StandardLLMShema<Config = LLMConfig> {
     typeAPI: "model";
     apiName: "Anthropic" | "OpenAI" | "Google" | { custom: string };
-    config: LLMConfig;
+    config: Config;
     invoke(options?: InvokeOptions): Promise<LLMAnswer>;
     invokeStructuredOutput(schema: z.ZodTypeAny, maxRecallTries?: number, options?: InvokeOptions): Promise<LLMAnswer>;
     /** Whether the provider compacts inside a normal invocation or through `compact`. */

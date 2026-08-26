@@ -214,6 +214,55 @@ The A2A client binding covers outbound work, while
 `ReActAgent.serve()`. Other agent protocols can use the same transport wrapper
 by supplying their own `CommunicationProtocolAdapter`.
 
+### Serving Inbound Work with Agents
+Some RavenADK agents such as `ReActAgent` implements the `serve` method allows them to be workers to that are delegates tasks from different agents
+
+- Use `agent.serve()` to run an agent as a protocol worker. The supplied
+binding must expose an inbound `queue`; for A2A, use the binding created by
+`createA2AHttpServer()`. `serve()` waits when the queue is empty, invokes the
+agent for each queued task, and publishes a completed or failed result using
+the task ID. It returns the number of processed tasks.
+
+```ts
+const controller = new AbortController();
+
+const serving = workerAgent.serve(worker.binding, {
+	signal: controller.signal
+});
+
+// The worker continues waiting for inbound tasks until it is aborted.
+// controller.abort();
+
+const processedTasks = await serving;
+console.log(`Processed ${processedTasks} tasks`);
+```
+
+Set `maxTasks` to stop after a finite number of tasks. Set `continueOnError` to
+`false` to rethrow a task-processing error after the queue records the failure;
+the default is to record the failure and continue serving.
+
+`serve` is currently supported by such agentic patterns:
+- `ReActAgent` - supports full access for `serve` method and its events
+
+The agent emits these serve lifecycle events through `agent.onEvent()`:
+
+#### `serve` events
+Each agent that implements `serve` has to implement following events
+
+- [`ReActAgent`](../ReAct-Agent.md) is good case that implements `serve` events
+
+| Event | Parameters | Emitted when |
+| --- | --- | --- |
+| `serve_task_start` | `task: QueuedTask` | A queued task is about to be processed. |
+| `serve_task_finished` | `task: QueuedTask`, `result: TaskResult` | The task result has been published as completed or failed. |
+| `serve_abort` | `processedTasks: number` | The serve signal stops the worker. |
+| `serve_max_tasks_reached` | `maxTasks: number`, `processedTasks: number` | The configured task limit is reached. |
+
+These events belong to the ReActAgent and are separate from queue events such
+as `task_enqueued`, `task_dequeued`, and `task_completed`. Use both event sets
+when you need agent execution telemetry as well as queue or transport
+telemetry.
+
 ## Core Communication Flows
 
 ### Discovery and exploration

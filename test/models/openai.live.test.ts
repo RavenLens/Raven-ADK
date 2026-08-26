@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 
 const openAIApiKey = process.env.OPENAI_API_KEY?.trim();
 const liveDescribe = openAIApiKey ? describe : describe.skip;

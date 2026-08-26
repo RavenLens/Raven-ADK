@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 import { RLMAgent } from "../../src/agent/RLM/orchestrator";
 import { NodeExecutionSandbox } from "../../src/agent/tools/CodeExecutionSandboxes/nodejs-sandbox";
 

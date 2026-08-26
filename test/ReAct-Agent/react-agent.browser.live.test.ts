@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { ReActAgent } from "../../src/agent/ReAct.agent";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 import { BrowserToolsBucket } from "../../src/agent/tools/general/browser";
 
 const openaiApiKey = process.env.OPENAI_API_KEY?.trim();

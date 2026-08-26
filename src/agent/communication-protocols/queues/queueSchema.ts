@@ -31,7 +31,7 @@ export interface ProtocolTaskQueueSchema {
     emitEvent<K extends ProtocolQueueEvent>(event: K, ...eventArgs: Parameters<ProtocolQueueEventMap[K]>): boolean;
     /** Adds an inbound protocol request to the queue when an agent must process it. */
     enqueue(request: TaskRequest): Promise<TaskId>;
-    /** Waits for and removes the next queued request, or returns undefined when the queue is closed or aborted. */
+    /** Waits for and removes the next queued request; an empty queue waits until work arrives by Pending Promise, while a closed or aborted queue returns undefined. */
     dequeue(signal?: AbortSignal): Promise<QueuedTask | undefined>;
     /** Publishes a successful or cancelled result after the agent finishes processing a queued task. */
     complete(taskId: TaskId, result: TaskResult): Promise<void>;

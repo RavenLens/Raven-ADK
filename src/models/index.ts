@@ -16,6 +16,7 @@ export { OpenAIEmbedding } from "./embeddings/openai.js";
 export { Anthropic } from "./text-to-text/anthropic.js";
 export { VoyageEmbedding } from "./embeddings/voyageai.js";
 export { Google } from "./text-to-text/google.js";
+export { DummyModel } from "./text-to-text/dummy.js";
 export { GoogleEmbedding } from "./embeddings/google.embedding.js";
 export { OpenAISTT } from "./speech-to-text/openai.js";
 export { GoogleSTT } from "./speech-to-text/google.js";

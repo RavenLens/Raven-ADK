@@ -1,13 +1,13 @@
 {
   "name": "@ravenlens/raven-adk",
-  "version": "0.0.14-alpha.4",
+  "version": "0.0.14",
   "description": "AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightful UI assemblies gorgeous UX. Made by RavenAlliance",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "test": "vitest",
-    "build": "tsup"
+    "build": "node --max-old-space-size=8192 ./node_modules/tsup/dist/cli-default.js"
   },
   "keywords": [
     "AI",
@@ -51,12 +51,12 @@
       "require": "./dist/browser.cjs"
     },
     "./graph": {
-      "types": "./dist/graph/index.d.ts",
-      "import": "./dist/graph/index.js",
-      "require": "./dist/graph/index.cjs"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/graph.js",
+      "require": "./dist/graph.cjs"
     },
     "./agents": {
-      "types": "./dist/agent/index.d.ts",
+      "types": "./dist/agents.d.ts",
       "import": "./dist/agents.js",
       "require": "./dist/agents.cjs"
     },
@@ -76,13 +76,13 @@
       "require": "./dist/agent/code/index.js"
     },
     "./rlm": {
-      "types": "./dist/agent/RLM/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/RLM/index.js",
-      "require": "./dist/agent/RLM/index.js"
+      "require": "./dist/agent/RLM/index.cjs"
     },
     "./models": {
-      "types": "./dist/models/index.d.ts",
-      "import": "./dist/models/index.js",
+      "types": "./dist/models.d.ts",
+      "import": "./dist/models.js",
       "require": "./dist/models.cjs"
     },
     "./models/server": {
@@ -91,157 +91,152 @@
       "require": "./dist/models/server.cjs"
     },
     "./models/speech-to-text": {
-      "types": "./dist/models/speech-to-text/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/speech-to-text/index.js",
       "require": "./dist/models/speech-to-text/index.js"
     },
     "./models/text-to-speech": {
-      "types": "./dist/models/text-to-speech/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/text-to-speech/index.js",
       "require": "./dist/models/text-to-speech/index.js"
     },
     "./models/text-to-text": {
-      "types": "./dist/models/text-to-text/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/text-to-text/index.js",
       "require": "./dist/models/text-to-text/index.js"
     },
     "./models/embeddings": {
-      "types": "./dist/models/embeddings/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/embeddings/index.js",
       "require": "./dist/models/embeddings/index.js"
     },
     "./speech-to-text": {
-      "types": "./dist/models/speech-to-text/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/speech-to-text/index.js",
       "require": "./dist/models/speech-to-text/index.js"
     },
     "./text-to-speech": {
-      "types": "./dist/models/text-to-speech/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/text-to-speech/index.js",
       "require": "./dist/models/text-to-speech/index.js"
     },
     "./text-to-text": {
-      "types": "./dist/models/text-to-text/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/text-to-text/index.js",
       "require": "./dist/models/text-to-text/index.js"
     },
     "./embeddings": {
-      "types": "./dist/models/embeddings/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/models/embeddings/index.js",
       "require": "./dist/models/embeddings/index.js"
     },
     "./tools": {
-      "types": "./dist/agent/tools/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/tools/index.js",
       "require": "./dist/tools.cjs"
     },
     "./tools/mcp": {
-      "types": "./dist/agent/tools/mcp/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/tools/mcp/index.js",
       "require": "./dist/agent/tools/mcp/index.js"
     },
     "./tools/mcp/types": {
-      "types": "./dist/agent/tools/mcp/types.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/tools/mcp/types.js",
       "require": "./dist/agent/tools/mcp/types.js"
     },
     "./tools/hitl": {
-      "types": "./dist/agent/tools/hitl/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/tools/hitl/index.js",
       "require": "./dist/agent/tools/hitl/index.js"
     },
     "./skills": {
-      "types": "./dist/agent/skills/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/skills/index.js",
       "require": "./dist/agent/skills/index.js"
     },
     "./podcasts": {
-      "types": "./dist/agent/abstract/podcast/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/abstract/podcast/index.js",
       "require": "./dist/agent/abstract/podcast/index.js"
     },
     "./skills/store": {
-      "types": "./dist/agent/skills/stores/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/skills/stores/index.js",
       "require": "./dist/agent/skills/stores/index.js"
     },
     "./memory": {
-      "types": "./dist/agent/memory/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/memory/index.js",
       "require": "./dist/agent/memory/index.js"
     },
-    "./memory/store": {
-      "types": "./dist/agent/memory/stores/index.d.ts",
-      "import": "./dist/agent/memory/stores/index.js",
-      "require": "./dist/agent/memory/stores/index.js"
-    },
     "./aeval": {
-      "types": "./dist/agent/abstract/aeval/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/abstract/aeval/index.js",
       "require": "./dist/agent/abstract/aeval/index.js"
     },
     "./sandboxes": {
-      "types": "./dist/agent/tools/CodeExecutionSandboxes/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/tools/CodeExecutionSandboxes/index.js",
       "require": "./dist/agent/tools/CodeExecutionSandboxes/index.js"
     },
     "./plugins": {
-      "types": "./dist/agent/plugins/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/plugins/index.js",
       "require": "./dist/agent/plugins/index.js"
     },
     "./multianswers": {
-      "types": "./dist/agent/abstract/multianswers/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/abstract/multianswers/index.js",
       "require": "./dist/agent/abstract/multianswers/index.js"
     },
     "./agentsdebate": {
-      "types": "./dist/agent/abstract/agentsdebate/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/abstract/agentsdebate/index.js",
       "require": "./dist/agent/abstract/agentsdebate/index.js"
     },
     "./self-consistency": {
-      "types": "./dist/agent/abstract/self-consistency/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/abstract/self-consistency/index.js",
       "require": "./dist/agent/abstract/self-consistency/index.js"
     },
     "./sequential": {
-      "types": "./dist/agent/abstract/sequential/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/agent/abstract/sequential/index.js",
       "require": "./dist/agent/abstract/sequential/index.js"
     },
     "./augmented_generation": {
-      "types": "./dist/augmented_generation/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/augmented_generation/index.js",
       "require": "./dist/augmented_generation/index.js"
     },
     "./utils": {
-      "types": "./dist/utils/files.d.ts",
-      "import": "./dist/utils/files.js",
-      "require": "./dist/utils/files.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.cjs"
     },
     "./gacp": {
-      "types": "./dist/gacp/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/gacp/index.js",
       "require": "./dist/gacp/index.js"
     },
     "./chains": {
-      "types": "./dist/chains/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/chains/index.js",
       "require": "./dist/chains/index.js"
     },
     "./vector_databases": {
-      "types": "./dist/augmented_generation/rag/vector_databases/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/augmented_generation/rag/vector_databases/index.js",
       "require": "./dist/augmented_generation/rag/vector_databases/index.js"
     },
     "./vector_databases/chromadb": {
-      "types": "./dist/augmented_generation/rag/vector_databases/chromadb/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/augmented_generation/rag/vector_databases/chromadb/index.js",
       "require": "./dist/augmented_generation/rag/vector_databases/chromadb/index.js"
     },
     "./vector_databases/pinecone": {
-      "types": "./dist/augmented_generation/rag/vector_databases/pinecone/index.d.ts",
+      "types": "./dist/index.d.ts",
       "import": "./dist/augmented_generation/rag/vector_databases/pinecone/index.js",
       "require": "./dist/augmented_generation/rag/vector_databases/pinecone/index.js"
     }

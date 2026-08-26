@@ -1,6 +1,9 @@
+/* Includes tests for A2A Google Protocol implemented for RavenADK */
 import { describe, expect, it, vi } from "vitest";
 import { A2AProtocolClient, createA2ACommunicationAdapter, createA2AHttpServer, createA2ABinding, PROTOCOL_NAME } from "../../src/agent/communication-protocols/agentProtocols/a2a";
 import { InMemoryProtocolTaskQueueSchema } from "../../src/agent/communication-protocols/queues/queue-types";
+import { ReActAgent } from "../../src/agent/ReAct.agent";
+import { DummyModel } from "../../src/models/text-to-text/dummy";
 
 function jsonResponse(body: unknown): Response {
     return new Response(JSON.stringify(body), {
@@ -165,6 +168,162 @@ describe("A2A protocol binding", () => {
         await service.close();
     });
 
+    it("communicates between two spawned A2A protocol instances over HTTP", async () => {
+        const worker = createA2AHttpServer({
+            binding: createA2ABinding({ endpoint: "http://localhost" }),
+            agent: { id: "worker", name: "Worker Agent", capabilities: ["delegate_task"] }
+        });
+        await worker.listen(0, "127.0.0.1");
+        const workerAddress = worker.httpServer.address();
+        if (!workerAddress || typeof workerAddress === "string") throw new Error("Worker did not bind to a port");
+
+        const caller = createA2AHttpServer({
+            binding: createA2ABinding({ endpoint: `http://127.0.0.1:${workerAddress.port}/a2a`, participant: { id: "caller", name: "Caller Agent" } }),
+            agent: { id: "caller", name: "Caller Agent", capabilities: ["delegate_task"] }
+        });
+
+        try {
+            await caller.listen(0, "127.0.0.1");
+
+            const handle = await caller.binding.client.delegate({
+                from: "caller",
+                to: "worker",
+                activity: "delegate_task",
+                message: "Use the worker HTTP protocol"
+            });
+            const queued = await worker.queue.dequeue();
+            console.log('Dequeued', queued)
+
+            expect(queued?.request).toMatchObject({
+                from: "caller",
+                to: "worker",
+                message: "Use the worker HTTP protocol"
+            });
+
+            await worker.queue.complete(queued!.taskId, {
+                taskId: queued!.taskId,
+                status: "completed",
+                message: { id: "answer", role: "agent", content: "HTTP communication works" }
+            });
+
+            await expect(handle.wait()).resolves.toMatchObject({
+                taskId: queued!.taskId,
+                status: "completed",
+                message: { content: "HTTP communication works" }
+            });
+        } finally {
+            await caller.close();
+            await worker.close();
+        }
+    });
+
+    it("communicates between two ReActAgents through A2A using serve and DummyModel", async () => {
+        const worker = createA2AHttpServer({
+            binding: createA2ABinding({ endpoint: "http://localhost" }),
+            agent: { id: "consumer", name: "Consumer Agent", capabilities: ["delegate_task"] }
+        });
+        await worker.listen(0, "127.0.0.1");
+        const workerAddress = worker.httpServer.address();
+        if (!workerAddress || typeof workerAddress === "string") throw new Error("Worker did not bind to a port");
+
+        const consumerModel = new DummyModel({
+            invokeOutcome: {
+                messages: [{ type: "ai", content: "Consumer completed the delegated task." }],
+                answer: [{ type: "ai", content: "Consumer completed the delegated task." }],
+                tokens: { input: 3, output: 4, reasoning: 0 }
+            }
+        });
+        const consumerAgent = new ReActAgent({
+            model: consumerModel,
+            systemPrompt: "Complete delegated tasks.",
+            messages: [],
+            tools: [],
+            withConclusion: false
+        });
+
+        const serveTaskStart = vi.fn();
+        const serveTaskFinished = vi.fn();
+        const serveAbort = vi.fn();
+        const serveMaxTasksReached = vi.fn();
+        consumerAgent.onEvent("serve_task_start", serveTaskStart);
+        consumerAgent.onEvent("serve_task_finished", serveTaskFinished);
+        consumerAgent.onEvent("serve_abort", serveAbort);
+        consumerAgent.onEvent("serve_max_tasks_reached", serveMaxTasksReached);
+
+        const callerBinding = createA2ABinding({
+            endpoint: `http://127.0.0.1:${workerAddress.port}/a2a`,
+            participant: { id: "caller", name: "Caller Agent" }
+        });
+        const delegateToolName = `${PROTOCOL_NAME}_delegate_task`;
+        const callerModel = new DummyModel({
+            handleOverflow: () => ({
+                messages: [{ type: "ai", content: "The consumer returned the delegated report." }],
+                answer: [{ type: "ai", content: "The consumer returned the delegated report." }],
+                tokens: { input: 2, output: 3, reasoning: 0 }
+            }),
+            messagesFlow: [
+                {
+                    messages: [],
+                    answer: [{
+                        type: "tool",
+                        tool_id: "delegate-call",
+                        tool_name: delegateToolName,
+                        content: JSON.stringify({ to: "consumer", message: "Prepare the delegated report." }),
+                        arguments: { to: "consumer", message: "Prepare the delegated report." }
+                    }],
+                    tokens: { input: 2, output: 3, reasoning: 0 }
+                }
+            ]
+        });
+        const callerAgent = new ReActAgent({
+            model: callerModel,
+            systemPrompt: "Delegate work when another agent can complete it.",
+            messages: [{ type: "user", content: "Get the delegated report." }],
+            tools: [],
+            communicationProtocols: [callerBinding],
+            withConclusion: false
+        });
+
+        try {
+            const serving = consumerAgent.serve(worker.binding, { maxTasks: 1 });
+            const callerResult = await callerAgent.invoke();
+            await expect(serving).resolves.toBe(1);
+
+            expect(serveTaskStart).toHaveBeenCalledOnce();
+            expect(serveTaskStart).toHaveBeenCalledWith(expect.objectContaining({
+                request: expect.objectContaining({
+                    message: "Prepare the delegated report."
+                })
+            }));
+            expect(serveTaskFinished).toHaveBeenCalledOnce();
+            expect(serveTaskFinished).toHaveBeenCalledWith(
+                expect.objectContaining({ taskId: expect.any(String) }),
+                expect.objectContaining({ status: "completed" })
+            );
+            expect(serveMaxTasksReached).toHaveBeenCalledOnce();
+            expect(serveMaxTasksReached).toHaveBeenCalledWith(1, 1);
+
+            const abortController = new AbortController();
+            const waitingServe = consumerAgent.serve(worker.binding, { signal: abortController.signal });
+            abortController.abort();
+            await expect(waitingServe).resolves.toBe(0);
+            expect(serveAbort).toHaveBeenCalledOnce();
+            expect(serveAbort).toHaveBeenCalledWith(0);
+
+            expect(consumerModel.config.messages?.some(message =>
+                message.type === "user" && message.content.includes("Prepare the delegated report.")
+            )).toBe(true);
+            expect(callerResult.messages.some(message =>
+            message.type === "ai" && message.content === "The consumer returned the delegated report."
+        )).toBe(true);
+            expect(callerResult.messages.some(message =>
+            message.type === "tool" && message.tool_name === delegateToolName && message.toolOutput?.includes("Consumer completed the delegated task.")
+        )).toBe(true);
+        } finally {
+            await worker.close();
+        }
+    });
+
     it("exposes the inbound adapter for non-HTTP communication transports", async () => {
         const queue = new InMemoryProtocolTaskQueueSchema();
         const adapter = createA2ACommunicationAdapter({ id: "worker", name: "Worker Agent" });
@@ -191,9 +350,9 @@ describe("A2A protocol binding", () => {
     it("emits queue lifecycle events and supports unsubscribing", async () => {
         const queue = new InMemoryProtocolTaskQueueSchema();
         const events: string[] = [];
-        const removeEnqueuedListener = queue.onEvent("task_enqueued", task => events.push(`enqueued:${task.taskId}`));
-        queue.onEvent("task_dequeued", task => events.push(`dequeued:${task.taskId}`));
-        queue.onEvent("task_completed", result => events.push(`completed:${result.taskId}`));
+        const removeEnqueuedListener = queue.onEvent("task_enqueued", task => {events.push(`enqueued:${task.taskId}`)});
+        queue.onEvent("task_dequeued", task => {events.push(`dequeued:${task.taskId}`)});
+        queue.onEvent("task_completed", result => {events.push(`completed:${result.taskId}`)});
 
         const taskId = await queue.enqueue({ from: "caller", to: "worker", message: "Run the task" });
         const queued = await queue.dequeue();

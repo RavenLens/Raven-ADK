@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { describe, it, expect } from "vitest";
-import { OpenAI } from "../../../src/models/openai";
+import { OpenAI } from "../../../src/models/text-to-text/openai";
 import { ReActAgent } from "../../../src/agent/ReAct.agent";
 import { AgenticEvaluator } from "../../../src/agent/abstract/aeval/aeval";
 import { MessagesVariations } from "../../../src/agent/state";

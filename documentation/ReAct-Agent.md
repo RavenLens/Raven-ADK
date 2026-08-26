@@ -68,6 +68,55 @@ console.log("Final answer:", result.messages.at(-1)?.content);
 
 - `serve()` is the inbound worker path. It retrieves tasks from a protocol queue, invokes the ReAct agent for each task, and completes the queued task with the generated outcome. A binding must provide `queue` to use `serve()`.
 
+### Serving Inbound Protocol Tasks
+
+Use `serve()` when the ReActAgent should consume tasks as a protocol worker.
+The binding must provide an inbound queue, such as the worker binding returned
+by `createA2AHttpServer()`. An empty queue causes `serve()` to wait for the next
+task; it does not end the worker. The method returns the number of processed
+tasks and stops when its signal is aborted or `maxTasks` is reached.
+
+- You can listen serve events but it's recomended to register them before `serve`. Check more about serve events [Serve Events](./agents-communication-protocols/README.md#serve-events)
+
+```typescript
+const controller = new AbortController();
+
+// Listen .serve events
+reactAgent.onEvent("serve_task_start", (task) => {
+    console.log("Serve task started:", task.taskId);
+});
+
+reactAgent.onEvent("serve_task_finished", (task, result) => {
+    console.log("Serve task finished:", task.taskId, result.status);
+});
+
+reactAgent.onEvent("serve_abort", (processedTasks) => {
+    console.log("Serve aborted after processing", processedTasks, "tasks");
+});
+
+reactAgent.onEvent("serve_max_tasks_reached", (maxTasks, processedTasks) => {
+    console.log("Serve limit reached:", processedTasks, "/", maxTasks);
+});
+
+const serving = reactAgent.serve(worker.binding, {
+    signal: controller.signal,
+    // maxTasks: 10,
+    continueOnError: true
+});
+
+// Accept tasks while the worker is running, then stop it during shutdown.
+// controller.abort();
+
+const processedTasks = await serving;
+console.log(`Processed ${processedTasks} tasks`);
+```
+
+When a task fails, `serve()` records a failed task result. By default it then
+continues with the next task; set `continueOnError: false` to rethrow the
+error after recording the failure.
+
+> Check more about ReAct Agent `serve` and its events at [ReAct Serve](./agents-communication-protocols/README.md#serving-inbound-work-with-reactagent)
+
 ## Multiple Skills
 
 The `skills` configuration accepts one skill store or an array of skill stores. When multiple stores are provided, the agent exposes the exploration, script, and management tools from all stores and includes each store's available-skill information in the system prompt.
@@ -121,6 +170,10 @@ The `ReActAgent` is built on an event-driven architecture. You can listen to var
 | `concluding_start` | Emitted when the agent starts generating the final conclusion summary. It's right before `result_producing_start` event | - |
 | `concluding_end` | Emitted when the final conclusion is ready. It's right before `result_producing_start` event | `conclusion: string` |
 | `memory_error` | Emitted when a deterministic memory hook or registered memory tool fails. The agent logs the error and continues the run. | `ReActAgentMemoryError` |
+| `serve_task_start` | Emitted when `serve()` begins processing an inbound task. | `task: QueuedTask` |
+| `serve_task_finished` | Emitted after `serve()` publishes a completed or failed task result. | `task: QueuedTask`, `result: TaskResult` |
+| `serve_abort` | Emitted when the `serve()` signal stops the worker. | `processedTasks: number` |
+| `serve_max_tasks_reached` | Emitted when `serve()` reaches its configured task limit. | `maxTasks: number`, `processedTasks: number` |
 
 ### Memory failures
 
