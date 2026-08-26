@@ -4,6 +4,14 @@ Custom protocols let an application connect RavenADK agents to a proprietary
 agent network, transport, or workflow while preserving the RavenADK
 communication model.
 
+## Telemetry
+
+Custom protocols using the shared HTTP wrapper automatically receive a `protocol.http.request` span around `CommunicationProtocolAdapter.handle()` and a `protocol.http.response` event containing the protocol, method, and success/error status. Queue implementations use the shared `protocol.queue.*` lifecycle event names.
+
+Custom transports should preserve the same boundary semantics: create a span with protocol and operation metadata, record failures through span status, and never record message bodies, headers, credentials, or full request parameters. `ReActAgent.serve()` adds `agent.react_serve` and per-task `agent.serve.task` telemetry independently of the transport.
+
+> You as the contributor for custom RavenADK agent communication protocol should explicitly grant OpenTelemetry Support for protocol to make it observable - use `withTelemetry` and its Telemetry methods reserved for that task
+
 ## Agent Protocol
 
 Define the agent-level behavior first: discovery, delegation, messages, task

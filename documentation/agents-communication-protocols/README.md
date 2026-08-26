@@ -34,6 +34,12 @@ These are the protocol surfaces currently represented in the repository:
 <!-- | [G4A](./g4a/README.md) | Agent treats agents pool  | -->
 | [Custom Protocols with RavenADK bindings](./custom-protocol/README.md) | An application-specific protocol mapped to the RavenADK communication model. | Use the canonical concepts below as the compatibility boundary with whatever protocol you wish to hug. |
 
+## Telemetry
+
+Communication protocol integrations use OpenTelemetry when RavenADK telemetry is configured. An inbound worker normally appears as `protocol.http.request`, `agent.react_serve`, `agent.serve.task`, and the nested `agent.react_run` span. Queue lifecycle events use the `protocol.queue.task_enqueued`, `protocol.queue.task_dequeued`, `protocol.queue.task_completed`, `protocol.queue.task_failed`, and `protocol.queue.task_cancelled` names.
+
+ReAct workers also record `agent.serve.task_started`, `agent.serve.task_finished`, `agent.serve.task_failed`, and `agent.serve.finished`. Telemetry is limited to protocol names, operation names, task identifiers, statuses, termination reasons, and counts. Message content, request payloads, authorization headers, and other secret-bearing values are not recorded.
+
 Protocol names describe different wire-level or topology choices. They should
 not change the way an agent reasons about a task, reports a result, or handles
 cancellation.

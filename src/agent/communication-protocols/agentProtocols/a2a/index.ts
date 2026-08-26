@@ -23,6 +23,7 @@ import type {
 import { createHttpProtocolServer, type A2AHttpServer, type A2AHttpServerOptions } from "../../communicationProtocols/protocols/http";
 import type { CommunicationProtocolAdapter, CommunicationRequest, CommunicationResponse } from "../../communicationProtocols/communicationProtocolSchema";
 import { ProtocolQueueEventMap, ProtocolTaskQueueSchema } from "../../queues/queueSchema";
+import { recordEventWithData, withTelemetry } from "../../../../telemetry/telemetry";
 
 /** Name used by the A2A protocol binding. This defines the agent-to-agent protocol name. */
 export const PROTOCOL_NAME = "A2A (Agent-to-Agent Protocol by GOOGLE)";
@@ -75,6 +76,9 @@ export class A2ATaskQueue implements ProtocolTaskQueueSchema {
 
 	emitEvent<K extends keyof ProtocolQueueEventMap>(event: K, ...eventArgs: Parameters<ProtocolQueueEventMap[K]>): boolean {
 		const listeners = this.listeners.get(event);
+		recordEventWithData(`protocol.queue.${String(event)}`, {
+			queue: "a2a"
+		});
 		if (!listeners) return false;
 		for (const listener of listeners) void listener(...eventArgs);
 		return listeners.size > 0;
@@ -445,15 +449,21 @@ export class A2AProtocolClient implements ProtocolClient {
 
 	/** Sends one JSON-RPC request to the configured A2A endpoint. */
 	private async rpc(method: string, params: JsonObject): Promise<JsonObject> {
-		const response = await this.requestFetch(this.options.endpoint, {
-			method: "POST",
-			headers: { "content-type": "application/json", ...this.options.headers },
-			body: JSON.stringify({ jsonrpc: "2.0", id: ++this.requestNumber, method, params })
+		return withTelemetry("protocol.a2a.rpc", {
+			protocol: PROTOCOL_NAME,
+			method,
+			endpoint: this.options.endpoint
+		}, async () => {
+			const response = await this.requestFetch(this.options.endpoint, {
+				method: "POST",
+				headers: { "content-type": "application/json", ...this.options.headers },
+				body: JSON.stringify({ jsonrpc: "2.0", id: ++this.requestNumber, method, params })
+			});
+			if (!response.ok) throw new Error(`A2A ${method} request failed with HTTP ${response.status}`);
+			const payload = await response.json() as JsonRpcResponse;
+			if (payload.error) throw protocolError({ code: String(payload.error.code ?? "A2A_RPC_ERROR"), message: payload.error.message ?? "A2A request failed", details: { data: payload.error.data } });
+			return asObject(payload.result);
 		});
-		if (!response.ok) throw new Error(`A2A ${method} request failed with HTTP ${response.status}`);
-		const payload = await response.json() as JsonRpcResponse;
-		if (payload.error) throw protocolError({ code: String(payload.error.code ?? "A2A_RPC_ERROR"), message: payload.error.message ?? "A2A request failed", details: { data: payload.error.data } });
-		return asObject(payload.result);
 	}
 
 	private async emit<K extends keyof CommunicationEventMap>(event: K, ...args: Parameters<CommunicationEventMap[K]>): Promise<void> {

@@ -318,7 +318,7 @@ export type CommunicateEvents = keyof CommunicationEventMap;
  * This tool emits the events from tool call and output to the `ProtocolClient`
 */
 export class ProtocolCustomClientTool<ToolArgs extends z.ZodObject, ToolOutputSchema extends z.ZodObject> extends Tool<ToolArgs, ToolOutputSchema> {
-    constructor(protocol: ProtocolClient, toolLogic: ToolLogic<ToolArgs>, toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>) {
+    constructor(protocol: ProtocolClient, toolLogic: ToolLogic<ToolArgs, ToolOutputSchema>, toolConfig: ToolConfig<ToolArgs, ToolOutputSchema>) {
         const toolLogicWrappedCommunicated = async (args: z.infer<ToolArgs>): Promise<string> => {
             protocol.emitEvent("custom_use_communication_tool", protocol.protocolName, toolConfig.toolName);
             const toolOutput = await toolLogic(args);

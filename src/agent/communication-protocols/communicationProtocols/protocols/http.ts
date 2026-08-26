@@ -12,6 +12,7 @@ import type {
 } from "../communicationProtocolSchema";
 import { ProtocolTaskQueueSchema } from "../../queues/queueSchema";
 import { InMemoryProtocolTaskQueueSchema } from "../../queues/queue-types";
+import { recordEventWithData, withTelemetry } from "../../../../telemetry/telemetry";
 
 /** Options for a transport-independent HTTP protocol wrapper. */
 export interface HttpProtocolServerOptions {
@@ -83,7 +84,16 @@ export function createHttpProtocolServer(options: HttpProtocolServerOptions): Ht
 				method: typeof payload.method === "string" ? payload.method : "",
 				params: asObject(payload.params)
 			};
-			const result = await options.adapter.handle(communicationRequest, { binding, queue });
+			const result = await withTelemetry("protocol.http.request", {
+				protocol: binding.name,
+				method: communicationRequest.method,
+				path: requestPath
+			}, async () => options.adapter.handle(communicationRequest, { binding, queue }));
+			recordEventWithData("protocol.http.response", {
+				protocol: binding.name,
+				method: communicationRequest.method,
+				status: result.error ? "error" : "ok"
+			});
 			writeJson(response, 200, { jsonrpc: "2.0", id: communicationRequest.id, ...result });
 		} catch (error) {
 			writeJson(response, 400, {

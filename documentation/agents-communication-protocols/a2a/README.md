@@ -19,6 +19,12 @@ The binding also has an HTTP server factory. `createA2AHttpServer()` uses the
 reusable HTTP transport wrapper and provides an inbound
 `ProtocolTaskQueueSchema` for `ReActAgent.serve()`.
 
+## Telemetry
+
+The A2A client creates a `protocol.a2a.rpc` span for each JSON-RPC call with the protocol name, RPC method, and endpoint. Queue operations emit `protocol.queue.*` lifecycle events. When an A2A binding is consumed by `ReActAgent.serve()`, the transport and worker spans nest with `agent.react_serve`, `agent.serve.task`, and the existing nested `agent.react_run` span.
+
+No message content, authorization headers, or complete JSON-RPC parameter objects are exported by the A2A instrumentation.
+
 ## Using `serve()` with A2A
 
 `ReActAgent.serve()` is the inbound worker side of the protocol boundary. It

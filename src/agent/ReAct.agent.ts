@@ -3120,27 +3120,40 @@ export class ReActAgent
             throw new Error(`Protocol "${protocol.name}" does not provide an inbound task queue.`);
         }
 
+        const queue = protocol.queue;
         const signal = options.signal ?? this.agentConfig.abort;
         const maxTasks = options.maxTasks ?? Number.POSITIVE_INFINITY;
-        let processedTasks = 0;
+        return withTelemetry("agent.react_serve", {
+            protocol: protocol.name,
+            max_tasks: maxTasks
+        }, async span => {
+            let processedTasks = 0;
 
-        while (!signal?.aborted && processedTasks < maxTasks) {
-            const queuedTask = await protocol.queue.dequeue(signal);
-            if (!queuedTask) {
-                break;
-            }
+            while (!signal?.aborted && processedTasks < maxTasks) {
+                const queuedTask = await queue.dequeue(signal);
+                if (!queuedTask) {
+                    span.setAttribute("termination_reason", signal?.aborted ? "aborted" : "queue_empty");
+                    break;
+                }
 
             const taskMessage = typeof queuedTask.request.message === "string"
                 ? queuedTask.request.message
                 : queuedTask.request.message.content;
 
             try {
-                const invocation = await this.invoke({
+                recordEventWithData("agent.serve.task_started", {
+                    task_id: queuedTask.taskId,
+                    protocol: protocol.name
+                });
+                const invocation = await withTelemetry("agent.serve.task", {
+                    protocol: protocol.name,
+                    task_id: queuedTask.taskId
+                }, async () => this.invoke({
                     messages: [{
                         type: "user",
                         content: taskMessage
                     }]
-                });
+                }));
 
                 const outputMessage = [...invocation.messages]
                     .reverse()
@@ -3166,7 +3179,12 @@ export class ReActAgent
                         }
                     };
 
-                await protocol.queue.complete(queuedTask.taskId, result);
+                await queue.complete(queuedTask.taskId, result);
+                recordEventWithData("agent.serve.task_finished", {
+                    task_id: queuedTask.taskId,
+                    protocol: protocol.name,
+                    status: result.status
+                });
             } catch (error) {
                 const protocolError: AgentCommunicationProtocolsSchema.ProtocolError = {
                     code: "agent_execution_failed",
@@ -3174,7 +3192,12 @@ export class ReActAgent
                     retryable: true
                 };
 
-                await protocol.queue.fail(queuedTask.taskId, protocolError);
+                await queue.fail(queuedTask.taskId, protocolError);
+                recordEventWithData("agent.serve.task_failed", {
+                    task_id: queuedTask.taskId,
+                    protocol: protocol.name,
+                    error: protocolError.message
+                });
 
                 if (options.continueOnError === false) {
                     throw error;
@@ -3182,10 +3205,18 @@ export class ReActAgent
                 else console.warn("Serve method got an error: ", error)
             }
 
-            processedTasks++;
-        }
+                processedTasks++;
+            }
 
-        return processedTasks;
+            span.setAttribute("processed_tasks", processedTasks);
+            if (processedTasks >= maxTasks) span.setAttribute("termination_reason", "max_tasks");
+            recordEventWithData("agent.serve.finished", {
+                protocol: protocol.name,
+                processed_tasks: processedTasks,
+                termination_reason: signal?.aborted ? "aborted" : processedTasks >= maxTasks ? "max_tasks" : "queue_empty"
+            });
+            return processedTasks;
+        });
     }
 
     async invokeStream(options?: InvokeOptions): Promise<AsyncIterable<ReActAgentStreamChunk>> {

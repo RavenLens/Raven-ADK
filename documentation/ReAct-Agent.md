@@ -68,6 +68,10 @@ console.log("Final answer:", result.messages.at(-1)?.content);
 
 - `serve()` is the inbound worker path. It retrieves tasks from a protocol queue, invokes the ReAct agent for each task, and completes the queued task with the generated outcome. A binding must provide `queue` to use `serve()`.
 
+`serve()` supports OpenTelemetry when agent telemetry is configured. The worker creates an `agent.react_serve` span, each task creates an `agent.serve.task` span, and the normal nested `agent.react_run` span remains available for graph execution details. It records `agent.serve.task_started`, `agent.serve.task_finished`, `agent.serve.task_failed`, and `agent.serve.finished` events. The serve span includes the protocol name, `processed_tasks`, and a `termination_reason` of `aborted`, `queue_empty`, or `max_tasks`. Protocol transport and queue telemetry is nested in the same trace when supported by the binding.
+
+> Only operational metadata such as protocol names, task IDs, statuses, termination reasons, and counts is recorded. Request messages, authorization headers, and other sensitive payload data are excluded from protocol and serve telemetry.
+
 ## Multiple Skills
 
 The `skills` configuration accepts one skill store or an array of skill stores. When multiple stores are provided, the agent exposes the exploration, script, and management tools from all stores and includes each store's available-skill information in the system prompt.

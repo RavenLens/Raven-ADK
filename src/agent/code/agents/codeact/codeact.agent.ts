@@ -251,7 +251,7 @@ export type CodeActExecutionLifecyclePhases =
     | "review"
     | "conclude";
 
-export interface CodeActEvents<ReturnType = void | Promise<void>> extends ReActAgentEvents {
+export interface CodeActEvents<ReturnType extends void | Promise<void> = void | Promise<void>> extends ReActAgentEvents {
     /** Thrown each time some kind of error happens */
     error: (error: any, isExecutionStopped?: boolean) => ReturnType;
     /** Executed once `ReActAgentExecutionStatus` changes */
