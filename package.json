@@ -1,12 +1,13 @@
 {
   "name": "@ravenlens/raven-adk",
-  "version": "0.0.13",
+  "version": "0.0.14-alpha.4",
   "description": "AI Agents Developement Kit. For fast, smart agents developed in fraction of time of other libraries. Designed for delightful UI assemblies gorgeous UX. Made by RavenAlliance",
-  "main": "dist/index.js",
+  "main": "dist/index.cjs",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "test": "vitest",
-    "build": "tsc"
+    "build": "tsup"
   },
   "keywords": [
     "AI",
@@ -20,7 +21,7 @@
   ],
   "author": "Michał Szczepański (kotekpsotek)",
   "license": "Apache-2.0",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/RavenLens/Raven-ADK/issues"
   },
@@ -42,17 +43,37 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "require": "./dist/index.cjs"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js",
+      "require": "./dist/browser.cjs"
     },
     "./graph": {
       "types": "./dist/graph/index.d.ts",
       "import": "./dist/graph/index.js",
-      "require": "./dist/graph/index.js"
+      "require": "./dist/graph/index.cjs"
     },
     "./agents": {
       "types": "./dist/agent/index.d.ts",
-      "import": "./dist/agent/index.js",
-      "require": "./dist/agent/index.js"
+      "import": "./dist/agents.js",
+      "require": "./dist/agents.cjs"
+    },
+    "./communication-protocols": {
+      "types": "./dist/agent/communication-protocols/index.d.ts",
+      "import": "./dist/agent/communication-protocols/index.js",
+      "require": "./dist/agent/communication-protocols/index.cjs"
+    },
+    "./communication-protocols/protocols": {
+      "types": "./dist/agent/communication-protocols/protocols/index.d.ts",
+      "import": "./dist/agent/communication-protocols/protocols/index.js",
+      "require": "./dist/agent/communication-protocols/protocols/index.cjs"
+    },
+    "./code": {
+      "types": "./dist/agent/code/index.d.ts",
+      "import": "./dist/agent/code/index.js",
+      "require": "./dist/agent/code/index.js"
     },
     "./rlm": {
       "types": "./dist/agent/RLM/index.d.ts",
@@ -62,7 +83,12 @@
     "./models": {
       "types": "./dist/models/index.d.ts",
       "import": "./dist/models/index.js",
-      "require": "./dist/models/index.js"
+      "require": "./dist/models.cjs"
+    },
+    "./models/server": {
+      "types": "./dist/models/server.d.ts",
+      "import": "./dist/models/server.js",
+      "require": "./dist/models/server.cjs"
     },
     "./models/speech-to-text": {
       "types": "./dist/models/speech-to-text/index.d.ts",
@@ -107,7 +133,7 @@
     "./tools": {
       "types": "./dist/agent/tools/index.d.ts",
       "import": "./dist/agent/tools/index.js",
-      "require": "./dist/agent/tools/index.js"
+      "require": "./dist/tools.cjs"
     },
     "./tools/mcp": {
       "types": "./dist/agent/tools/mcp/index.d.ts",
@@ -238,11 +264,14 @@
     "openai": "^6.36.0",
     "runpod-sdk": "^1.1.2",
     "socket.io": "^4.8.3",
+    "typescript": "^5.8.3",
+    "vscode-jsonrpc": "^9.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@fal-ai/client": "^1.10.1",
     "@types/node": "^25.6.2",
+    "tsup": "^8.5.1",
     "vitest": "^4.1.5"
   }
 }

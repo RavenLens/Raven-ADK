@@ -1,5 +1,19 @@
 import { describe, it, expect, vi } from "vitest";
-import { HITL, HITLAdapter, HITLRequest, HITLResponse } from "../../src/agent/tools/hitl/hitl";
+import * as z from "zod";
+import { HITL, HITLAdapter, HITLRequest, HITLResponse } from "../../src/agent/tools/hitl";
+import { tool } from "../../src/agent/tools/tools";
+
+const deleteAccountTool = tool(async () => "", {
+    toolName: "delete_account",
+    toolDescription: "Delete an account.",
+    toolArguments: z.object({})
+});
+
+const transferMoneyTool = tool(async () => "", {
+    toolName: "transfer_money",
+    toolDescription: "Transfer money.",
+    toolArguments: z.object({ amount: z.number() })
+});
 
 function createMockAdapter(): { adapter: HITLAdapter; sent: { id: number; request: HITLRequest }[]; respond: (id: number, response: HITLResponse) => void } {
     let handler: ((correlationId: string | number, response: HITLResponse) => void) | undefined = undefined;
@@ -57,9 +71,15 @@ describe("hitl.ts", () => {
             toolsUsage: { delete_account: true }
         });
 
-        const promise = hitl.emitToolUsage("delete_account");
+        const params = { accountId: "account-1" };
+        const promise = hitl.emitToolUsage({ toolInstance: deleteAccountTool, params });
         expect(sent).toHaveLength(1);
-        expect(sent[0].request).toEqual({ type: "tool-approval", toolName: "delete_account" });
+        expect(sent[0].request).toEqual({
+            type: "tool-approval",
+            toolName: "delete_account",
+            toolInstance: deleteAccountTool,
+            params
+        });
 
         respond(sent[0].id, { type: "tool-approval", answer: "allow" });
         const result = await promise;
@@ -75,7 +95,7 @@ describe("hitl.ts", () => {
             }
         });
 
-        const result = await hitl.emitToolUsage("transfer_money");
+        const result = await hitl.emitToolUsage({ toolInstance: transferMoneyTool, params: { amount: 100 } });
         expect(result).toEqual({ answer: "deny", reason: "delay_pass" });
     });
 
@@ -132,7 +152,7 @@ describe("hitl.ts", () => {
             toolsUsage: { delete_account: true }
         });
 
-        const promise = hitl.emitToolUsage("delete_account");
+        const promise = hitl.emitToolUsage({ toolInstance: deleteAccountTool, params: {} });
         hitl.handleResponse(sent[0].id, { type: "tool-approval", answer: "deny" });
 
         const result = await promise;
@@ -155,14 +175,24 @@ describe("hitl.ts", () => {
             }
         });
 
-        const promise = hitl.emitToolUsage("delete_account");
+        const promise = hitl.emitToolUsage({ toolInstance: deleteAccountTool, params: {} });
         await Promise.resolve(); // let the async dispatch and listener run
 
         expect(onBeforeSent).toHaveBeenCalledTimes(1);
-        expect(onBeforeSent).toHaveBeenCalledWith(1, { type: "tool-approval", toolName: "delete_account" });
+        expect(onBeforeSent).toHaveBeenCalledWith(1, {
+            type: "tool-approval",
+            toolName: "delete_account",
+            toolInstance: deleteAccountTool,
+            params: {}
+        });
 
         expect(sent[0].id).toBe(1001);
-        expect(onSent).toHaveBeenCalledWith(1001, { type: "tool-approval", toolName: "delete_account" });
+        expect(onSent).toHaveBeenCalledWith(1001, {
+            type: "tool-approval",
+            toolName: "delete_account",
+            toolInstance: deleteAccountTool,
+            params: {}
+        });
 
         respond(1001, { type: "tool-approval", answer: "allow" });
         await promise;
@@ -180,7 +210,7 @@ describe("hitl.ts", () => {
             }
         });
 
-        const promise = hitl.emitToolUsage("delete_account");
+        const promise = hitl.emitToolUsage({ toolInstance: deleteAccountTool, params: {} });
         const response: HITLResponse = { type: "tool-approval", answer: "allow" };
         respond(sent[0].id, response);
 

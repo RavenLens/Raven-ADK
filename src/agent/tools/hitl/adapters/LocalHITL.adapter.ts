@@ -1,4 +1,4 @@
-import { HITLAdapter, HITLRequest, HITLResponse, HITLResponseHandler } from "../hitl";
+import { HITLAdapter, HITLRequest, HITLResponse, HITLResponseHandler } from "../hitl-strategies/DefaultHITL";
 
 /**
  * Convenience adapter for local/desktop integrations.

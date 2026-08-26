@@ -1,6 +1,6 @@
 import { createServer } from "http";
 import { Server, Socket } from "socket.io";
-import { HITLAdapter, HITLRequest, HITLResponse, HITLResponseHandler } from "../hitl";
+import { HITLAdapter, HITLRequest, HITLResponse, HITLResponseHandler } from "../hitl-strategies/DefaultHITL";
 
 const DEFAULT_SOCKETIO_PORT = 3000;
 

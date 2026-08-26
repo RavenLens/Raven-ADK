@@ -8,17 +8,22 @@
 <!-- TODO: Someday point to the dedicated webpage -->
 [![Webpage](https://img.shields.io/badge/webpage-visit-blue.svg?logo=google-chrome&logoColor=white)](https://www.ravenalliance.tech)
 
-**RavenADK** is an ultra-fast, lightweight, TypeScript-native **Agentic-AI** framework built-on *event-driven* approach with AI-SOTA patterns on mind.
-<br/>**RavenADK** is designed to help you build high-performance AI agents with minimal dependencies; OpenSource in definition
+**RavenADK** is an ultra-fast, lightweight, TypeScript-native **Agentic-AI** framework built-on an *event-driven* progress-communication with the AI-SOTA patterns on mind. Built for **AI-Agents Collective Inteligence**. _**OpenSource** in definition_
 
-Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Now featuring **OpenTelemetry** as the native observability standard for professional-grade monitoring. Open from definition; Anyone can become contributor.
-> Join our community on [Discord](https://discord.gg/XJed3eKn4v)
+> Join to out community on [discord](https://discord.gg/XJed3eKn4v)
+
+> **We seek for contributors🚀!**. Join to our [discord](https://discord.gg/XJed3eKn4v) and check for more in [Contribution Evangel](./CONTRIBUTION.md)
+
+<!-- Open source Agent Developement Kit ***made to support wild AI-Agents Developement initiatives***. Gives native support for JavaScript environments, ***strongly base on events population*** - each action of library can be captured as the event what simplifies creating of breathtaking UX like: user see that agent is now thinking without complicated logic on side of developement. Open from definition; Anyone can become contributor. -->
 
 #### RavenADK as default supports these SOTA Agentic patterns:
+- **AI-Agents Collective Inteligence** - By communication protocols, agents communicates among themself and extenral systems to share information, delegate tasks, consult solutions among *ai-agent experts/human experts*. Extendable in definition - build your own agent with Communication Protocols or make dedicated protocol with deliveried default schemas
 - ReAct Agent - Design for high performance with **parallel tools** and **parallel subagents** support
 - **OpenTelemetry** - Industry standard observability for tracking token usage, performance, and reasoning traces - [check](./documentation/Telemetry.md)
 - RLMs - Recursive approach to increase agent accuracy on large set of text with reducing significantly costs
 - **ToT (Tree-of-Thoughts)** - Advanced reasoning framework for exploring multiple solution paths with parallel evaluation and backtracking - [check](./documentation/chains/Tree-of-Thoughts%20(ToT).md)
+- **Agent Communication Protocols** - Discover agents, delegate tasks, exchange messages, and coordinate results through A2A or custom protocol bindings - [check](./documentation/agents-communication-protocols/README.md)
+    - Custom Protocols - define custom agent-communication protocols with ease by our standarized, extendable schema
 - **GACP** - Revolutionary **Graph Agent Communication Protocol** that changes how agents communicate and contribute to tasks and their **society** - [check](./documentation/gacp/GACP.md)
 - Skills
     - Exploring and applying
@@ -43,6 +48,11 @@ Open source Agent Developement Kit ***made to support wild AI-Agents Developemen
 - FactChecker - Verify the truthfulness of specified information - [check](./documentation/FactChecker.md)
 - AgentsDebate - Debate among agents the next step to take - [check](./documentation/AgentsDebate.md)
 
+## [Showcases](https://github.com/RavenLens/RavenADK-Showcase.git)
+We made few projects proves **RavenADK** capabilities in real world business-scenario apps
+
+Check showcase projects in [Showcases Repo](https://github.com/RavenLens/RavenADK-Showcase.git)
+
 ## Installation
 ```bash
 npm install @ravenlens/raven-adk
@@ -64,6 +74,8 @@ npm install @ravenlens/raven-adk
 - [Telemetry & Observability](./documentation/Telemetry.md)
 - [MCP Integration](./documentation/MCP.md)
 - [HITL Support](./documentation/HITL.md)
+- [Agent Communication Protocols](./documentation/agents-communication-protocols/README.md)
+    - [Build Custom Communication Protocols](./documentation/agents-communication-protocols/custom-protocol/README.md)
 - [GACP (Agent Communication)](./documentation/gacp/GACP.md)
 - [Skills System](./documentation/Skills.md)
     - If enabled - overtime agent learns new skills

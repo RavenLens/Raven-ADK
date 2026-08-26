@@ -2,6 +2,9 @@
 
 `AgentsDebate` coordinates structured-output agents around one task. The implemented workflows are consultation, critique, and handoff. Multi-agent agreement is evidence for a solution, not proof that the solution is correct; applications may still need a domain-specific evaluator or verifier.
 
+### Visualization of Debate
+![Debate Visualization](../src/agent/abstract/agentsdebate/resources/agents-debate.png)
+
 ## Participant Contract
 Define participant as the runner of agent logic
 

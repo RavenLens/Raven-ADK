@@ -1,18 +1,19 @@
 import * as z from "zod";
-import { tool, Tool } from "../tools";
+import { tool, Tool } from "../../tools";
 import {
     DEFAULT_ABC_ANSWERS_RANGE,
     EmitToolUsageBody,
     HITLConfigSchema,
     HITLToolAllowancePossibleAnswer,
+    HITLToolInstanceProbe,
     HITLTransportSchema,
-} from "./hitlToolSchema";
+} from "../hitlToolSchema";
 
 export const HITL_ABC_QUESTION_TOOL_NAME = "hitl_ask_abc_question";
 export const HITL_OPEN_QUESTION_TOOL_NAME = "hitl_ask_open_question";
 
 export type HITLRequest =
-    | { type: "tool-approval"; toolName: string }
+    | { type: "tool-approval"; toolName: string; toolInstance: HITLToolInstanceProbe["toolInstance"]; params: HITLToolInstanceProbe["params"] }
     | { type: "abc-question"; question: string; options: [string, string][] }
     | { type: "open-question"; question: string }
     | { type: "acceptance"; question: string; context?: string };
@@ -185,14 +186,17 @@ export class HITL implements HITLTransportSchema {
      * @param toolName 
      * @returns 
      */
-    async emitToolUsage(toolName: string): Promise<EmitToolUsageBody> {
+    async emitToolUsage(tool: HITLToolInstanceProbe): Promise<EmitToolUsageBody> {
+        const toolName = tool.toolInstance.toolConfig.toolName;
         const toolConf = this.config.toolsUsage?.[toolName];
         const delayMs = typeof toolConf === "object" ? toolConf.delayMs : undefined;
         const defaultAnswer = typeof toolConf === "object" ? toolConf.defaultAnswer : undefined;
 
         const { id, responsePromise } = await this.dispatchRequest<{ answer: HITLToolAllowancePossibleAnswer }>({
             type: "tool-approval",
-            toolName
+            toolName,
+            toolInstance: tool.toolInstance,
+            params: tool.params
         });
 
         let settled = false;
