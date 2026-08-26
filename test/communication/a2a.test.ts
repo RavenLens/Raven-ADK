@@ -165,6 +165,55 @@ describe("A2A protocol binding", () => {
         await service.close();
     });
 
+    it("communicates between two spawned A2A protocol instances over HTTP", async () => {
+        const worker = createA2AHttpServer({
+            binding: createA2ABinding({ endpoint: "http://localhost" }),
+            agent: { id: "worker", name: "Worker Agent", capabilities: ["delegate_task"] }
+        });
+        await worker.listen(0, "127.0.0.1");
+        const workerAddress = worker.httpServer.address();
+        if (!workerAddress || typeof workerAddress === "string") throw new Error("Worker did not bind to a port");
+
+        const caller = createA2AHttpServer({
+            binding: createA2ABinding({ endpoint: `http://127.0.0.1:${workerAddress.port}/a2a`, participant: { id: "caller", name: "Caller Agent" } }),
+            agent: { id: "caller", name: "Caller Agent", capabilities: ["delegate_task"] }
+        });
+
+        try {
+            await caller.listen(0, "127.0.0.1");
+
+            const handle = await caller.binding.client.delegate({
+                from: "caller",
+                to: "worker",
+                activity: "delegate_task",
+                message: "Use the worker HTTP protocol"
+            });
+            const queued = await worker.queue.dequeue();
+            console.log('Dequeued', queued)
+
+            expect(queued?.request).toMatchObject({
+                from: "caller",
+                to: "worker",
+                message: "Use the worker HTTP protocol"
+            });
+
+            await worker.queue.complete(queued!.taskId, {
+                taskId: queued!.taskId,
+                status: "completed",
+                message: { id: "answer", role: "agent", content: "HTTP communication works" }
+            });
+
+            await expect(handle.wait()).resolves.toMatchObject({
+                taskId: queued!.taskId,
+                status: "completed",
+                message: { content: "HTTP communication works" }
+            });
+        } finally {
+            await caller.close();
+            await worker.close();
+        }
+    });
+
     it("exposes the inbound adapter for non-HTTP communication transports", async () => {
         const queue = new InMemoryProtocolTaskQueueSchema();
         const adapter = createA2ACommunicationAdapter({ id: "worker", name: "Worker Agent" });
