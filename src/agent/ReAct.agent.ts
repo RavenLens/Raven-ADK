@@ -1,13 +1,9 @@
 import { Graph, GraphMarkers } from "../graph";
-import { Anthropic } from "../models/text-to-text/anthropic";
-import { InvokeOptions, LLMAnswer } from "../models/mutual";
-import { OpenAI } from "../models/text-to-text/openai";
-import { Google } from "../models/text-to-text/google";
+import { InvokeOptions, LLMAnswer, StandardLLMShema } from "../models/mutual";
 import type { SchemaSkillStore } from "./skills/stores/schema.js";
 import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./state";
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
 import { Tool } from "./tools/tools";
-import type { RunPod } from "../models/text-to-text/runpod.js";
 import z from "zod";
 import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
@@ -19,7 +15,7 @@ import { ToolBasedMemorySchema } from "./memory/schema/toolMemorySchema";
 import { AgentCommunicationProtocolsSchema } from "./communication-protocols";
 import { ProtocolBinding } from "./communication-protocols/agentProtocols/agentProtocolSchema";
 
-export type AgentModel = OpenAI | Anthropic | RunPod | Google;
+export type AgentModel = StandardLLMShema<any>;
 
 export interface SubAgentDefault {
     role: string;

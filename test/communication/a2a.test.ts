@@ -214,6 +214,10 @@ describe("A2A protocol binding", () => {
         }
     });
 
+    it("Test dummy agents communication with `serve` and dummy model", () => {
+        
+    });
+
     it("exposes the inbound adapter for non-HTTP communication transports", async () => {
         const queue = new InMemoryProtocolTaskQueueSchema();
         const adapter = createA2ACommunicationAdapter({ id: "worker", name: "Worker Agent" });
