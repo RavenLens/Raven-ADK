@@ -240,6 +240,14 @@ export interface ReActAgentEvents extends SkillEvents {
     plugin_error: (pluginName: string, executionWay: ReActAgentPluginSpec["executionWay"], error: unknown) => void | Promise<void>;
     /** Event emitted once protocol is used */
     protocol_event: (protocolName: string, eventName: AgentCommunicationProtocolsSchema.CommunicateEvents, taskId?: AgentCommunicationProtocolsSchema.TaskId, eventArgs?: unknown[]) => void | Promise<void>;
+    /** Emitted when the serve loop stops because its abort signal is triggered. */
+    serve_abort: (processedTasks: number) => void | Promise<void>;
+    /** Emitted immediately before a queued task is passed to the ReAct agent. */
+    serve_task_start: (task: AgentCommunicationProtocolsSchema.QueuedTask) => void | Promise<void>;
+    /** Emitted after a queued task has completed or failed and its result was published. */
+    serve_task_finished: (task: AgentCommunicationProtocolsSchema.QueuedTask, result: AgentCommunicationProtocolsSchema.TaskResult) => void | Promise<void>;
+    /** Emitted when the configured maximum number of tasks has been processed. */
+    serve_max_tasks_reached: (maxTasks: number, processedTasks: number) => void | Promise<void>;
     subagent_called: (role: string, instruction: string) => void | Promise<void>;
     subagent_result: (role: string, instruction: string, result: ReActAgentInvokeResult) => void | Promise<void>;
     subagent_reasoning: (role: string, content: string) => void | Promise<void>;
@@ -2099,6 +2107,7 @@ export class ReActAgent
                 });
             }
 
+            // Registers custom communication tools attached by custom communication protocols
             for (const tool of protocol.client.customCommunicationTools ?? []) {
                 if (!this.agentConfig.tools.some(registeredTool => registeredTool.toolConfig.toolName === tool.toolConfig.toolName)) {
                     this.agentConfig.tools.push(tool);
@@ -2782,6 +2791,12 @@ export class ReActAgent
      * The worker waits in `dequeue()` while the queue is empty, processes one
      * task at a time, reports completion or failure, and stops on abort, queue
      * closure, or the configured `maxTasks` limit.
+     * 
+    * Emits `serve_task_start` and `serve_task_finished` for each task,
+    * `serve_abort` when its signal stops the loop, and
+    * `serve_max_tasks_reached` when the configured task limit is reached.
+     * 
+     * @returns {number} - it's the count of processed tasks by the agent
      */
     async serve(
         protocol: AgentCommunicationProtocolsSchema.Schema | ProtocolBinding,
@@ -2804,6 +2819,8 @@ export class ReActAgent
             const taskMessage = typeof queuedTask.request.message === "string"
                 ? queuedTask.request.message
                 : queuedTask.request.message.content;
+
+            this.emitEvent("serve_task_start", queuedTask);
 
             try {
                 const invocation = await this.invoke({
@@ -2838,6 +2855,7 @@ export class ReActAgent
                     };
 
                 await protocol.queue.complete(queuedTask.taskId, result);
+                this.emitEvent("serve_task_finished", queuedTask, result);
             } catch (error) {
                 const protocolError: AgentCommunicationProtocolsSchema.ProtocolError = {
                     code: "agent_execution_failed",
@@ -2846,6 +2864,11 @@ export class ReActAgent
                 };
 
                 await protocol.queue.fail(queuedTask.taskId, protocolError);
+                this.emitEvent("serve_task_finished", queuedTask, {
+                    taskId: queuedTask.taskId,
+                    status: "failed",
+                    error: protocolError
+                });
 
                 if (options.continueOnError === false) {
                     throw error;
@@ -2854,6 +2877,12 @@ export class ReActAgent
             }
 
             processedTasks++;
+        }
+
+        if (signal?.aborted) {
+            this.emitEvent("serve_abort", processedTasks);
+        } else if (processedTasks >= maxTasks) {
+            this.emitEvent("serve_max_tasks_reached", maxTasks, processedTasks);
         }
 
         return processedTasks;
