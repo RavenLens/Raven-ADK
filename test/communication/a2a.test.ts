@@ -350,9 +350,9 @@ describe("A2A protocol binding", () => {
     it("emits queue lifecycle events and supports unsubscribing", async () => {
         const queue = new InMemoryProtocolTaskQueueSchema();
         const events: string[] = [];
-        const removeEnqueuedListener = queue.onEvent("task_enqueued", task => events.push(`enqueued:${task.taskId}`));
-        queue.onEvent("task_dequeued", task => events.push(`dequeued:${task.taskId}`));
-        queue.onEvent("task_completed", result => events.push(`completed:${result.taskId}`));
+        const removeEnqueuedListener = queue.onEvent("task_enqueued", task => {events.push(`enqueued:${task.taskId}`)});
+        queue.onEvent("task_dequeued", task => {events.push(`dequeued:${task.taskId}`)});
+        queue.onEvent("task_completed", result => {events.push(`completed:${result.taskId}`)});
 
         const taskId = await queue.enqueue({ from: "caller", to: "worker", message: "Run the task" });
         const queued = await queue.dequeue();

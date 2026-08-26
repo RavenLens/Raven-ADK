@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { createTodoTools, createTodoPlugin, TodoStoreSchemaTS } from "../../src/agent/todo/todo";
+import { createTodoTools, createTodoPlugin, TodoStoreSchemaTS } from "../../src/agent/plugins/todo/todo";
 import { AgentModel, ReActAgentConfig } from "../../src/agent/ReAct.agent";
 import { AgentMessagesGraphState } from "../../src/agent/state";
 

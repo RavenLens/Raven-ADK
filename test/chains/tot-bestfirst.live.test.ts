@@ -2,7 +2,7 @@ import "dotenv/config";
 import { describe, it, expect } from "vitest";
 import { TreeOfThoughts } from "../../src/chains/ToT/ToT";
 import { BestFirstToT } from "../../src/chains/ToT/strategies/BestFirst";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 
 const openAIApiKey = process.env.OPENAI_API_KEY?.trim();
 const liveDescribe = openAIApiKey ? describe : describe.skip;

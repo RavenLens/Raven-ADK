@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { RunPod } from "../../src/models/runpod";
+import { RunPod } from "../../src/models/text-to-text/runpod";
 import { AIMessage } from "../../src/agent/state";
 
 const { runpodEndpointMock, runpodSdkMock } = vi.hoisted(() => ({

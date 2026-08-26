@@ -2,7 +2,7 @@ import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ReActAgent } from "../../src/agent/ReAct.agent";
-import { Google } from "../../src/models/google";
+import { Google } from "../../src/models/text-to-text/google";
 import { tool } from "../../src/agent/tools/tools";
 
 const googleApiKey = (process.env.GEMINI_API_KEY_RAVENADK || process.env.GOOGLE_API_KEY)?.trim();

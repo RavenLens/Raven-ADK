@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { generateCompactReActAgentPlugin, Tokenizer } from "../../../src/agent/plugins/compaction";
 import { MessagesVariations } from "../../../src/agent/state";
 import { ReActAgent } from "../../../src/agent/ReAct.agent";
-import { OpenAI } from "../../../src/models/openai";
+import { OpenAI } from "../../../src/models/text-to-text/openai";
 
 describe("Mocking: Conversation Tokenizer & Compaction Tests", () => {
     const mockTokenizer: Tokenizer = (content: string) => {

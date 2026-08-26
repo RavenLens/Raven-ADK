@@ -1,8 +1,8 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { ReActAgent } from "../../../src/agent/ReAct.agent";
-import { OpenAI } from "../../../src/models/openai";
-import { createTodoPlugin, TodoStoreSchemaTS } from "../../../src/agent/todo/todo";
+import { OpenAI } from "../../../src/models/text-to-text/openai";
+import { createTodoPlugin, TodoStoreSchemaTS } from "../../../src/agent/plugins/todo/todo";
 
 const openaiApiKey = process.env.OPENAI_API_KEY?.trim();
 const liveDescribe = (openaiApiKey && openaiApiKey.length > 0) ? describe : describe.skip;

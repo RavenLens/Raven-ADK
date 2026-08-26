@@ -2,7 +2,7 @@ import "dotenv/config";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { ReActAgent, ReActAgentPluginSpec, SubAgentAsFn } from "../../src/agent/ReAct.agent";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 import { tool } from "../../src/agent/tools/tools";
 import { AIMessage } from "../../src/agent/state";
 

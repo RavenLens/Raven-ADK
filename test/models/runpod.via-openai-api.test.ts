@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 
 const runpodApiKey = process.env.RUNPOD_API_KEY?.trim();
 const runpodEndpointId = process.env.RUNPOD_ENDPOINT_ID?.trim();

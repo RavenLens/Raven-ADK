@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { z } from "zod";
 import { ReActAgent } from "../../src/agent/ReAct.agent";
-import { Google } from "../../src/models/google";
+import { Google } from "../../src/models/text-to-text/google";
 import { tool } from "../../src/agent/tools/tools";
 
 describe("ReActAgent optimizations", () => {

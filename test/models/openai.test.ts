@@ -2,7 +2,7 @@ import "dotenv/config";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { tool } from "../../src/agent/tools/tools";
-import { OpenAI } from "../../src/models/openai";
+import { OpenAI } from "../../src/models/text-to-text/openai";
 
 const { openaiResponsesCreateMock, openaiResponsesCompactMock, openaiChatCreateMock, openaiCompletionsCreateMock, openaiCtorMock } = vi.hoisted(() => ({
     openaiResponsesCreateMock: vi.fn(),

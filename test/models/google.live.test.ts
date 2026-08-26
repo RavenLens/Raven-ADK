@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { Google } from "../../src/models/google";
+import { Google } from "../../src/models/text-to-text/google";
 import { AIMessage } from "../../src/agent/state";
 import { GoogleGenAI } from "@google/genai";
 

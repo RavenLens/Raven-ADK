@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Google } from "../../src/models/google";
+import { Google } from "../../src/models/text-to-text/google";
 
 const { googleGenerateContentMock, googleGenerateContentStreamMock } = vi.hoisted(() => ({
     googleGenerateContentMock: vi.fn(),
