@@ -60,11 +60,50 @@ local and Socket.io adapters described in the linked guides.
 Adapters are transport implementations, not HITL strategies. See [LocalHITL.md](LocalHITL.md)
 and [SocketHITL.md](SocketHITL.md) for adapter-specific setup.
 
-<!-- ## HITL Internal Events
-Each class implements custom class that
+## HITL Events
 
-TODO: 
--->
+HITL events can be listened to directly on a HITL implementation such as the
+default `HITL` implementation (defined in [DefaultHITL.ts](../../src/agent/tools/hitl/hitl-strategies/DefaultHITL.ts)) or `AutoPilotHITL`. Use `onEvent` when you need to react to one known event, and use `onAnyEvent` when you need to observe every event for logging, analytics, debugging, or a generic event bridge. `emitEvent` is used by a HITL implementation or subclass to publish an event to its registered listeners.
+
+```typescript
+// Use onEvent for one specific event and its typed event body.
+hitl.onEvent("hitl_start", (eventBody) => {
+    console.log("HITL started", eventBody);
+});
+
+// Use onAnyEvent when the event name is not known in advance or all HITL
+// activity needs to be forwarded to a logger or another event system.
+hitl.onAnyEvent((eventName, args) => {
+    console.log("HITL event", eventName, args);
+});
+
+// emitEvent is normally called by the HITL implementation. It is available
+// for custom HITL subclasses or integrations that define their own events.
+hitl.emitEvent("hitl_start", () => undefined);
+```
+
+`HITLEventsSpecType` is the base event contract. Every event name maps to a
+function signature, which determines the type of the value passed to
+`emitEvent`, the listener registered with `onEvent`, and the entries in the
+`args` array received by `onAnyEvent`.
+
+The default `HITL` implementation exposes these events:
+
+| Event | Event body |
+|---|---|
+| `hitl_start` | `() => void` — emitted when an approval, question, or acceptance flow starts. |
+| `hitl_end` | `() => void` — emitted when the flow finishes, including after a delay fallback. |
+| `hitl_request_sent` | `(id: number, request: HITLRequest) => void` — emitted after a request is sent to the adapter. |
+| `hitl_response_received` | `(correlationId: string \| number, response: HITLResponse) => void` — emitted after a client response is received. |
+| `hitl_delay_passed` | `(toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: "allow" \| "deny" }) => void` — emitted when a tool approval timeout passes. |
+
+`AutoPilotHITL` also exposes custom events you can find on [AutoPilotHITLEvents](./AutoPilotHITL.md#autopilot-hitl-events). The first receives the `HITLToolInstanceProbe`
+being evaluated. The second receives that tool probe and the judge outcome,
+which is either `"use-hitl"` or `"omit"`.
+
+Custom HITL implementations can extend the event map with their own event
+names. Register listeners on the concrete instance so the same code works
+with the default strategy and with subclasses such as `AutoPilotHITL`.
 
 ## HITL listeners
 

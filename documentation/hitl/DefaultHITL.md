@@ -84,3 +84,42 @@ The optional `listeners` configuration observes or transforms the request
 lifecycle independently of the adapter. Available hooks are `onBeforeSent`,
 `onSent`, `onResponse`, and `onDelayPass`. This makes logging and analytics
 portable across local and network transports.
+
+## HITL Events
+
+`DefaultHITLEvents` is the event map used by the default `HITL` implementation.
+It extends `HITLEventsSpecType`, so it includes the generic `hitl_start` and
+`hitl_end` lifecycle events as well as the default strategy's request,
+response, and timeout events.
+
+| Event | Emitted by | Event body |
+|---|---|---|
+| `hitl_start` | An approval, question, or acceptance flow when it starts | `() => void` |
+| `hitl_end` | The flow when it finishes | `() => void` |
+| `hitl_request_sent` | Request dispatch after the adapter receives a request | `(id: number, request: HITLRequest) => void` |
+| `hitl_response_received` | Response handling after a pending request is resolved | `(correlationId: string \| number, response: HITLResponse) => void` |
+| `hitl_delay_passed` | A tool approval timeout when it passes | `(toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: "allow" \| "deny" }) => void` |
+
+Listen directly on the `HITL` instance. Use `onEvent` for one known event and
+`onAnyEvent` when all HITL activity should be observed by a logger, analytics
+collector, debugger, or event bridge. `emitEvent` is normally called by the
+HITL implementation; custom HITL subclasses can use it to publish additional
+events.
+
+```typescript
+// Use onEvent for one specific event.
+hitl.onEvent("hitl_request_sent", (id, request) => {
+	console.log("HITL request sent", id, request.type);
+});
+
+// Use onAnyEvent to observe every standard or custom HITL event.
+hitl.onAnyEvent((eventName, args) => {
+	console.log("HITL event", eventName, args);
+});
+
+// emitEvent is available for custom HITL implementations or integrations.
+hitl.emitEvent("hitl_start", () => undefined);
+```
+
+See [HITL Events](README.md#hitl-events) for the shared event API and the
+`HITLEventsSpecType`, `onEvent`, `onAnyEvent`, and `emitEvent` definitions.

@@ -1,11 +1,16 @@
 import z from "zod";
 import { HITL, Tool } from "../..";
 import { ReActAgent } from "../../../ReAct.agent";
-import { HITLToolInstanceProbe, HITLTransportSchema } from "../hitlToolSchema";
-import { HITLConfig } from "./DefaultHITL";
+import { HITLToolInstanceProbe, HITLEventsSpecType, HITLTransportSchema } from "../hitlToolSchema";
+import { DefaultHITLEvents, HITLConfig } from "./DefaultHITL";
 
 export type HITLJudgeOutcome = "use-hitl" | "omit";
 export type AutoPilotHITLErrorBehaviour = "throw" | "console.error";
+
+export type AutoPilotHITLEvents = HITLEventsSpecType & DefaultHITLEvents & {
+    autopilot_judge_started: (tool: HITLToolInstanceProbe) => void;
+    autopilot_judge_finished: (tool: HITLToolInstanceProbe, outcome: HITLJudgeOutcome) => void;
+};
 
 export interface AutoPilotToolUsageOutcome {
     /** Has to be awaited till user makes the response */
@@ -17,7 +22,7 @@ export interface AutoPilotToolUsageOutcome {
 /**
  * AutoPilotHITL uses AI Agent to validate the stuff can be passed and pass to human only the stuff ai has assumed as the destructive
  */
-export class AutoPilotHITL extends HITL.HITL implements HITLTransportSchema {
+export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents> implements HITLTransportSchema<AutoPilotHITLEvents> {
     hitlAgent: ReActAgent<any, any, any, any>;
     
     constructor(hitlAgent: ReActAgent<any, any, any, any>, hitlConfig: HITLConfig) {
@@ -44,6 +49,9 @@ export class AutoPilotHITL extends HITL.HITL implements HITLTransportSchema {
         errorBehaviour: AutoPilotHITLErrorBehaviour = "console.error",
         instructionForActionJudegement?: string,
     ): Promise<HITLJudgeOutcome> {
+        this.emitEvent("autopilot_judge_started", ((judgedTool: HITLToolInstanceProbe) => {
+            void judgedTool;
+        }) as AutoPilotHITLEvents["autopilot_judge_started"]);
         try {
             // 1. Prepare the system prompt and question for ReActAgent
             const { toolName, toolDescription, toolArguments, toolOutputSchema } = tool.toolInstance.toolConfig;
@@ -94,6 +102,10 @@ export class AutoPilotHITL extends HITL.HITL implements HITLTransportSchema {
                 if (typeof lastMessage.structuredOutput === "object") {
                     const { judgeResult } = lastMessage.structuredOutput as z.infer<typeof outcomeSchema>;
 
+                    this.emitEvent("autopilot_judge_finished", ((judgedTool: HITLToolInstanceProbe, outcome: HITLJudgeOutcome) => {
+                        void judgedTool;
+                        void outcome;
+                    }) as AutoPilotHITLEvents["autopilot_judge_finished"]);
                     return judgeResult;
                 }
                 else throw Error(`Judge didn't output trajectory`);
@@ -103,6 +115,8 @@ export class AutoPilotHITL extends HITL.HITL implements HITLTransportSchema {
         catch(err) {
             if (errorBehaviour === "console.error") {
                 console.error(`AutoPilotHITL-Judge experienced error:`, err);
+
+                this.emitEvent("autopilot_judge_finished", (() => undefined) as AutoPilotHITLEvents["autopilot_judge_finished"]);
 
                 // Default state return
                 return "omit";

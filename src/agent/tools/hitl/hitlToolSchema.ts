@@ -45,10 +45,22 @@ export interface HITLConfigSchema {
 export interface EmitToolUsageBody { answer: HITLToolAllowancePossibleAnswer; reason: "user_answer" | "delay_pass" }
 export type HITLToolInstanceProbe = { toolInstance: Tool<any, any>, params: Record<string, any>; };
 
+export type HITLEventsSpecType<ReturnType = void | Promise<void>> = {
+    [key: string]: (...args: any[]) => ReturnType;
+    /** Emitted once hitl call starts */
+    hitl_start: () => ReturnType;
+    /**  Emitted once hitl call finishes */
+    hitl_end: () => ReturnType;
+}
+
 // TODO: Document the HITL in the HITL doc
-export interface HITLTransportSchema {
+export interface HITLTransportSchema<HITLEventsSpec extends HITLEventsSpecType = HITLEventsSpecType> {
     /** Configuration object */
     config?: any;
+
+    emitEvent<E extends keyof HITLEventsSpec>(event: E, body: HITLEventsSpec[E]): void;
+    onAnyEvent<E extends keyof HITLEventsSpec>(handler: (event: E, args: Parameters<HITLEventsSpec[E]>) => void | Promise<void>): void;
+    onEvent<E extends keyof HITLEventsSpec>(event: E, listener: HITLEventsSpec[E]): void;
 
     emitAbcQuestion?: (question: string, abcOptions: [string, string][]) => Promise<[string, string]>;
     emitOpenQuestion?: (question: string) => Promise<string>;

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import * as z from "zod";
-import { HITL, HITLAdapter, HITLRequest, HITLResponse } from "../../src/agent/tools/hitl";
-import { tool } from "../../src/agent/tools/tools";
+import { HITL, HITLAdapter, HITLRequest, HITLResponse } from "../../../src/agent/tools/hitl";
+import { tool } from "../../../src/agent/tools/tools";
 
 const deleteAccountTool = tool(async () => "", {
     toolName: "delete_account",
@@ -238,5 +238,42 @@ describe("hitl.ts", () => {
         expect(secondListener).toHaveBeenCalledWith(eventBody);
         expect(duplicateListener).toHaveBeenCalledTimes(2);
         expect(anyListener).toHaveBeenCalledWith("hitl_start", [eventBody]);
+    });
+
+    it("notifies listeners for the default HITL lifecycle events", async () => {
+        const { adapter, sent, respond } = createMockAdapter();
+        const hitl = new HITL({
+            adapter,
+            toolsUsage: { delete_account: true }
+        });
+        const firstStartListener = vi.fn();
+        const secondStartListener = vi.fn();
+        const requestListener = vi.fn();
+        const responseListener = vi.fn();
+        const endListener = vi.fn();
+        const anyListener = vi.fn();
+
+        hitl.onEvent("hitl_start", firstStartListener);
+        hitl.onEvent("hitl_start", secondStartListener);
+        hitl.onEvent("hitl_request_sent", requestListener);
+        hitl.onEvent("hitl_response_received", responseListener);
+        hitl.onEvent("hitl_end", endListener);
+        hitl.onAnyEvent(anyListener);
+
+        const approval = hitl.emitToolUsage({ toolInstance: deleteAccountTool, params: {} });
+        expect(firstStartListener).toHaveBeenCalledTimes(1);
+        expect(secondStartListener).toHaveBeenCalledTimes(1);
+        expect(requestListener).toHaveBeenCalledTimes(1);
+        expect(anyListener).toHaveBeenCalledWith("hitl_start", expect.any(Array));
+        expect(anyListener).toHaveBeenCalledWith("hitl_request_sent", expect.any(Array));
+
+        const response: HITLResponse = { type: "tool-approval", answer: "allow" };
+        respond(sent[0].id, response);
+        await approval;
+
+        expect(responseListener).toHaveBeenCalledTimes(1);
+        expect(endListener).toHaveBeenCalledTimes(1);
+        expect(anyListener).toHaveBeenCalledWith("hitl_response_received", expect.any(Array));
+        expect(anyListener).toHaveBeenCalledWith("hitl_end", expect.any(Array));
     });
 });

@@ -6,6 +6,7 @@ import {
     HITLConfigSchema,
     HITLToolAllowancePossibleAnswer,
     HITLToolInstanceProbe,
+    HITLEventsSpecType,
     HITLTransportSchema,
 } from "../hitlToolSchema";
 
@@ -72,6 +73,12 @@ export interface HITLConfig extends HITLConfigSchema {
     }
 }
 
+export type DefaultHITLEvents = HITLEventsSpecType & {
+    hitl_request_sent: (id: number, request: HITLRequest) => void;
+    hitl_response_received: (correlationId: string | number, response: HITLResponse) => void;
+    hitl_delay_passed: (toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: HITLToolAllowancePossibleAnswer }) => void;
+};
+
 interface PendingRequest {
     resolve: (value: unknown) => void;
     reject: (reason?: unknown) => void;
@@ -85,13 +92,15 @@ interface PendingRequest {
  * `HITLAdapter`, which keeps the core class small and makes it easy to plug in
  * Socket.io, Electron IPC, Tauri sidecars, WebSockets, or any custom channel.
  */
-export class HITL implements HITLTransportSchema {
+export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> implements HITLTransportSchema<HITLEvents> {
     config: HITLConfig;
     questionHITLPrompt: string;
 
     private adapter: HITLAdapter;
     private pending = new Map<string | number, PendingRequest>();
     private correlationIdCounter = 0;
+    private eventListeners = new Map<keyof HITLEvents, HITLEvents[keyof HITLEvents][]>();
+    private anyEventListeners: ((event: keyof HITLEvents, args: any[]) => void | Promise<void>)[] = [];
 
     constructor(config: HITLConfig) {
         this.config = config;
@@ -124,6 +133,28 @@ export class HITL implements HITLTransportSchema {
         return ++this.correlationIdCounter;
     }
 
+    emitEvent<E extends keyof HITLEvents>(event: E, body: HITLEvents[E]): void {
+        for (const listener of this.eventListeners.get(event) ?? []) {
+            (listener as (body: HITLEvents[E]) => void | Promise<void>)(body);
+        }
+        for (const listener of this.anyEventListeners) {
+            listener(event, [body]);
+        }
+    }
+
+    onAnyEvent<E extends keyof HITLEvents>(handler: (event: E, args: Parameters<HITLEvents[E]>) => void | Promise<void>): void {
+        this.anyEventListeners.push(handler as (event: keyof HITLEvents, args: any[]) => void | Promise<void>);
+    }
+
+    onEvent<E extends keyof HITLEvents>(event: E, listener: HITLEvents[E]): void {
+        let listeners = this.eventListeners.get(event);
+        if (!listeners) {
+            listeners = [];
+            this.eventListeners.set(event, listeners);
+        }
+        listeners.push(listener);
+    }
+
     /**
      * Dispatch a HITL request to the adapter, register a pending promise, and
      * notify the `onBeforeSent` / `onSent` listeners. Returns both the
@@ -147,6 +178,10 @@ export class HITL implements HITLTransportSchema {
 
         this.adapter.send(id, request);
         this.config.listeners?.onSent?.(id, request);
+        this.emitEvent("hitl_request_sent" as keyof HITLEvents, ((sentId: number, sentRequest: HITLRequest) => {
+            void sentId;
+            void sentRequest;
+        }) as HITLEvents[keyof HITLEvents]);
 
         return { id, responsePromise };
     }
@@ -179,6 +214,10 @@ export class HITL implements HITLTransportSchema {
         this.pending.delete(correlationId);
         pending.resolve(response);
         this.config.listeners?.onResponse?.(correlationId, response);
+        this.emitEvent("hitl_response_received" as keyof HITLEvents, ((responseId: string | number, receivedResponse: HITLResponse) => {
+            void responseId;
+            void receivedResponse;
+        }) as HITLEvents[keyof HITLEvents]);
     }
 
     /**
@@ -187,6 +226,7 @@ export class HITL implements HITLTransportSchema {
      * @returns 
      */
     async emitToolUsage(tool: HITLToolInstanceProbe): Promise<EmitToolUsageBody> {
+        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
         const toolName = tool.toolInstance.toolConfig.toolName;
         const toolConf = this.config.toolsUsage?.[toolName];
         const delayMs = typeof toolConf === "object" ? toolConf.delayMs : undefined;
@@ -207,6 +247,7 @@ export class HITL implements HITLTransportSchema {
                     if (settled) return;
                     settled = true;
                     this.pending.delete(id);
+                    this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
                     resolve({ answer: response.answer, reason: "user_answer" });
                 })
                 .catch(reject);
@@ -218,9 +259,19 @@ export class HITL implements HITLTransportSchema {
                     this.pending.delete(id);
                     if (defaultAnswer) {
                         await this.config.listeners?.onDelayPass?.(toolName, { defaultAnswerUsed: true, defaultAnswer });
+                        this.emitEvent("hitl_delay_passed" as keyof HITLEvents, ((passedToolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: HITLToolAllowancePossibleAnswer }) => {
+                            void passedToolName;
+                            void details;
+                        }) as HITLEvents[keyof HITLEvents]);
+                        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
                         resolve({ answer: defaultAnswer, reason: "delay_pass" });
                     } else {
                         await this.config.listeners?.onDelayPass?.(toolName, { defaultAnswerUsed: false });
+                        this.emitEvent("hitl_delay_passed" as keyof HITLEvents, ((passedToolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: HITLToolAllowancePossibleAnswer }) => {
+                            void passedToolName;
+                            void details;
+                        }) as HITLEvents[keyof HITLEvents]);
+                        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
                         reject(new Error(`HITL approval for tool "${toolName}" timed out without a configured defaultAnswer`));
                     }
                 }, delayMs);
@@ -229,6 +280,7 @@ export class HITL implements HITLTransportSchema {
     }
 
     async emitAbcQuestion(question: string, abcOptions: [string, string][]): Promise<[string, string]> {
+        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
         const allowedOptions =
             typeof this.config.questions?.abcQuestion === "object"
                 ? this.config.questions.abcQuestion.maxAnswersRange
@@ -249,25 +301,30 @@ export class HITL implements HITLTransportSchema {
             options: abcOptions
         });
 
+        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
         return [response.option, response.optionLabel];
     }
 
     async emitOpenQuestion(question: string): Promise<string> {
+        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
         const response = await this.sendRequest<{ answer: string }>({
             type: "open-question",
             question
         });
 
+        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
         return response.answer;
     }
 
     async emitAcceptance(question: string, context?: string): Promise<HITLToolAllowancePossibleAnswer> {
+        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
         const response = await this.sendRequest<{ answer: HITLToolAllowancePossibleAnswer }>({
             type: "acceptance",
             question,
             context
         });
 
+        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
         return response.answer;
     }
 

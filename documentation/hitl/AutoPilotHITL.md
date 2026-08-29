@@ -19,6 +19,53 @@ security-sensitive, privacy-sensitive, financially consequential,
 externally-visible, or ambiguous actions. You can provide an additional
 instruction for a particular judgement through `emitToolUsageAutoPilot`.
 
+## AutoPilot HITL Events
+
+`AutoPilotHITLEvents` is the event map used by an `AutoPilotHITL` instance. It
+extends `HITLEventsSpecType` and `DefaultHITLEvents`, so AutoPilot exposes all
+of the standard HITL events in addition to its dedicated judge events.
+
+The standard HITL events are:
+
+| Event | Emitted by | Event body |
+|---|---|---|
+| `hitl_start` | The inherited approval, question, or acceptance flow | `() => void` |
+| `hitl_end` | The inherited flow when it finishes | `() => void` |
+| `hitl_request_sent` | The inherited request dispatch | `(id: number, request: HITLRequest) => void` |
+| `hitl_response_received` | The inherited response handler | `(correlationId: string \| number, response: HITLResponse) => void` |
+| `hitl_delay_passed` | The inherited tool approval timeout | `(toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: "allow" \| "deny" }) => void` |
+
+The AutoPilot-specific events are:
+
+| Event | Emitted by | Event body |
+|---|---|---|
+| `autopilot_judge_started` | `emitToolUsageAutoPilot` when judging starts | `(tool: HITLToolInstanceProbe) => void` |
+| `autopilot_judge_finished` | `emitToolUsageAutoPilot` when judging finishes | `(tool: HITLToolInstanceProbe, outcome: "use-hitl" \| "omit") => void` |
+
+`emitToolUsageAutoPilot` emits the judge events and, when the outcome is
+`"use-hitl"`, delegates to the inherited approval flow, which emits the
+standard HITL events. The common `emitToolUsage` method delegates to
+`emitToolUsageAutoPilot`, so callers using that method can observe the same
+event sequence. An outcome of `"omit"` returns the schema-compatible denial
+without entering the human approval flow.
+
+Listen directly on the concrete `AutoPilotHITL` instance:
+
+```typescript
+// Use onEvent for one dedicated AutoPilot event.
+autoPilotHITL.onEvent("autopilot_judge_finished", (tool, outcome) => {
+	console.log("AutoPilot judge finished", tool.toolInstance.toolConfig.toolName, outcome);
+});
+
+// Use onAnyEvent to observe both AutoPilot judge events and inherited HITL events.
+autoPilotHITL.onAnyEvent((eventName, args) => {
+	console.log("AutoPilot HITL event", eventName, args);
+});
+```
+
+See [HITL Events](README.md#hitl-events) for the generic event API and the
+`onEvent`, `onAnyEvent`, and `emitEvent` methods shared by HITL strategies.
+
 ## When to use It
 - When most of actions aren't very serious in consequences therefore can be implement with agent that auto-evaluates what should be auto-aporved and what send for human feedback
 - When you don't know what tool has to get the approval
