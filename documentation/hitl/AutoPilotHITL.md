@@ -9,6 +9,9 @@ AutoPilot uses the same adapter contract and request/response protocol as the
 default strategy. See [Transport.md](Transport.md) for the `HITLAdapter`
 interface, transport events, correlation ids, and custom adapter guidance.
 
+## Work Drawning
+![AutoPilotHITL Drawning](./assets/AutoPilotHITL.svg)
+
 ## How It Works
 
 For each proposed tool invocation, AutoPilot:
@@ -403,3 +406,127 @@ schema-compatible fallback; `user_answer` does not mean that the user replied.
 `emitToolUsageAutoPilot` defaults to `console.error`, which treats a judge
 failure as `omit`. Pass `"throw"` when a judge failure should abort the caller
 instead. The convenience `emitToolUsage` wrapper uses the default behavior.
+
+## Creating An AutoPilot-Compatible HITL
+
+A custom HITL strategy is AutoPilot-compatible when it preserves the common
+`HITLTransportSchema` contract and the AutoPilot judge contract. This lets it
+be used by ordinary agent logic through `emitToolUsage()` and by integrations
+that need the explicit AutoPilot result through `emitToolUsageAutoPilot()`.
+
+The compatibility requirements are:
+
+- Accept an `HITLConfig`-compatible configuration with an `HITLAdapter`,
+  including `toolsUsage`, question configuration, and acceptance configuration.
+- Keep `emitToolUsage(tool)` asynchronous and return
+  `{ answer: "allow" | "deny", reason: ... }`.
+- Implement `emitToolUsageAutoPilot(tool, errorBehaviour?, instruction?)` and
+  return `{ judgeEffect: "use-hitl" | "omit", toolUsageBody? }`.
+- Evaluate only tools that the owning agent or integration has selected for
+  `toolsUsage`; do not automatically judge every tool in the agent's tool list.
+- For `use-hitl`, use the inherited approval flow so adapter requests,
+  correlation ids, timeouts, listeners, and standard events remain consistent.
+- For `omit`, return a schema-compatible denial and do not execute the tool.
+- Preserve `createQuestionTools()`, `emitAbcQuestion()`, `emitOpenQuestion()`,
+  and `emitAcceptance()` semantics. Question tools must not be routed through
+  ordinary tool judging or answered silently by the judge.
+- Preserve the standard HITL events and add AutoPilot events only with the
+  documented `autopilot_judge_started` and `autopilot_judge_finished` shapes
+  when callers depend on them.
+
+The following example uses a custom policy function as the judge. The policy
+could call a model, a rules engine, or a remote service. It extends `HITL`
+rather than `AutoPilotHITL` because the built-in judge implementation is
+private; this is the compatible shape for replacing the judge while retaining
+the inherited human transport and question behavior.
+
+```typescript
+import { HITL, SchemaTypes, HITLAdapter } from "@ravenlens/raven-adk/tools/hitl";
+
+type HITLToolInstanceProbe = SchemaTypes.HITLToolInstanceProbe;
+type HITLJudgeOutcome = "use-hitl" | "omit";
+type AutoPilotHITLErrorBehaviour = "throw" | "console.error";
+type AutoPilotToolUsageOutcome = {
+	judgeEffect: HITLJudgeOutcome;
+	toolUsageBody?: Promise<SchemaTypes.EmitToolUsageBody>;
+};
+
+// In a typed project, use the exported AutoPilot event and config types when
+// your package version exposes them from its public barrel. This broad event
+// map keeps the standalone example focused on the strategy shape.
+type AutoPilotHITLEvents = SchemaTypes.HITLEventsSpecType &
+	Record<string, (...args: any[]) => void>;
+type AutoPilotHITLConfig = SchemaTypes.HITLConfigSchema & {
+	adapter: HITLAdapter;
+};
+
+type Judge = (
+	tool: HITLToolInstanceProbe,
+	instruction?: string
+) => Promise<HITLJudgeOutcome>;
+
+class CustomAutoPilotHITL extends HITL<AutoPilotHITLEvents, AutoPilotHITLConfig> {
+	constructor(
+		config: AutoPilotHITLConfig,
+		private readonly judge: Judge
+	) {
+		super(config);
+	}
+
+	async emitToolUsageAutoPilot(
+		tool: HITLToolInstanceProbe,
+		errorBehaviour: AutoPilotHITLErrorBehaviour = "console.error",
+		instruction?: string
+	): Promise<AutoPilotToolUsageOutcome> {
+		this.emitEvent("autopilot_judge_started", tool);
+
+		let judgeEffect: HITLJudgeOutcome;
+		try {
+			judgeEffect = await this.judge(tool, instruction);
+		} catch (error) {
+			if (errorBehaviour === "throw") {
+				throw error;
+			}
+			console.error("CustomAutoPilotHITL judge experienced an error:", error);
+			judgeEffect = "omit";
+		}
+
+		this.emitEvent("autopilot_judge_finished", tool, judgeEffect);
+
+		if (judgeEffect === "omit") {
+			return { judgeEffect };
+		}
+
+		return {
+			judgeEffect,
+			toolUsageBody: super.emitToolUsage(tool)
+		};
+	}
+
+	async emitToolUsage(tool: HITLToolInstanceProbe) {
+		// Keep the acceptance tool on its dedicated emitAcceptance path.
+		if (tool.toolInstance.toolConfig.toolName === "hitl_ask_acceptance") {
+			return { answer: "deny", reason: "accetpance_separate_logic" as const };
+		}
+
+		const result = await this.emitToolUsageAutoPilot(tool);
+		return result.toolUsageBody
+			? result.toolUsageBody
+			: { answer: "deny", reason: "user_answer" as const };
+	}
+}
+```
+
+The custom judge must not call `emitToolUsage()` for question tools. The
+question tools are injected by the inherited `createQuestionTools()` method
+and call the inherited question methods directly. Likewise, acceptance should
+remain on `emitAcceptance()`; if acceptance evaluation is needed, implement a
+separate acceptance judge like `engageJudgeInEmittingAccetpance` rather than
+feeding the acceptance tool back into ordinary tool approval.
+
+This class is structurally compatible with the common agent contract and with
+callers that require `emitToolUsageAutoPilot()`. It is not an instance of the
+concrete `AutoPilotHITL` class, so code that requires `instanceof AutoPilotHITL`
+must instead accept a shared interface or use the built-in class. Do not
+override the adapter protocol, response correlation behavior, or request
+payload shapes; those remain defined by [Transport.md](Transport.md).
