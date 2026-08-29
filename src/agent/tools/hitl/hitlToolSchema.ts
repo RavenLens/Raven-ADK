@@ -46,20 +46,21 @@ export interface EmitToolUsageBody { answer: HITLToolAllowancePossibleAnswer; re
 export type HITLToolInstanceProbe = { toolInstance: Tool<any, any>, params: Record<string, any>; };
 
 export type HITLEventsSpecType<ReturnType = void | Promise<void>> = {
-    [key: string]: (...args: any[]) => ReturnType;
     /** Emitted once hitl call starts */
     hitl_start: () => ReturnType;
     /**  Emitted once hitl call finishes */
     hitl_end: () => ReturnType;
 }
 
+export type HITLEventArgs<Spec, Event extends keyof Spec> = Spec[Event] extends (...args: infer Args) => any ? Args : never;
+
 // TODO: Document the HITL in the HITL doc
 export interface HITLTransportSchema<HITLEventsSpec extends HITLEventsSpecType = HITLEventsSpecType> {
     /** Configuration object */
     config?: any;
 
-    emitEvent<E extends keyof HITLEventsSpec>(event: E, body: HITLEventsSpec[E]): void;
-    onAnyEvent<E extends keyof HITLEventsSpec>(handler: (event: E, args: Parameters<HITLEventsSpec[E]>) => void | Promise<void>): void;
+    emitEvent<E extends keyof HITLEventsSpec>(event: E, ...args: HITLEventArgs<HITLEventsSpec, E>): void;
+    onAnyEvent(handler: <E extends keyof HITLEventsSpec>(event: E, ...args: HITLEventArgs<HITLEventsSpec, E>) => void | Promise<void>): void;
     onEvent<E extends keyof HITLEventsSpec>(event: E, listener: HITLEventsSpec[E]): void;
 
     emitAbcQuestion?: (question: string, abcOptions: [string, string][]) => Promise<[string, string]>;

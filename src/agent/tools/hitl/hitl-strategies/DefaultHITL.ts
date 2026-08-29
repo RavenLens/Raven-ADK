@@ -6,6 +6,7 @@ import {
     HITLConfigSchema,
     HITLToolAllowancePossibleAnswer,
     HITLToolInstanceProbe,
+    HITLEventArgs,
     HITLEventsSpecType,
     HITLTransportSchema,
 } from "../hitlToolSchema";
@@ -74,9 +75,13 @@ export interface HITLConfig extends HITLConfigSchema {
 }
 
 export type DefaultHITLEvents = HITLEventsSpecType & {
+    hitl_tool_call: (tool: HITLToolInstanceProbe) => void;
+    hitl_tool_result: (tool: HITLToolInstanceProbe, answer: HITLToolAllowancePossibleAnswer) => void;
     hitl_request_sent: (id: number, request: HITLRequest) => void;
     hitl_response_received: (correlationId: string | number, response: HITLResponse) => void;
     hitl_delay_passed: (toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: HITLToolAllowancePossibleAnswer }) => void;
+    hitl_acceptance_started: (question: string) => void;
+    hitl_acceptance_received: (question: string, answer: HITLToolAllowancePossibleAnswer) => void;
 };
 
 interface PendingRequest {
@@ -92,17 +97,17 @@ interface PendingRequest {
  * `HITLAdapter`, which keeps the core class small and makes it easy to plug in
  * Socket.io, Electron IPC, Tauri sidecars, WebSockets, or any custom channel.
  */
-export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> implements HITLTransportSchema<HITLEvents> {
-    config: HITLConfig;
+export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfig = HITLConfig> implements HITLTransportSchema<HITLEvents> {
+    config: Config;
     questionHITLPrompt: string;
 
     private adapter: HITLAdapter;
     private pending = new Map<string | number, PendingRequest>();
     private correlationIdCounter = 0;
     private eventListeners = new Map<keyof HITLEvents, HITLEvents[keyof HITLEvents][]>();
-    private anyEventListeners: ((event: keyof HITLEvents, args: any[]) => void | Promise<void>)[] = [];
+    private anyEventListeners: ((event: keyof HITLEvents, ...args: any[]) => void | Promise<void>)[] = [];
 
-    constructor(config: HITLConfig) {
+    constructor(config: Config) {
         this.config = config;
         this.adapter = config.adapter;
         this.questionHITLPrompt = this.buildQuestionPrompt();
@@ -133,17 +138,22 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
         return ++this.correlationIdCounter;
     }
 
-    emitEvent<E extends keyof HITLEvents>(event: E, body: HITLEvents[E]): void {
+    emitEvent<E extends keyof HITLEvents>(event: E, ...args: HITLEventArgs<HITLEvents, E>): void;
+    emitEvent(event: keyof HITLEvents, ...args: any[]): void {
+        this.dispatchEvent(event, ...args);
+    }
+
+    private dispatchEvent(event: keyof HITLEvents, ...args: any[]): void {
         for (const listener of this.eventListeners.get(event) ?? []) {
-            (listener as (body: HITLEvents[E]) => void | Promise<void>)(body);
+            (listener as (...args: any[]) => void | Promise<void>)(...args);
         }
         for (const listener of this.anyEventListeners) {
-            listener(event, [body]);
+            listener(event, ...args);
         }
     }
 
-    onAnyEvent<E extends keyof HITLEvents>(handler: (event: E, args: Parameters<HITLEvents[E]>) => void | Promise<void>): void {
-        this.anyEventListeners.push(handler as (event: keyof HITLEvents, args: any[]) => void | Promise<void>);
+    onAnyEvent(handler: <E extends keyof HITLEvents>(event: E, ...args: HITLEventArgs<HITLEvents, E>) => void | Promise<void>): void {
+        this.anyEventListeners.push(handler);
     }
 
     onEvent<E extends keyof HITLEvents>(event: E, listener: HITLEvents[E]): void {
@@ -178,10 +188,7 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
 
         this.adapter.send(id, request);
         this.config.listeners?.onSent?.(id, request);
-        this.emitEvent("hitl_request_sent" as keyof HITLEvents, ((sentId: number, sentRequest: HITLRequest) => {
-            void sentId;
-            void sentRequest;
-        }) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_request_sent", id, request);
 
         return { id, responsePromise };
     }
@@ -214,10 +221,7 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
         this.pending.delete(correlationId);
         pending.resolve(response);
         this.config.listeners?.onResponse?.(correlationId, response);
-        this.emitEvent("hitl_response_received" as keyof HITLEvents, ((responseId: string | number, receivedResponse: HITLResponse) => {
-            void responseId;
-            void receivedResponse;
-        }) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_response_received", correlationId, response);
     }
 
     /**
@@ -226,7 +230,9 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
      * @returns 
      */
     async emitToolUsage(tool: HITLToolInstanceProbe): Promise<EmitToolUsageBody> {
-        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_start");
+        this.dispatchEvent("hitl_tool_call", tool);
+        
         const toolName = tool.toolInstance.toolConfig.toolName;
         const toolConf = this.config.toolsUsage?.[toolName];
         const delayMs = typeof toolConf === "object" ? toolConf.delayMs : undefined;
@@ -247,7 +253,8 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
                     if (settled) return;
                     settled = true;
                     this.pending.delete(id);
-                    this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+                    this.dispatchEvent("hitl_tool_result", tool, response.answer);
+                    this.dispatchEvent("hitl_end");
                     resolve({ answer: response.answer, reason: "user_answer" });
                 })
                 .catch(reject);
@@ -259,19 +266,14 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
                     this.pending.delete(id);
                     if (defaultAnswer) {
                         await this.config.listeners?.onDelayPass?.(toolName, { defaultAnswerUsed: true, defaultAnswer });
-                        this.emitEvent("hitl_delay_passed" as keyof HITLEvents, ((passedToolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: HITLToolAllowancePossibleAnswer }) => {
-                            void passedToolName;
-                            void details;
-                        }) as HITLEvents[keyof HITLEvents]);
-                        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+                        this.dispatchEvent("hitl_delay_passed", toolName, { defaultAnswerUsed: true, defaultAnswer });
+                        this.dispatchEvent("hitl_tool_result", tool, defaultAnswer);
+                        this.dispatchEvent("hitl_end");
                         resolve({ answer: defaultAnswer, reason: "delay_pass" });
                     } else {
                         await this.config.listeners?.onDelayPass?.(toolName, { defaultAnswerUsed: false });
-                        this.emitEvent("hitl_delay_passed" as keyof HITLEvents, ((passedToolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: HITLToolAllowancePossibleAnswer }) => {
-                            void passedToolName;
-                            void details;
-                        }) as HITLEvents[keyof HITLEvents]);
-                        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+                        this.dispatchEvent("hitl_delay_passed", toolName, { defaultAnswerUsed: false });
+                        this.dispatchEvent("hitl_end");
                         reject(new Error(`HITL approval for tool "${toolName}" timed out without a configured defaultAnswer`));
                     }
                 }, delayMs);
@@ -280,7 +282,7 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
     }
 
     async emitAbcQuestion(question: string, abcOptions: [string, string][]): Promise<[string, string]> {
-        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_start");
         const allowedOptions =
             typeof this.config.questions?.abcQuestion === "object"
                 ? this.config.questions.abcQuestion.maxAnswersRange
@@ -301,30 +303,32 @@ export class HITL<HITLEvents extends HITLEventsSpecType = DefaultHITLEvents> imp
             options: abcOptions
         });
 
-        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_end");
         return [response.option, response.optionLabel];
     }
 
     async emitOpenQuestion(question: string): Promise<string> {
-        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_start");
         const response = await this.sendRequest<{ answer: string }>({
             type: "open-question",
             question
         });
 
-        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_end");
         return response.answer;
     }
 
     async emitAcceptance(question: string, context?: string): Promise<HITLToolAllowancePossibleAnswer> {
-        this.emitEvent("hitl_start" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_acceptance_started", question);
+        this.dispatchEvent("hitl_start");
         const response = await this.sendRequest<{ answer: HITLToolAllowancePossibleAnswer }>({
             type: "acceptance",
             question,
             context
         });
 
-        this.emitEvent("hitl_end" as keyof HITLEvents, (() => undefined) as HITLEvents[keyof HITLEvents]);
+        this.dispatchEvent("hitl_acceptance_received", question, response.answer);
+        this.dispatchEvent("hitl_end");
         return response.answer;
     }
 

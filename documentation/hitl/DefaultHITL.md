@@ -99,6 +99,8 @@ response, and timeout events.
 | `hitl_request_sent` | Request dispatch after the adapter receives a request | `(id: number, request: HITLRequest) => void` |
 | `hitl_response_received` | Response handling after a pending request is resolved | `(correlationId: string \| number, response: HITLResponse) => void` |
 | `hitl_delay_passed` | A tool approval timeout when it passes | `(toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: "allow" \| "deny" }) => void` |
+| `hitl_acceptance_started` | `emitAcceptance` before the acceptance request is sent | `(question: string) => void` |
+| `hitl_acceptance_received` | `emitAcceptance` after the acceptance response is received | `(question: string, answer: "allow" \| "deny") => void` |
 
 Listen directly on the `HITL` instance. Use `onEvent` for one known event and
 `onAnyEvent` when all HITL activity should be observed by a logger, analytics
@@ -113,12 +115,20 @@ hitl.onEvent("hitl_request_sent", (id, request) => {
 });
 
 // Use onAnyEvent to observe every standard or custom HITL event.
-hitl.onAnyEvent((eventName, args) => {
+hitl.onAnyEvent((eventName, ...args) => {
 	console.log("HITL event", eventName, args);
 });
 
+// Acceptance events expose the question and the user's answer.
+hitl.onEvent("hitl_acceptance_started", (question) => {
+	console.log("Acceptance requested", question);
+});
+hitl.onEvent("hitl_acceptance_received", (question, answer) => {
+	console.log("Acceptance received", question, answer);
+});
+
 // emitEvent is available for custom HITL implementations or integrations.
-hitl.emitEvent("hitl_start", () => undefined);
+hitl.emitEvent("hitl_start");
 ```
 
 See [HITL Events](README.md#hitl-events) for the shared event API and the

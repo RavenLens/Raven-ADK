@@ -73,13 +73,13 @@ hitl.onEvent("hitl_start", (eventBody) => {
 
 // Use onAnyEvent when the event name is not known in advance or all HITL
 // activity needs to be forwarded to a logger or another event system.
-hitl.onAnyEvent((eventName, args) => {
+hitl.onAnyEvent((eventName, ...args) => {
     console.log("HITL event", eventName, args);
 });
 
 // emitEvent is normally called by the HITL implementation. It is available
 // for custom HITL subclasses or integrations that define their own events.
-hitl.emitEvent("hitl_start", () => undefined);
+hitl.emitEvent("hitl_start");
 ```
 
 `HITLEventsSpecType` is the base event contract. Every event name maps to a
@@ -96,6 +96,8 @@ The default `HITL` implementation exposes these events:
 | `hitl_request_sent` | `(id: number, request: HITLRequest) => void` — emitted after a request is sent to the adapter. |
 | `hitl_response_received` | `(correlationId: string \| number, response: HITLResponse) => void` — emitted after a client response is received. |
 | `hitl_delay_passed` | `(toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: "allow" \| "deny" }) => void` — emitted when a tool approval timeout passes. |
+| `hitl_acceptance_started` | `(question: string) => void` — emitted by `emitAcceptance` before the acceptance request is sent. |
+| `hitl_acceptance_received` | `(question: string, answer: "allow" \| "deny") => void` — emitted by `emitAcceptance` after the acceptance response is received. |
 
 `AutoPilotHITL` also exposes custom events you can find on [AutoPilotHITLEvents](./AutoPilotHITL.md#autopilot-hitl-events). The first receives the `HITLToolInstanceProbe`
 being evaluated. The second receives that tool probe and the judge outcome,

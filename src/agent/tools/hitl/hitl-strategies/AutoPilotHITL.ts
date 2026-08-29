@@ -19,13 +19,22 @@ export interface AutoPilotToolUsageOutcome {
     judgeEffect: HITLJudgeOutcome;
 }
 
+export interface AutoPilotHITLConfig extends HITLConfig {
+    /** Use to specify additional description for the judge in system prompt */
+    hitlJudgeSystemPromptExtension?: string;
+    /** Use to replace system prompt given to judge to waht is specified there */
+    hitlJudgeSystemPromptReplacement?: string;
+    /** Use to extend chat message system prompt given to the judge */
+    hitlJudgeUserMessagePromptExtension?: string;
+}
+
 /**
  * AutoPilotHITL uses AI Agent to validate the stuff can be passed and pass to human only the stuff ai has assumed as the destructive
  */
-export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents> implements HITLTransportSchema<AutoPilotHITLEvents> {
+export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents, AutoPilotHITLConfig> implements HITLTransportSchema<AutoPilotHITLEvents> {
     hitlAgent: ReActAgent<any, any, any, any>;
     
-    constructor(hitlAgent: ReActAgent<any, any, any, any>, hitlConfig: HITLConfig) {
+    constructor(hitlAgent: ReActAgent<any, any, any, any>, hitlConfig: AutoPilotHITLConfig) {
         super(hitlConfig);
         this.hitlAgent = hitlAgent;
     }
@@ -49,41 +58,65 @@ export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents> implements HIT
         errorBehaviour: AutoPilotHITLErrorBehaviour = "console.error",
         instructionForActionJudegement?: string,
     ): Promise<HITLJudgeOutcome> {
-        this.emitEvent("autopilot_judge_started", ((judgedTool: HITLToolInstanceProbe) => {
-            void judgedTool;
-        }) as AutoPilotHITLEvents["autopilot_judge_started"]);
+        this.emitEvent("autopilot_judge_started", tool);
         try {
             // 1. Prepare the system prompt and question for ReActAgent
             const { toolName, toolDescription, toolArguments, toolOutputSchema } = tool.toolInstance.toolConfig;
+            const judgeSystemPromptMessage = (() => {
+                let defaultContent = [
+                    "You are a safety judge for an AI agent's proposed tool invocation.",
+                    "Decide whether a human must approve the action before it runs.",
+                    "Return exactly one structured result: \"use-hitl\" when the action is destructive, irreversible, security-sensitive, privacy-sensitive, financially consequential, externally visible, or ambiguous; return \"omit\" only when the action is clearly safe to run without human approval.",
+                    "Judge the specific invocation, including its parameters and the tool's documented behavior. Treat uncertainty as a reason to use HITL.",
+                    "Do not execute the tool, do not alter its parameters, and do not return any result other than the requested structured output."
+                ].join("\n")
+                
+                if (this.config.hitlJudgeSystemPromptReplacement) {
+                    defaultContent = this.config.hitlJudgeSystemPromptReplacement;
+                }
+                else if (this.config.hitlJudgeSystemPromptExtension) {
+                    defaultContent = [
+                        defaultContent,
+                        `\n\n#### Additional Instruction extensions given from user`,
+                        this.config.hitlJudgeSystemPromptExtension
+                    ].join("\n");
+                }
+
+                return defaultContent;
+            })();
+            const userMessage = (() => {
+                const defaultUserMessage = [
+                    "Evaluate this proposed tool invocation:",
+                    "",
+                    "#tool",
+                    JSON.stringify({
+                        name: toolName,
+                        description: toolDescription,
+                        argumentsSchema: z.toJSONSchema(toolArguments),
+                        outputSchema: toolOutputSchema ? z.toJSONSchema(toolOutputSchema) : undefined,
+                        params: tool.params
+                    }, null, 2),
+                    "",
+                    "#instructionForActionJudegement",
+                    "Is additional instruction proposed for you",
+                    instructionForActionJudegement?.trim() || "No additional instruction was provided."
+                ].join("\n");
+                
+                if (this.config.hitlJudgeUserMessagePromptExtension) {
+                    return defaultUserMessage + `\n\n${this.config.hitlJudgeUserMessagePromptExtension}`;
+                }
+
+                return defaultUserMessage;
+            })();
+            
             this.hitlAgent.agentConfig.messages = [
                 {
                     type: "system",
-                    content: [
-                        "You are a safety judge for an AI agent's proposed tool invocation.",
-                        "Decide whether a human must approve the action before it runs.",
-                        "Return exactly one structured result: \"use-hitl\" when the action is destructive, irreversible, security-sensitive, privacy-sensitive, financially consequential, externally visible, or ambiguous; return \"omit\" only when the action is clearly safe to run without human approval.",
-                        "Judge the specific invocation, including its parameters and the tool's documented behavior. Treat uncertainty as a reason to use HITL.",
-                        "Do not execute the tool, do not alter its parameters, and do not return any result other than the requested structured output."
-                    ].join("\n")
+                    content: judgeSystemPromptMessage
                 },
                 {
                     type: "user",
-                    content: [
-                        "Evaluate this proposed tool invocation:",
-                        "",
-                        "#tool",
-                        JSON.stringify({
-                            name: toolName,
-                            description: toolDescription,
-                            argumentsSchema: z.toJSONSchema(toolArguments),
-                            outputSchema: toolOutputSchema ? z.toJSONSchema(toolOutputSchema) : undefined,
-                            params: tool.params
-                        }, null, 2),
-                        "",
-                        "#instructionForActionJudegement",
-                        "Is additional instruction proposed for you",
-                        instructionForActionJudegement?.trim() || "No additional instruction was provided."
-                    ].join("\n")
+                    content: userMessage
                 }
             ];
     
@@ -102,10 +135,7 @@ export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents> implements HIT
                 if (typeof lastMessage.structuredOutput === "object") {
                     const { judgeResult } = lastMessage.structuredOutput as z.infer<typeof outcomeSchema>;
 
-                    this.emitEvent("autopilot_judge_finished", ((judgedTool: HITLToolInstanceProbe, outcome: HITLJudgeOutcome) => {
-                        void judgedTool;
-                        void outcome;
-                    }) as AutoPilotHITLEvents["autopilot_judge_finished"]);
+                    this.emitEvent("autopilot_judge_finished", tool, judgeResult);
                     return judgeResult;
                 }
                 else throw Error(`Judge didn't output trajectory`);
@@ -116,7 +146,7 @@ export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents> implements HIT
             if (errorBehaviour === "console.error") {
                 console.error(`AutoPilotHITL-Judge experienced error:`, err);
 
-                this.emitEvent("autopilot_judge_finished", (() => undefined) as AutoPilotHITLEvents["autopilot_judge_finished"]);
+                this.emitEvent("autopilot_judge_finished", tool, "omit");
 
                 // Default state return
                 return "omit";

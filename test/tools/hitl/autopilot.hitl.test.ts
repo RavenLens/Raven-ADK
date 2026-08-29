@@ -69,8 +69,8 @@ describe("AutoPilotHITL events", () => {
 		expect(firstStartedListener).toHaveBeenCalledTimes(1);
 		expect(secondStartedListener).toHaveBeenCalledTimes(1);
 		expect(finishedListener).toHaveBeenCalledTimes(1);
-		expect(anyListener).toHaveBeenCalledWith("autopilot_judge_started", expect.any(Array));
-		expect(anyListener).toHaveBeenCalledWith("autopilot_judge_finished", expect.any(Array));
+		expect(anyListener).toHaveBeenCalledWith("autopilot_judge_started", expect.anything());
+		expect(anyListener).toHaveBeenCalledWith("autopilot_judge_finished", expect.anything(), "omit");
 	});
 
 	it("emits judge events before the inherited approval events when HITL is required", async () => {

@@ -19,6 +19,27 @@ security-sensitive, privacy-sensitive, financially consequential,
 externally-visible, or ambiguous actions. You can provide an additional
 instruction for a particular judgement through `emitToolUsageAutoPilot`.
 
+## Judge Prompt Configuration
+
+`AutoPilotHITLConfig` extends `HITLConfig` with three fields that are specific
+to the AutoPilot judge. They control the prompts sent to the judge agent for
+each tool invocation:
+
+| Field | Effect |
+|---|---|
+| `hitlJudgeSystemPromptExtension` | Appends the supplied text to the built-in safety-judge system prompt. Use this to add policy or domain-specific guidance while retaining the default instructions. |
+| `hitlJudgeSystemPromptReplacement` | Replaces the built-in system prompt completely with the supplied text. When both system-prompt fields are provided, replacement takes precedence and the extension (`hitlJudgeSystemPromptExtension`) is ignored. |
+| `hitlJudgeUserMessagePromptExtension` | Appends the supplied text to the generated user message after the tool definition, argument and output schemas, invocation parameters, and optional `instructionForActionJudegement`. |
+
+For every judgement, AutoPilot first builds the default system prompt and the
+structured user message. The system prompt then applies
+`hitlJudgeSystemPromptReplacement` if it is set; otherwise it appends
+`hitlJudgeSystemPromptExtension` when that is set. The user-message extension
+is applied separately and does not replace the generated tool context. These
+fields affect only the judge prompts; the regular HITL configuration, such as
+`toolsUsage`, still controls which tools can enter the approval flow and how
+approval is handled after the judge returns `use-hitl`.
+
 ## AutoPilot HITL Events
 
 `AutoPilotHITLEvents` is the event map used by an `AutoPilotHITL` instance. It
@@ -34,6 +55,8 @@ The standard HITL events are:
 | `hitl_request_sent` | The inherited request dispatch | `(id: number, request: HITLRequest) => void` |
 | `hitl_response_received` | The inherited response handler | `(correlationId: string \| number, response: HITLResponse) => void` |
 | `hitl_delay_passed` | The inherited tool approval timeout | `(toolName: string, details: { defaultAnswerUsed: boolean; defaultAnswer?: "allow" \| "deny" }) => void` |
+| `hitl_acceptance_started` | The inherited `emitAcceptance` flow before its request is sent | `(question: string) => void` |
+| `hitl_acceptance_received` | The inherited `emitAcceptance` flow after its response is received | `(question: string, answer: "allow" \| "deny") => void` |
 
 The AutoPilot-specific events are:
 
@@ -58,7 +81,7 @@ autoPilotHITL.onEvent("autopilot_judge_finished", (tool, outcome) => {
 });
 
 // Use onAnyEvent to observe both AutoPilot judge events and inherited HITL events.
-autoPilotHITL.onAnyEvent((eventName, args) => {
+autoPilotHITL.onAnyEvent((eventName, ...args) => {
 	console.log("AutoPilot HITL event", eventName, args);
 });
 ```

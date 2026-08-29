@@ -145,6 +145,24 @@ describe("hitl.ts", () => {
         expect(result).toBe("Alice");
     });
 
+    it("emits acceptance-specific events with the question and answer", async () => {
+        const { adapter, sent, respond } = createMockAdapter();
+        const onAcceptanceStarted = vi.fn();
+        const onAcceptanceReceived = vi.fn();
+        const hitl = new HITL({ adapter });
+
+        hitl.onEvent("hitl_acceptance_started", onAcceptanceStarted);
+        hitl.onEvent("hitl_acceptance_received", onAcceptanceReceived);
+
+        const promise = hitl.emitAcceptance("Approve this transfer?", "Transfer context");
+        expect(onAcceptanceStarted).toHaveBeenCalledWith("Approve this transfer?");
+
+        respond(sent[0].id, { type: "acceptance-answer", answer: "allow" });
+
+        await expect(promise).resolves.toBe("allow");
+        expect(onAcceptanceReceived).toHaveBeenCalledWith("Approve this transfer?", "allow");
+    });
+
     it("public handleResponse resolves pending requests", async () => {
         const { adapter, sent } = createMockAdapter();
         const hitl = new HITL({
@@ -237,7 +255,7 @@ describe("hitl.ts", () => {
         expect(firstListener).toHaveBeenCalledWith(eventBody);
         expect(secondListener).toHaveBeenCalledWith(eventBody);
         expect(duplicateListener).toHaveBeenCalledTimes(2);
-        expect(anyListener).toHaveBeenCalledWith("hitl_start", [eventBody]);
+        expect(anyListener).toHaveBeenCalledWith("hitl_start", eventBody);
     });
 
     it("notifies listeners for the default HITL lifecycle events", async () => {
@@ -264,8 +282,8 @@ describe("hitl.ts", () => {
         expect(firstStartListener).toHaveBeenCalledTimes(1);
         expect(secondStartListener).toHaveBeenCalledTimes(1);
         expect(requestListener).toHaveBeenCalledTimes(1);
-        expect(anyListener).toHaveBeenCalledWith("hitl_start", expect.any(Array));
-        expect(anyListener).toHaveBeenCalledWith("hitl_request_sent", expect.any(Array));
+        expect(anyListener).toHaveBeenCalledWith("hitl_start");
+        expect(anyListener).toHaveBeenCalledWith("hitl_request_sent", sent[0].id, sent[0].request);
 
         const response: HITLResponse = { type: "tool-approval", answer: "allow" };
         respond(sent[0].id, response);
@@ -273,7 +291,7 @@ describe("hitl.ts", () => {
 
         expect(responseListener).toHaveBeenCalledTimes(1);
         expect(endListener).toHaveBeenCalledTimes(1);
-        expect(anyListener).toHaveBeenCalledWith("hitl_response_received", expect.any(Array));
-        expect(anyListener).toHaveBeenCalledWith("hitl_end", expect.any(Array));
+        expect(anyListener).toHaveBeenCalledWith("hitl_response_received", sent[0].id, response);
+        expect(anyListener).toHaveBeenCalledWith("hitl_end");
     });
 });
