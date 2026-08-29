@@ -83,12 +83,14 @@ if (!reservation) {
 
 ## Purpose
 
-Implement one reusable token-budget abstraction for RavenADK agent executions. It must support `ReActAgent` and other multi-step agents, including subagents, function subagents, structured-output retries, tool loops, parallel execution, and optional conclusion generation.
+Implement one reusable token-budget abstraction for RavenADK agent executions. It must support `ReActAgent` and other multi-step agents such as `CodingAgent`'s', including subagents, function subagents, structured-output retries, tool loops, parallel execution, and optional conclusion generation.
 
 The feature has two separate responsibilities:
 
-1. **Usage accounting:** record the token usage reported by every model call.
-2. **Budget enforcement:** prevent new model work once the configured session budget is exhausted and provide a controlled final outcome.
+1. **Usage Accounting:** record the token usage reported by every model call.
+2. **Events Emitting** - each accounting and reaching budget has to trigger the events can be listened with `onEvent` and `onAnyEvent` this impacts UX in way displays budget reaching
+3. **Implementation Elegance** - `SessionBudgetTokens` is class clears the spaghetti code from [Current Snippet](../../../../documentation/BudgetTokens.md)
+4. **Budget Enforcement:** prevent new model work once the configured session budget is exhausted and provide a controlled final outcome.
 
 Conversation compaction remains a separate concern. Compaction protects the model context window; session budgets protect the total execution allowance. A compaction plugin may be used together with this feature, but its context estimate must not be treated as billed usage.
 
