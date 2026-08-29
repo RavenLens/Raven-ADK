@@ -52,6 +52,95 @@ Set a tool to `true` to wait indefinitely for a response. An object config can
 apply a timeout and a fallback answer. A timeout with no `defaultAnswer`
 rejects the approval request.
 
+### Inactivity And Timeouts
+
+The built-in inactivity fallback supports ordinary approvals, configured
+questions, and acceptance requests. Ordinary tool approvals use `delayMs` and
+a literal `defaultAnswer`:
+
+```typescript
+const hitl = new HITL({
+	adapter,
+	toolsUsage: {
+		delete_account: {
+			delayMs: 30_000,
+			defaultAnswer: "deny"
+		},
+		read_status: {
+			delayMs: 10_000,
+			defaultAnswer: "allow"
+		},
+		transfer_money: true
+	}
+});
+```
+
+In this example, inactivity for `delete_account` resolves as `deny` after
+30 seconds, inactivity for `read_status` resolves as `allow` after 10 seconds,
+and `transfer_money: true` waits indefinitely. If `delayMs` is configured
+without `defaultAnswer`, the approval rejects when the timeout expires. A
+configured human response wins when it arrives before the timeout.
+
+Questions and acceptance use `QuestionDefaultConfig`. Its property is named
+`delaysMs`, and its `defaultAnswer` callback receives the question text. The
+callback may return a value immediately or return a promise. A human response
+received before the timeout wins and the callback is not called:
+
+```typescript
+const hitl = new HITL({
+	adapter,
+	questions: {
+		abcQuestion: {
+			instruction: "Choose one option.",
+			delaysMs: 30_000,
+			defaultAnswer: (question) => ["a", "Default choice"]
+		},
+		openQuestion: {
+			instruction: "Ask for missing information.",
+			delaysMs: 30_000,
+			defaultAnswer: async (question) => "No answer was provided"
+		}
+	},
+	accetpanceAsTool: {
+		instruction: "Ask before irreversible actions.",
+		delaysMs: 30_000,
+		defaultAnswer: () => "deny"
+	}
+});
+```
+
+ABC defaults must be `[option, optionLabel]` tuples, and open-question defaults
+must be strings. Acceptance defaults must be `allow` or `deny`. Returning
+`deny` for an ABC or open question rejects that question because it is not a
+valid question answer. A question or acceptance configured with `delaysMs`
+but no `defaultAnswer` rejects when the timeout expires. The strategy removes
+the timed-out request, so a late adapter response cannot resolve it.
+
+#### When The Question Timeout Is Omitted
+
+If `delaysMs` is omitted, the question waits indefinitely for the adapter's
+human response. This is also the behavior when a question is enabled with
+`true`:
+
+```typescript
+const hitl = new HITL({
+	adapter,
+	questions: {
+		abcQuestion: { instruction: "Choose an environment." },
+		openQuestion: true
+	},
+	accetpanceAsTool: {
+		instruction: "Ask for approval before the action."
+	}
+});
+```
+
+These requests do not automatically resolve as `allow`, `deny`, or an empty
+answer. The agent remains paused until the adapter receives a response. To
+enable inactivity handling, provide both `delaysMs` and `defaultAnswer` on the
+corresponding question or acceptance configuration. Providing `delaysMs`
+without `defaultAnswer` causes the request to reject when the timeout expires.
+
 ### Tools Usage (`toolsUsage`)
 It's the list with tools specified by `HITL` (`DefaultHITL`) that will invoke `emitToolUsage` method that quide `tool-approval` request to the client via the transport. [Check more about transport](./Transport.md)
 

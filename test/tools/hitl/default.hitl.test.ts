@@ -129,6 +129,31 @@ describe("hitl.ts", () => {
         expect(result).toEqual(["a", "A"]);
     });
 
+    it("uses the configured default answer when an abc question times out", async () => {
+        vi.useFakeTimers();
+        try {
+            const { adapter, sent } = createMockAdapter();
+            const hitl = new HITL({
+                adapter,
+                questions: {
+                    abcQuestion: {
+                        instruction: "Pick one.",
+                        delaysMs: 50,
+                        defaultAnswer: () => ["b", "B"]
+                    }
+                }
+            });
+
+            const promise = hitl.emitAbcQuestion("Which?", [["a", "A"], ["b", "B"]]);
+            await vi.waitFor(() => expect(sent).toHaveLength(1));
+            await vi.advanceTimersByTimeAsync(50);
+
+            await expect(promise).resolves.toEqual(["b", "B"]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("resolves open question when response arrives", async () => {
         const { adapter, sent, respond } = createMockAdapter();
         const hitl = new HITL({
@@ -143,6 +168,56 @@ describe("hitl.ts", () => {
 
         const result = await promise;
         expect(result).toBe("Alice");
+    });
+
+    it("uses the configured default answer when an open question times out", async () => {
+        vi.useFakeTimers();
+        try {
+            const { adapter, sent } = createMockAdapter();
+            const hitl = new HITL({
+                adapter,
+                questions: {
+                    openQuestion: {
+                        instruction: "Type an answer.",
+                        delaysMs: 50,
+                        defaultAnswer: () => "No response"
+                    }
+                }
+            });
+
+            const promise = hitl.emitOpenQuestion("What is your name?");
+            await vi.waitFor(() => expect(sent).toHaveLength(1));
+            await vi.advanceTimersByTimeAsync(50);
+
+            await expect(promise).resolves.toBe("No response");
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("rejects a question timeout when no default answer is configured", async () => {
+        vi.useFakeTimers();
+        try {
+            const { adapter, sent } = createMockAdapter();
+            const hitl = new HITL({
+                adapter,
+                questions: {
+                    openQuestion: {
+                        instruction: "Ask for missing information.",
+                        delaysMs: 50
+                    }
+                }
+            });
+
+            const promise = hitl.emitOpenQuestion("What is your name?");
+            const rejection = expect(promise).rejects.toThrow("without a configured defaultAnswer");
+            await vi.waitFor(() => expect(sent).toHaveLength(1));
+            await vi.advanceTimersByTimeAsync(50);
+
+            await rejection;
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("emits acceptance-specific events with the question and answer", async () => {
@@ -161,6 +236,29 @@ describe("hitl.ts", () => {
 
         await expect(promise).resolves.toBe("allow");
         expect(onAcceptanceReceived).toHaveBeenCalledWith("Approve this transfer?", "allow");
+    });
+
+    it("uses the configured default answer when acceptance times out", async () => {
+        vi.useFakeTimers();
+        try {
+            const { adapter, sent } = createMockAdapter();
+            const hitl = new HITL({
+                adapter,
+                accetpanceAsTool: {
+                    instruction: "Ask for approval.",
+                    delaysMs: 50,
+                    defaultAnswer: () => "deny"
+                }
+            });
+
+            const promise = hitl.emitAcceptance("Approve this transfer?");
+            await vi.waitFor(() => expect(sent).toHaveLength(1));
+            await vi.advanceTimersByTimeAsync(50);
+
+            await expect(promise).resolves.toBe("deny");
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it("public handleResponse resolves pending requests", async () => {

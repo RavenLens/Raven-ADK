@@ -6,6 +6,7 @@ import {
     HITLConfigSchema,
     HITLToolAllowancePossibleAnswer,
     HITLToolInstanceProbe,
+    QuestionDefaultConfig,
     HITLEventArgs,
     HITLEventsSpecType,
     HITLTransportSchema,
@@ -199,14 +200,54 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
         return { id, responsePromise };
     }
 
-    /**
-     * Send the hitl event to the adapter that transports this to the client
-     * @param request
-     * @returns
-     */
-    private async sendRequest<T>(request: HITLRequest): Promise<T> {
-        const { responsePromise } = await this.dispatchRequest<T>(request);
-        return responsePromise;
+
+    private async sendQuestionRequest<T, Output>(
+        request: HITLRequest,
+        question: string,
+        config: QuestionDefaultConfig<Output>
+    ): Promise<T | Output | "deny"> {
+        const { id, responsePromise } = await this.dispatchRequest<T>(request);
+        const delayMs = config.delaysMs;
+
+        if (!delayMs) {
+            return responsePromise;
+        }
+
+        let settled = false;
+        return new Promise<T | Output | "deny">((resolve, reject) => {
+            const timer = setTimeout(async () => {
+                if (settled) return;
+                settled = true;
+                this.pending.delete(id);
+
+                if (!config.defaultAnswer) {
+                    reject(new Error(`HITL request timed out without a configured defaultAnswer`));
+                    return;
+                }
+
+                try {
+                    const defaultAnswer = await config.defaultAnswer(question);
+                    resolve(defaultAnswer);
+                } catch (error) {
+                    reject(error);
+                }
+            }, delayMs);
+
+            responsePromise
+                .then((response) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    this.pending.delete(id);
+                    resolve(response);
+                })
+                .catch((error) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timer);
+                    reject(error);
+                });
+        });
     }
 
     /**
@@ -303,24 +344,41 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
             throw new Error("options_not_in_range");
         }
 
-        const response = await this.sendRequest<{ option: string; optionLabel: string }>({
-            type: "abc-question",
+        const config = this.config.questions?.abcQuestion;
+        const response = await this.sendQuestionRequest<{ option: string; optionLabel: string }, [string, string]>(
+            {
+                type: "abc-question",
+                question,
+                options: abcOptions
+            },
             question,
-            options: abcOptions
-        });
+            typeof config === "object" ? config : { instruction: "" }
+        ).finally(() => this.dispatchEvent("hitl_end"));
 
-        this.dispatchEvent("hitl_end");
+        if (response === "deny") {
+            throw new Error("HITL abc question timed out with a deny default answer");
+        }
+        if (Array.isArray(response)) {
+            return response;
+        }
         return [response.option, response.optionLabel];
     }
 
     async emitOpenQuestion(question: string): Promise<string> {
         this.dispatchEvent("hitl_start");
-        const response = await this.sendRequest<{ answer: string }>({
-            type: "open-question",
-            question
-        });
+        const config = this.config.questions?.openQuestion;
+        const response = await this.sendQuestionRequest<{ answer: string }, string>(
+            { type: "open-question", question },
+            question,
+            typeof config === "object" ? config : { instruction: "" }
+        ).finally(() => this.dispatchEvent("hitl_end"));
 
-        this.dispatchEvent("hitl_end");
+        if (response === "deny") {
+            throw new Error("HITL open question timed out with a deny default answer");
+        }
+        if (typeof response === "string") {
+            return response;
+        }
         return response.answer;
     }
 
@@ -338,15 +396,21 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
     async emitAcceptance(question: string, context?: string | undefined, ): Promise<HITLToolAllowancePossibleAnswer> {
         this.dispatchEvent("hitl_acceptance_started", question);
         this.dispatchEvent("hitl_start");
-        const response = await this.sendRequest<{ answer: HITLToolAllowancePossibleAnswer }>({
-            type: "acceptance",
+        const config = this.config.accetpanceAsTool;
+        const response = await this.sendQuestionRequest<
+            { answer: HITLToolAllowancePossibleAnswer },
+            HITLToolAllowancePossibleAnswer
+        >(
+            { type: "acceptance", question, context },
             question,
-            context
-        });
+            typeof config === "object" ? config : { instruction: "" }
+        ).finally(() => this.dispatchEvent("hitl_end"));
 
-        this.dispatchEvent("hitl_acceptance_received", question, response.answer);
-        this.dispatchEvent("hitl_end");
-        return response.answer;
+        const answer = response === "deny" || response === "allow"
+            ? response
+            : response.answer;
+        this.dispatchEvent("hitl_acceptance_received", question, answer);
+        return answer;
     }
 
     createQuestionTools(): Tool<any, any>[] {

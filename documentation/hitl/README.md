@@ -3,6 +3,20 @@ Human-In-The-Loop (HITL) lets the agent ask the user for tool usage confirmation
 
 When HITL is active, agent execution waits for user input wherever HITL is required.
 
+## FAQ
+#### Why is HITL Important?
+- You need HITL to mitigate of consequences of bad actions e.g: deleting project you worked for 1 month without any backup.
+
+#### How does hitl work?
+- AI-Agent asks human for agreement
+- Human retrieves the request and gives back a response. Configured inactivity can resolve ordinary approvals, questions, and acceptance requests with their configured defaults.
+- AI continues only when acceptance was granted 
+
+> Inactivity only resolves a request when its configuration object has both a
+> `delaysMs` timeout and a `defaultAnswer` callback. Otherwise the request
+> rejects when its configured timeout expires, or waits indefinitely when no
+> timeout is configured. See [DefaultHITL.md](DefaultHITL.md#inactivity-and-timeouts).
+
 ## How HITL Works
 HITL currently supports three interaction types.
 
@@ -18,6 +32,7 @@ HITL currently supports three interaction types.
 - Question modes:
 - Single-choice question (abc-style): user selects one option like `a`, `b`, `c`.
 - Open question: user responds with free text.
+- A configured `delaysMs` can invoke a synchronous or asynchronous `defaultAnswer` callback when the user is inactive.
 
 3. Acceptance requests
 - Application or skill logic can call `emitAcceptance(question, context?)` to
@@ -28,6 +43,8 @@ HITL currently supports three interaction types.
 - These two entry points share the acceptance transport and events, but their
     callers differ: direct calls come from application logic, while the tool is
     selected by the agent.
+- A configured `delaysMs` can resolve inactivity through `defaultAnswer`, which
+    should return `allow` or `deny` for acceptance.
 
 ## Configuration And Routing
 

@@ -23,6 +23,11 @@ question tool, or `emitAcceptance`. The adapter only transports the request
 after that choice has been made; it does not expand the whitelist or decide
 whether the user should be asked.
 
+Timeouts are strategy-owned. `delaysMs` and `defaultAnswer` are applied by
+`HITL` around the pending correlation id; the adapter only forwards the request
+and any response. When a request times out, the pending id is removed and a
+late response cannot resolve that interaction.
+
 ## HITLAdapter
 
 The interface is defined in

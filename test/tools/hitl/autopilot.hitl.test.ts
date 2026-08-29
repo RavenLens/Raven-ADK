@@ -129,4 +129,28 @@ describe("AutoPilotHITL events", () => {
 		respond(sent[0].id, { type: "acceptance-answer", answer: "allow" });
 		await expect(acceptance).resolves.toBe("allow");
 	});
+
+	it("uses the acceptance default answer when AutoPilot approval times out", async () => {
+		vi.useFakeTimers();
+		try {
+			const { adapter, sent } = createMockAdapter();
+			const hitl = new AutoPilotHITL(createMockJudge("use-hitl"), {
+				adapter,
+				accetpanceAsTool: {
+					instruction: "Ask for approval.",
+					delaysMs: 50,
+					defaultAnswer: () => "deny"
+				},
+				engageJudgeInEmittingAccetpance: true
+			});
+
+			const acceptance = hitl.emitAcceptance("Deploy this change?");
+			await vi.waitFor(() => expect(sent).toHaveLength(1));
+			await vi.advanceTimersByTimeAsync(50);
+
+			await expect(acceptance).resolves.toBe("deny");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

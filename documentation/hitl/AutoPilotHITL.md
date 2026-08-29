@@ -93,7 +93,10 @@ itself:
 const hitl = new AutoPilotHITL(judgeAgent, {
 	adapter: hitlAdapter,
 	accetpanceAsTool: {
-		instruction: "Ask for explicit approval immediately before a risky action."
+		instruction: "Ask for explicit approval immediately before a risky action.",
+		delaysMs: 30_000,
+		// Or just "deny", use function to return the answer for the acceptance regar its answer - you can use there other agent or llm to compose answer from the knowledge base
+		defaultAnswer: () => "deny"
 	},
 	engageJudgeInEmittingAccetpance: true
 });
@@ -107,6 +110,14 @@ the acceptance question, context, and optional instruction. The judge returns
 `"use-hitl"` or `"omit"`; only `"use-hitl"` calls the inherited
 `emitAcceptance`, while `"omit"` returns `"deny"` without contacting the human
 adapter. The judge agent's previous messages are restored afterward.
+
+When the acceptance judge returns `"use-hitl"`, the inherited acceptance flow
+uses `accetpanceAsTool.delaysMs` and its `defaultAnswer` callback. Human
+inactivity can therefore resolve the request as `allow` or `deny`. If the
+judge returns `"omit"`, no human request is sent and the configured inactivity
+fallback is not involved. The same inherited timeout behavior applies to the
+configured question tools; those tools do not enter the ordinary AutoPilot
+judge path.
 
 The acceptance tool follows a deliberately different path. Its handler calls
 `emitAcceptance` directly. AutoPilot's `emitToolUsage` detects
