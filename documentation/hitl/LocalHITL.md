@@ -1,8 +1,20 @@
+
+The adapter transports every HITL request type; it does not decide which tools
+enter HITL. `toolsUsage` controls ordinary tool-approval requests, while
+`questions` and `accetpanceAsTool` create direct question or acceptance
+requests. The UI should branch on `request.type` and render the appropriate
+choice, free-text, or allow/deny interaction.
+
+These question tools are not ordinary `toolsUsage` approval targets. Do not
+add their names to `toolsUsage` unless an additional approval step is
+deliberately required.
 # Local HITL Adapter
 
 `HITLLocalAdapter` is a transport bridge for desktop or same-machine
 integrations such as Electron, Tauri sidecars, VS Code extensions, and stdio.
 It does not change HITL behavior; it forwards requests and routes responses.
+For the shared adapter contract, request/response types, and event flow, see
+[Transport.md](Transport.md).
 
 ```typescript
 import { HITL, HITLLocalAdapter, HITLRequest, HITLResponse } from "@ravenlens/raven-adk/tools/hitl";

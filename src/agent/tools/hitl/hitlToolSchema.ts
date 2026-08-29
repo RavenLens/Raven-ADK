@@ -1,3 +1,4 @@
+import { boolean } from "zod";
 import { Tool } from "../tools";
 
 export type HITLToolAllowancePossibleAnswer = "allow" | "deny";
@@ -34,6 +35,14 @@ export interface HITLConfigSchema {
             instruction: string; 
         } | boolean;
     };
+
+    /**
+     * Allow to use acceptance as the tool
+    */
+    accetpanceAsTool?: {
+        instruction: string;
+    } | boolean;
+
     /**
      * Determines whether to ask user are the tool(s) (multiple or single) allowed to use.
      * Object is the set with tools and specification according to tool usage.
@@ -42,7 +51,7 @@ export interface HITLConfigSchema {
     toolsUsage?: Record<string, ToolUsageConfObject | true>;
 }
 
-export interface EmitToolUsageBody { answer: HITLToolAllowancePossibleAnswer; reason: "user_answer" | "delay_pass" }
+export interface EmitToolUsageBody { answer: HITLToolAllowancePossibleAnswer; reason: "user_answer" | "accetpance_separate_logic" | "delay_pass" }
 export type HITLToolInstanceProbe = { toolInstance: Tool<any, any>, params: Record<string, any>; };
 
 export type HITLEventsSpecType<ReturnType = void | Promise<void>> = {

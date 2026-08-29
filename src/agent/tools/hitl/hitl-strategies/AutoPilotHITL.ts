@@ -2,7 +2,7 @@ import z from "zod";
 import { HITL, Tool } from "../..";
 import { ReActAgent } from "../../../ReAct.agent";
 import { HITLToolInstanceProbe, HITLEventsSpecType, HITLTransportSchema } from "../hitlToolSchema";
-import { DefaultHITLEvents, HITLConfig } from "./DefaultHITL";
+import { DefaultHITLEvents, HITL_ACCEPTANCE_TOOL_NAME, HITLConfig } from "./DefaultHITL";
 
 export type HITLJudgeOutcome = "use-hitl" | "omit";
 export type AutoPilotHITLErrorBehaviour = "throw" | "console.error";
@@ -20,6 +20,13 @@ export interface AutoPilotToolUsageOutcome {
 }
 
 export interface AutoPilotHITLConfig extends HITLConfig {
+    /**
+     * Whether has the judge evaluate whether `emitAccetpance` has to trigger the judge that evaluates the instruction
+     */
+    engageJudgeInEmittingAccetpance?: boolean | {
+        instruction: string;
+    };
+    
     /** Use to specify additional description for the judge in system prompt */
     hitlJudgeSystemPromptExtension?: string;
     /** Use to replace system prompt given to judge to waht is specified there */
@@ -157,6 +164,7 @@ export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents, AutoPilotHITLC
 
     /**
      * Is a custom method that leverages the Agent Judge to decide whether hitl can be called
+     * It calls the DefaultHITL tool and returns the promose from the ask as the `toolUsageBody`
      * 
      * @param tool 
      * @param judgeErrorBehaviour 
@@ -191,6 +199,8 @@ export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents, AutoPilotHITLC
      * so the AutoPilot judge can decide whether the tool requires human
      * approval. It exists to comply with the RavenADK logic that consumes the
      * common HITL transport contract defined in `hitlToolSchema.ts`.
+     * 
+     * It's triggered for the tools are on the list of tools have to call the `emitToolUsage`, this method isn't triggered for `question` tools as the `open`, `closed` or `accetpance` meanwhile this last one cattegory (`acceptance`)  is handled by `emitAcceptance` method from `AutoPilotHITL` is monkeypatch for `DefaultHITL` (`HITL`) `emitAcceptance`
      *
      * When the judge accepts the tool for HITL (`use-hitl`), this returns the
      * approval result produced by the regular HITL flow. That result contains
@@ -199,11 +209,21 @@ export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents, AutoPilotHITLC
     * "deny", reason: "user_answer" }`. In this branch, `user_answer` is a
     * schema-compatible fallback reason, not an answer supplied by the user;
     * the denial prevents the tool from being executed.
+    * 
+    * `HITL_ACCEPTANCE_TOOL_NAME` is skipped due to: Accetpance tool triggers dedicated method `emitAcceptance` from this class therefore the `emitToolUsage` is skipped delibaratelly
      *
      * @param tool Tool instance and invocation parameters to evaluate.
      * @returns The common RavenADK HITL approval result.
      */
     async emitToolUsage(tool: HITLToolInstanceProbe): Promise<HITL.SchemaTypes.EmitToolUsageBody> {
+        // Accetpance tool triggers dedicated method `emitAcceptance` from this class therefore the `emitToolUsage` is skipped delibaratelly
+        if (tool.toolInstance.toolConfig.toolName === HITL_ACCEPTANCE_TOOL_NAME) {
+            return {
+                answer: "deny",
+                reason: "accetpance_separate_logic"
+            }
+        }
+        
         const autoPilotHITLResult = await this.emitToolUsageAutoPilot(tool);
         if (autoPilotHITLResult.toolUsageBody) {
             return autoPilotHITLResult.toolUsageBody;
@@ -212,5 +232,81 @@ export class AutoPilotHITL extends HITL.HITL<AutoPilotHITLEvents, AutoPilotHITLC
             answer: "deny",
             reason: "user_answer" // Default is tool answer
         }
+    }
+
+
+    /**
+     * Method given to the
+     * @param instruction - isntruction given to judge to evaluate the accetpance request
+     * @returns 
+     */
+    private async invokeAcceptanceJudge(instruction: string): Promise<HITLJudgeOutcome> {
+        const previousMessages = this.hitlAgent.agentConfig.messages;
+        try {
+            this.hitlAgent.agentConfig.messages = [
+                {
+                    type: "system",
+                    content: this.config.hitlJudgeSystemPromptReplacement
+                        || "You are a safety judge deciding whether an acceptance request requires human approval."
+                },
+                {
+                    type: "user",
+                    content: instruction + (this.config.hitlJudgeUserMessagePromptExtension
+                        ? `\n\n${this.config.hitlJudgeUserMessagePromptExtension}`
+                        : "")
+                }
+            ];
+
+            const outcomeSchema = z.object({
+                judgeResult: z.enum(["omit", "use-hitl"] as HITLJudgeOutcome[])
+            });
+            const result = await this.hitlAgent.invokeStructuredOutput(outcomeSchema);
+            const lastMessage = result.messages.at(-1);
+            if (lastMessage?.type !== "ai" || typeof lastMessage.structuredOutput !== "object") {
+                throw new Error("Acceptance judge outcome isn't object");
+            }
+
+            return (lastMessage.structuredOutput as z.infer<typeof outcomeSchema>).judgeResult;
+        }
+        catch (error) {
+            console.error("AutoPilotHITL acceptance judge experienced error:", error);
+            return "omit";
+        }
+        finally {
+            this.hitlAgent.agentConfig.messages = previousMessages;
+        }
+    }
+    
+    /**
+     * Evaluate whether the accetpance has to be triggered for the asked question
+     * 
+     * Monkeypatching for original `emitAccetpance` triggers judge to verify whether is wothy to call hitl when teh command was specified
+     * TODO: Whether judge has to be engaged when original emitaccetpance is specified as the tool from its original method - yes and the tool call for accetpance method shouldn't invoke the judge 
+     * @param question
+     * @param context 
+     */
+    emitAcceptance(question: string, context?: string | undefined): Promise<HITL.SchemaTypes.HITLToolAllowancePossibleAnswer> {
+        const engageJudge = this.config.engageJudgeInEmittingAccetpance;
+        if (!engageJudge) {
+            return super.emitAcceptance(question, context);
+        }
+
+        const acceptanceInstruction = typeof engageJudge === "object"
+            ? engageJudge.instruction
+            : undefined;
+        const judgeInstruction = [
+            "Evaluate whether this acceptance request should be shown to a human.",
+            "Return \"use-hitl\" when explicit human approval is required or the request is ambiguous.",
+            "Return \"omit\" only when the request is clearly safe to deny without asking the human.",
+            `Acceptance question: ${question}`,
+            context ? `Context: ${context}` : "No additional context was provided.",
+            acceptanceInstruction ? `Additional acceptance guidance: ${acceptanceInstruction}` : undefined
+        ].filter((part): part is string => Boolean(part)).join("\n");
+
+        return this.invokeAcceptanceJudge(judgeInstruction).then((judgeResult) =>
+            judgeResult === "use-hitl"
+                ? super.emitAcceptance(question, context)
+                : "deny"
+        );
     }
 }

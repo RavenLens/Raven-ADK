@@ -13,6 +13,7 @@ import {
 
 export const HITL_ABC_QUESTION_TOOL_NAME = "hitl_ask_abc_question";
 export const HITL_OPEN_QUESTION_TOOL_NAME = "hitl_ask_open_question";
+export const HITL_ACCEPTANCE_TOOL_NAME = "hitl_ask_acceptance";
 
 export type HITLRequest =
     | { type: "tool-approval"; toolName: string; toolInstance: HITLToolInstanceProbe["toolInstance"]; params: HITLToolInstanceProbe["params"] }
@@ -123,6 +124,10 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
             typeof this.config.questions?.openQuestion === "object"
                 ? this.config.questions.openQuestion.instruction
                 : undefined;
+        const acceptanceInstruction =
+            typeof this.config.accetpanceAsTool === "object"
+                ? this.config.accetpanceAsTool.instruction
+                : undefined;
 
         return [
             "[HITL Questioning Rules]",
@@ -130,7 +135,8 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
             "Do not overwhelm the user with questions. Ask only when key information is missing and cannot be inferred from context or tool outputs.",
             "Ask one focused question at a time and keep each question concise.",
             `Use \"${HITL_ABC_QUESTION_TOOL_NAME}\" for constrained choices where options are known in advance.${abcInstruction ? ` Additional abc guidance: ${abcInstruction}` : ""}`,
-            `Use \"${HITL_OPEN_QUESTION_TOOL_NAME}\" only when fixed options are not sufficient.${openInstruction ? ` Additional open-question guidance: ${openInstruction}` : ""}`
+            `Use \"${HITL_OPEN_QUESTION_TOOL_NAME}\" only when fixed options are not sufficient.${openInstruction ? ` Additional open-question guidance: ${openInstruction}` : ""}`,
+            `Use \"${HITL_ACCEPTANCE_TOOL_NAME}\" when an action requires explicit user approval.${acceptanceInstruction ? ` Additional acceptance guidance: ${acceptanceInstruction}` : ""}`
         ].join("\n");
     }
 
@@ -318,7 +324,18 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
         return response.answer;
     }
 
-    async emitAcceptance(question: string, context?: string): Promise<HITLToolAllowancePossibleAnswer> {
+    /**
+     * Emit manually from logic or by an agent when action requires the acceptance (y/N)
+     * ## Usecases:
+     *  - Accept action like command execution
+     *
+     * ### EdgeCases
+     * - Emitted from the `skills` when the command is planned to be executed
+     * @param question 
+     * @param context 
+     * @returns 
+     */
+    async emitAcceptance(question: string, context?: string | undefined, ): Promise<HITLToolAllowancePossibleAnswer> {
         this.dispatchEvent("hitl_acceptance_started", question);
         this.dispatchEvent("hitl_start");
         const response = await this.sendRequest<{ answer: HITLToolAllowancePossibleAnswer }>({
@@ -336,6 +353,7 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
         const questionTools: Tool<any, any>[] = [];
         const canAskAbcQuestion = !!this.config.questions?.abcQuestion;
         const canAskOpenQuestion = !!this.config.questions?.openQuestion;
+        const canUseAcceptanceAsATool = this.config?.accetpanceAsTool;
 
         if (canAskAbcQuestion) {
             questionTools.push(
@@ -383,6 +401,28 @@ export class HITL<HITLEvents extends DefaultHITLEvents, Config extends HITLConfi
                         }),
                         toolOutputSchema: z.object({
                             answer: z.string().describe("Free-text answer returned by user.")
+                        })
+                    }
+                )
+            );
+        }
+
+        if (canUseAcceptanceAsATool) {
+            questionTools.push(
+                tool(
+                    async ({ question, context }) => {
+                        const answer = await this.emitAcceptance(question, context);
+                        return JSON.stringify({ answer });
+                    },
+                    {
+                        toolName: HITL_ACCEPTANCE_TOOL_NAME,
+                        toolDescription: "Ask the user for approval of an action and wait for an allow or deny answer.",
+                        toolArguments: z.object({
+                            question: z.string().min(1).describe("Acceptance question shown to the user."),
+                            context: z.string().optional().describe("Optional context explaining the action requiring acceptance.")
+                        }),
+                        toolOutputSchema: z.object({
+                            answer: z.enum(["allow", "deny"]).describe("The user's acceptance decision.")
                         })
                     }
                 )

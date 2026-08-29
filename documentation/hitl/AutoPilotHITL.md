@@ -5,6 +5,10 @@
 `HITLTransportSchema`, so it can be passed to `ReActAgent` anywhere a regular
 `HITL` instance is accepted.
 
+AutoPilot uses the same adapter contract and request/response protocol as the
+default strategy. See [Transport.md](Transport.md) for the `HITLAdapter`
+interface, transport events, correlation ids, and custom adapter guidance.
+
 ## How It Works
 
 For each proposed tool invocation, AutoPilot:
@@ -18,6 +22,124 @@ The judge is instructed to require approval for destructive, irreversible,
 security-sensitive, privacy-sensitive, financially consequential,
 externally-visible, or ambiguous actions. You can provide an additional
 instruction for a particular judgement through `emitToolUsageAutoPilot`.
+
+## Which Tools AutoPilot Judges
+
+`toolsUsage` is the allowlist that causes the built-in `ReActAgent` flow to call
+`emitToolUsage()` for a tool. With `AutoPilotHITL`, that method delegates to
+the AutoPilot judge. Only tools named in `toolsUsage` enter this ordinary
+approval path; the judge does not inspect every tool in the agent's `tools`
+array automatically.
+
+Question tools are a separate path. Enabling `questions.abcQuestion` or
+`questions.openQuestion` injects the corresponding question tool, whose handler
+calls `emitAbcQuestion()` or `emitOpenQuestion()` directly. AutoPilot does not
+judge these calls through `emitToolUsage()`, and this is intentional: the tool
+itself is already the mechanism for asking the user. A judge result of
+`"omit"` would otherwise be interpreted as a denial and could prevent the
+agent from collecting required information.
+
+Do not add `hitl_ask_abc_question` or `hitl_ask_open_question` to `toolsUsage`.
+Doing so can cause an approval prompt before the actual question and does not
+turn AutoPilot into a question-necessity judge.
+
+## Why Question Tools Bypass The AutoPilot Judge
+
+Question tools have a different contract from ordinary tools. An ordinary tool
+produces an action that may need approval; `hitl_ask_abc_question` and
+`hitl_ask_open_question` are already explicit requests for missing information
+from the user. Their handlers call `emitAbcQuestion()` or `emitOpenQuestion()`
+and the answer becomes part of the agent's next context.
+
+For that reason, AutoPilot should not invoke a separate ordinary-tool judge for
+these question calls. Doing so would create a misleading sequence:
+
+```text
+question tool -> AutoPilot judge -> tool-approval -> user question
+```
+
+It can also turn a judge result of `omit` into a denial of the question tool,
+so the agent never receives information it explicitly requested. Listing a
+question tool in `toolsUsage` therefore creates an unnecessary two-interaction
+flow and does not provide a reliable test of whether the question is needed.
+
+AutoPilot also should not silently answer the question on the user's behalf as
+part of that evaluation. The purpose of a question tool is to obtain
+user-owned intent, knowledge, or confirmation. A judge may be able to predict
+an answer, but prediction is not equivalent to asking the user and can hide an
+important ambiguity or consent boundary. The normal AutoPilot behavior is to
+let the agent decide to ask, then send the question request to the user and
+return the actual answer to the agent.
+
+> **Feature Possibility:** An integration that deliberately wants judge-mediated clarification may build
+a separate, explicitly documented workflow around its own judge tool. That is
+not the semantics of the built-in question tools and should not be enabled by
+putting them in `toolsUsage`. Such a workflow must define how it distinguishes
+a judge-generated answer from a user answer, how it handles uncertainty, and
+which decisions still require the user.
+
+## Acceptance Requests
+
+AutoPilot supports acceptance through both the inherited
+`emitAcceptance(question, context?)` method and the optional
+`HITL_ACCEPTANCE_TOOL_NAME` tool (`"hitl_ask_acceptance"`). Enable the tool in
+the shared configuration when the agent should be able to request acceptance
+itself:
+
+```typescript
+const hitl = new AutoPilotHITL(judgeAgent, {
+	adapter: hitlAdapter,
+	accetpanceAsTool: {
+		instruction: "Ask for explicit approval immediately before a risky action."
+	},
+	engageJudgeInEmittingAccetpance: true
+});
+```
+
+The `engageJudgeInEmittingAccetpance` setting is optional and applies to the
+separate `emitAcceptance` method. When it is disabled or omitted,
+`emitAcceptance` delegates directly to the inherited Default HITL request
+flow. When it is enabled, AutoPilot temporarily prepares its judge agent with
+the acceptance question, context, and optional instruction. The judge returns
+`"use-hitl"` or `"omit"`; only `"use-hitl"` calls the inherited
+`emitAcceptance`, while `"omit"` returns `"deny"` without contacting the human
+adapter. The judge agent's previous messages are restored afterward.
+
+The acceptance tool follows a deliberately different path. Its handler calls
+`emitAcceptance` directly. AutoPilot's `emitToolUsage` detects
+`HITL_ACCEPTANCE_TOOL_NAME` and does not call `emitToolUsageAutoPilot`, so the
+normal tool-usage judge is not run for the acceptance tool. If the acceptance
+tool is listed in `toolsUsage`, however, this special branch returns a denial
+before the tool handler executes. The user therefore receives no acceptance
+request; it does not create two acceptance interactions.
+
+This avoids spending an additional judge invocation, tokens, and latency on a
+request that already has dedicated acceptance logic. For that detection,
+`emitToolUsage` returns:
+
+```typescript
+{
+	answer: "deny",
+	reason: "accetpance_separate_logic"
+}
+```
+
+The denial is a routing result for the acceptance tool, not the user's
+acceptance answer. Do not add `hitl_ask_acceptance` to
+`toolsUsage`; `accetpanceAsTool` enables it, and
+`engageJudgeInEmittingAccetpance` controls the optional dedicated acceptance
+judge. With the recommended configuration, the tool calls
+`AutoPilotHITL.emitAcceptance()` directly. If the dedicated acceptance judge
+is enabled, its `use-hitl` result sends one acceptance request to the user;
+its `omit` result returns `deny` without contacting the user.
+
+If `hitl_ask_abc_question` or `hitl_ask_open_question` is added to
+`toolsUsage`, AutoPilot first invokes its ordinary tool judge. When the judge
+returns `use-hitl`, the user receives a `tool-approval` request and, after
+allowing it, the question tool sends its actual `abc-question` or
+`open-question` request. This creates two user interactions and is normally
+unnecessary. When the judge returns `omit`, the question tool is denied and
+the actual question is never sent.
 
 ## Judge Prompt Configuration
 
@@ -71,6 +193,17 @@ standard HITL events. The common `emitToolUsage` method delegates to
 `emitToolUsageAutoPilot`, so callers using that method can observe the same
 event sequence. An outcome of `"omit"` returns the schema-compatible denial
 without entering the human approval flow.
+
+Acceptance has its own event sequence. `emitAcceptance` emits
+`hitl_acceptance_started(question)` before the `acceptance` request is sent and
+`hitl_acceptance_received(question, answer)` after the response is received.
+It also emits the shared `hitl_start` and `hitl_end` events. With
+`engageJudgeInEmittingAccetpance` enabled, the AutoPilot judge runs before
+these inherited human-flow events; an omitted request emits no acceptance
+request or inherited acceptance response event because no human interaction
+occurs. With the acceptance tool enabled, the tool invocation itself is still
+an agent tool call, but its HITL approval routing is intentionally excluded
+from the normal AutoPilot judge as described above.
 
 Listen directly on the concrete `AutoPilotHITL` instance:
 
@@ -171,6 +304,8 @@ judge result of `omit` returns a denial through the common HITL schema without
 asking the user. This snippet documents the current CodeAct configuration
 contract; `CodeActAgent.invoke` is not implemented yet.
 - `toolsUsage` - is specified as config param to `AutoPilotHITL` method and it has to have the list with tools for that HITL is triggered. **Only for that list HITL is going to be triggered**
+- Question tools configured through `questions` are not part of this list and
+	are handled directly as user-information requests.
 
 ## Convergence
 
@@ -233,7 +368,8 @@ const agent = new ReActAgent({
 
 The adapter receives the same rich tool-approval payload as the default
 strategy, including `toolName`, `toolInstance`, and `params`. See
-[SocketHITL.md](SocketHITL.md) for the client response handler or
+[Transport.md](Transport.md) for all request and response types,
+[SocketHITL.md](SocketHITL.md) for the client response handler, or
 [LocalHITL.md](LocalHITL.md) for a local bridge.
 
 ## Direct Judge API

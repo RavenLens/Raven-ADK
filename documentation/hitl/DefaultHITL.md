@@ -6,6 +6,10 @@ pending-response logic. Communication is delegated to an `HITLAdapter`, so the
 same strategy works with a local bridge, Socket.io, Electron IPC, Tauri, or a
 custom transport.
 
+The adapter contract and complete request/response protocol are documented in
+[Transport.md](Transport.md). This page focuses on the default strategy's
+configuration and behavior.
+
 ## When To Use It
 
 - Use `HITL` when the application already knows which tools require human
@@ -48,6 +52,65 @@ Set a tool to `true` to wait indefinitely for a response. An object config can
 apply a timeout and a fallback answer. A timeout with no `defaultAnswer`
 rejects the approval request.
 
+### Tools Usage (`toolsUsage`)
+It's the list with tools specified by `HITL` (`DefaultHITL`) that will invoke `emitToolUsage` method that quide `tool-approval` request to the client via the transport. [Check more about transport](./Transport.md)
+
+- You can specify the questions tools names there e.g: `HITL_ABC_QUESTION_TOOL_NAME`, `HITL_OPEN_QUESTION_TOOL_NAME` or `HITL_ACCEPTANCE_TOOL_NAME` but it's not recomended since it produces the 2 step hitl
+
+## Acceptance Requests
+
+`emitAcceptance(question, context?)` asks the user whether an action should be
+approved and returns `"allow"` or `"deny"`. It is an explicit acceptance API,
+separate from the regular tool-approval result returned by `emitToolUsage`.
+Call it from application or skill logic when an action reaches an acceptance
+boundary:
+
+```typescript
+const answer = await hitl.emitAcceptance?.(
+	"Allow the agent to execute the deployment?",
+	"The deployment will update the production service."
+);
+
+if (answer === "allow") {
+	// Continue the acceptance-gated action.
+}
+```
+
+Acceptance can also be exposed to the agent as the
+`HITL_ACCEPTANCE_TOOL_NAME` tool, whose value is currently
+`"hitl_ask_acceptance"`. Enable it with `accetpanceAsTool`:
+
+```typescript
+const hitl = new HITL({
+	adapter,
+	accetpanceAsTool: {
+		instruction: "Use this only immediately before an irreversible action."
+	}
+});
+```
+
+When enabled, `createQuestionTools()` adds `hitl_ask_acceptance`. The tool
+handler calls `emitAcceptance(question, context)` and returns `{ answer }` as
+its tool output. The direct method and the tool therefore reach the same
+acceptance request implementation, but they have different callers: the
+direct method is used by application or skill logic, while the tool is chosen
+by the agent.
+
+Do not include `hitl_ask_acceptance` in `toolsUsage` for normal operation. That
+would add a separate ordinary tool-approval boundary before the acceptance
+request. With `DefaultHITL`, including it produces two user interactions:
+first a `tool-approval` request for `hitl_ask_acceptance`, then an `acceptance`
+request from the tool's `emitAcceptance()` handler. `accetpanceAsTool` alone
+enables the acceptance tool without adding that second approval request.
+`AutoPilotHITL` has a different special-case result when this tool is listed;
+see [AutoPilotHITL.md](AutoPilotHITL.md).
+
+Whether called directly or through the tool, `emitAcceptance` emits
+`hitl_acceptance_started` before sending the `acceptance` request and
+`hitl_acceptance_received` after the response arrives. It also participates in
+the normal `hitl_start` and `hitl_end` lifecycle. See [HITL Events](README.md#hitl-events)
+for the event payloads.
+
 ## Tool Approval Payload
 
 Before an approved tool runs, the adapter receives a `tool-approval` request.
@@ -66,7 +129,9 @@ parameters:
 The client responds with either `{ type: "tool-approval", answer: "allow" }`
 or `{ type: "tool-approval", answer: "deny" }`. Every request and response
 must use the same correlation id. See [LocalHITL.md](LocalHITL.md) and
-[SocketHITL.md](SocketHITL.md) for complete adapter examples.
+[SocketHITL.md](SocketHITL.md) for complete adapter examples, and
+[Transport.md](Transport.md) for the shared adapter contract and all request
+types.
 
 ## Questions
 
@@ -76,7 +141,14 @@ When enabled, `HITL` injects question tools into the agent:
 - `hitl_ask_open_question` collects a free-text answer.
 
 The `questionHITLPrompt` property contains the guidance passed to the agent for
-using these tools.
+using these tools. These tools ask the user directly and are not ordinary
+approval targets, so they must not be added to `toolsUsage`.
+
+If `hitl_ask_abc_question` or `hitl_ask_open_question` is nevertheless added
+to `toolsUsage`, `DefaultHITL` performs two user interactions when the agent
+calls it: a `tool-approval` request first, followed by the actual
+`abc-question` or `open-question` request after approval. This is usually
+unnecessary and should be avoided.
 
 ## Listeners
 

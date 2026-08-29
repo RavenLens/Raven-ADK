@@ -5,7 +5,7 @@ import { AgentMessagesGraphState, MessagesVariations, ToolMessage } from "./stat
 import { SkillEventNames, SkillEvents, Skills as SkillsInterface } from "./skills/skills";
 import { Tool } from "./tools/tools";
 import z from "zod";
-import { HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
+import { EmitToolUsageBody, HITLTransportSchema } from "./tools/hitl/hitlToolSchema";
 import { CodeExecutionSandboxSchema } from "./tools/CodeExecutionSandboxes/mutual";
 import {
     DeterministicFunctionInstruction,
@@ -1604,12 +1604,12 @@ export class ReActAgent
                     // HITL calling for tools required HITL
                     const approvalByCallIndex = new Map<
                         number,
-                        { answer: "allow" | "deny"; reason: "user_answer" | "delay_pass" } | { errorMessage: string }
+                        EmitToolUsageBody | { errorMessage: string }
                     >();
                     type HITLApprovalResult =
                         | {
                             callIndex: number;
-                            allowance: { answer: "allow" | "deny"; reason: "user_answer" | "delay_pass" };
+                            allowance: EmitToolUsageBody;
                         }
                         | {
                             callIndex: number;

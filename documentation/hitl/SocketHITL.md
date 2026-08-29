@@ -1,7 +1,9 @@
 # Socket.io HITL Adapter
 
 `HITLSocketIoAdapter` starts a Socket.io server and forwards HITL requests over
-`hitl:request`. Clients answer on `hitl:response` with the same id.
+`hitl:request`. Clients answer on `hitl:response` with the same id. For the
+shared adapter contract, request/response types, and event flow, see
+[Transport.md](Transport.md).
 
 ## Server
 
@@ -40,5 +42,10 @@ socket.on("hitl:request", ({ id, request }) => {
 ```
 
 The request also includes `toolInstance`, whose `toolConfig` exposes the tool
-description and argument/output schemas. Treat the request as untrusted UI
-data and render the parameters in a way appropriate for the application.
+
+The adapter only transports requests; it does not select the HITL path.
+`toolsUsage` controls ordinary `tool-approval` requests. Question tools
+configured through `questions` send `abc-question` or `open-question` requests
+directly, and `accetpanceAsTool` sends an `acceptance` request directly. The
+client should render each request according to its `type` and return the
+matching response type with the same correlation id.

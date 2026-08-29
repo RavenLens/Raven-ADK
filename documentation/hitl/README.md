@@ -4,10 +4,11 @@ Human-In-The-Loop (HITL) lets the agent ask the user for tool usage confirmation
 When HITL is active, agent execution waits for user input wherever HITL is required.
 
 ## How HITL Works
-HITL currently supports two interaction types.
+HITL currently supports three interaction types.
 
 1. Tool approval
-- Before executing selected tools, the agent asks the user for permission.
+- Before executing selected tools, the agent asks the user for permission. Agents ask only for tools are on the tools list what in case on [`HITL`](./DefaultHITL.md) is `toolsUsage` object
+    > You can specfy Questions and Acceptance tools there but it's not recomended since it triggers 2-step HITL. [Read more](#configuration-and-routing)
 - Allowed answers are `allow` or `deny`.
 - If delay rules are configured for a tool, a default answer can be applied after a timeout.
 - Tool approvals are requested in parallel for all configured tool calls in the same step, and the step is blocked until all approvals are resolved.
@@ -17,6 +18,72 @@ HITL currently supports two interaction types.
 - Question modes:
 - Single-choice question (abc-style): user selects one option like `a`, `b`, `c`.
 - Open question: user responds with free text.
+
+3. Acceptance requests
+- Application or skill logic can call `emitAcceptance(question, context?)` to
+    request an explicit `allow` or `deny` decision.
+- When `accetpanceAsTool` is enabled, the agent also receives the
+    `HITL_ACCEPTANCE_TOOL_NAME` tool (`hitl_ask_acceptance`), which calls the
+    same acceptance method from its tool handler.
+- These two entry points share the acceptance transport and events, but their
+    callers differ: direct calls come from application logic, while the tool is
+    selected by the agent.
+
+## Configuration And Routing
+
+The configuration fields control different HITL paths; they are not one
+combined list of tools:
+
+| Configuration | What it enables | How it is routed |
+|---|---|---|
+| `toolsUsage` | Approval for named ordinary tools | `ReActAgent` calls `hitl.emitToolUsage()` for matching tool names before execution. With `AutoPilotHITL`, this invokes the judge first. |
+| `questions.abcQuestion` | The `hitl_ask_abc_question` agent tool | The tool calls `emitAbcQuestion()` directly. It does not enter ordinary `emitToolUsage()` approval. |
+| `questions.openQuestion` | The `hitl_ask_open_question` agent tool | The tool calls `emitOpenQuestion()` directly. It does not enter ordinary `emitToolUsage()` approval. |
+| `accetpanceAsTool` | The `hitl_ask_acceptance` agent tool | The tool calls `emitAcceptance()` directly. AutoPilot can optionally judge this dedicated acceptance flow. |
+
+`toolsUsage` is the allowlist for ordinary tool-approval HITL in the built-in
+`ReActAgent` flow. A tool not listed there does not receive ordinary HITL
+approval. This includes tools that are merely present in `tools` and the
+question tools created from `questions`.
+
+Do not add `hitl_ask_abc_question`, `hitl_ask_open_question`, or
+`hitl_ask_acceptance` to `toolsUsage` for normal operation. Doing so can add an
+unnecessary approval before a question. With `DefaultHITL`, the sequence is
+then two user interactions: ordinary tool approval followed by the actual
+question or acceptance request. With `AutoPilotHITL`, the ordinary approval
+also invokes the judge first; if the judge returns `use-hitl`, the user then
+gets the approval prompt followed by the question. If the judge returns
+`omit`, the question tool is denied and the question is never sent. For the
+acceptance tool specifically, AutoPilot's special branch denies a call that
+reaches `emitToolUsage`, so the acceptance request is not sent at all. Enable
+question tools with `questions` or `accetpanceAsTool` instead.
+
+## Full Agent Agility
+
+HITL does not impose one universal approval policy on every agent. The logic
+that owns an agent or integration decides which ordinary tools belong in the
+`toolsUsage` whitelist, based on the tool's purpose, the current workflow, and
+the risk of the proposed parameters. A different agent can use a different
+whitelist with the same HITL strategy and adapter.
+
+That owning logic also decides when to enter each HITL path:
+
+- Call `emitToolUsage(tool, ...)` for an ordinary tool invocation that should
+    pass through the configured approval or AutoPilot evaluation path.
+- Invoke a configured question tool when the agent needs information from the
+    user. Its handler calls `emitAbcQuestion()` or `emitOpenQuestion()` directly.
+- Call `emitAcceptance(question, context?)` from application or skill logic
+    when a workflow reaches an explicit acceptance boundary, or expose the
+    acceptance tool when the agent should formulate that request.
+
+The whitelist is therefore an agent-policy decision, not a registry of every
+tool available to the agent. HITL cannot infer the correct policy from the
+`tools` array alone. Integrations may use the common `emitToolUsage` method or,
+when they need AutoPilot-specific judge results and options, call
+`emitToolUsageAutoPilot` directly. See [Transport.md](Transport.md) for the
+request/response contract after one of these paths is selected.
+
+> Case in point: [`CodeAct`](../coding-agents/codeact/README.md) loads the HITL tools and configures them in option `hitlPreConfig` where [`ReActAgent`](../ReAct-Agent.md) relies on user to setup them manually
 
 ## Architecture
 
@@ -57,8 +124,11 @@ local and Socket.io adapters described in the linked guides.
 | `HITL` (Default HITL) | `HITLTransportSchema` | Requests human approval for configured tool calls and asks configured questions. | [DefaultHITL.md](DefaultHITL.md) |
 | `AutoPilotHITL` | `HITL` and `HITLTransportSchema` | Uses a judge agent to decide whether a tool call should be sent through the human approval flow or accepted right-away | [AutoPilotHITL.md](AutoPilotHITL.md) |
 
-Adapters are transport implementations, not HITL strategies. See [LocalHITL.md](LocalHITL.md)
-and [SocketHITL.md](SocketHITL.md) for adapter-specific setup.
+Adapters are transport implementations, not HITL strategies. See
+[Transport.md](Transport.md) for the `HITLAdapter` contract, request/response
+events, event origins, and custom adapter implementation guidance. See
+[LocalHITL.md](LocalHITL.md) and [SocketHITL.md](SocketHITL.md) for
+adapter-specific setup.
 
 ## HITL Events
 
@@ -107,6 +177,48 @@ Custom HITL implementations can extend the event map with their own event
 names. Register listeners on the concrete instance so the same code works
 with the default strategy and with subclasses such as `AutoPilotHITL`.
 
+### Acceptance events and routing
+
+The acceptance method is opt-in as a tool. Set `accetpanceAsTool` to `true` or
+to an object with an `instruction` in either HITL strategy's configuration:
+
+```typescript
+const hitl = new HITL({
+        adapter,
+        accetpanceAsTool: {
+                instruction: "Ask for approval only for irreversible actions."
+        }
+});
+```
+
+The direct method is available independently of the tool setting. Both
+strategies emit `hitl_acceptance_started(question)` before an acceptance
+request and `hitl_acceptance_received(question, answer)` after a human answer,
+along with `hitl_start` and `hitl_end`. The direct method is therefore the
+appropriate API when application or skill code owns the acceptance decision;
+the tool is appropriate when the agent must formulate the question.
+
+The strategies handle the acceptance tool differently from ordinary tools:
+
+- `HITL` adds `hitl_ask_acceptance` when `accetpanceAsTool` is enabled. Its tool
+    handler calls `emitAcceptance`, and the normal ReAct tool approval flow is
+    involved only if that tool is separately listed in `toolsUsage`.
+- `AutoPilotHITL` deliberately excludes `hitl_ask_acceptance` from its normal
+    `emitToolUsage` judge path. The acceptance tool is handled by
+    `emitAcceptance` so it does not trigger a second judge invocation, which
+    preserves judge tokens and reduces latency. For this detection,
+    `emitToolUsage` returns `{ answer: "deny", reason: "accetpance_separate_logic" }`.
+    This is a routing marker and is not the user's acceptance answer.
+- For direct AutoPilot `emitAcceptance` calls, set
+    `engageJudgeInEmittingAccetpance` to `true` or to `{ instruction: string }`
+    when the acceptance request should first be evaluated by the judge. A judge
+    result of `"use-hitl"` enters the inherited human flow; `"omit"` returns
+    `"deny"` without sending an adapter request.
+
+See [DefaultHITL.md](DefaultHITL.md#acceptance-requests) and
+[AutoPilotHITL.md](AutoPilotHITL.md#acceptance-requests) for strategy-specific
+examples and event details.
+
 ## HITL listeners
 
 The `HITL` instance can be configured with an optional `listeners` object that observes the request/response lifecycle without touching the adapter. Listeners live on the `HITL` side, so they work with every adapter and stay independent of the transport implementation.
@@ -148,6 +260,10 @@ const hitl = new HITL({
 > Because listeners are implemented on the `HITL` side, they are universally available for each adapter and independent from the adapter. You can switch from the socket.io adapter to a local adapter and keep the same listener logic without changes.
 
 ## HITL Communication Events
+
+For the complete transport contract, including request and response payloads,
+correlation ids, event origins, and custom adapter guidance, see
+[Transport.md](Transport.md).
 
 The `HITL` class communicates with adapters through generic request/response messages. The events the adapter can receive (`HITLRequest`) and must answer (`HITLResponse`) are:
 

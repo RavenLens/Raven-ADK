@@ -34,7 +34,7 @@ function createMockAdapter(): {
 }
 
 function createMockJudge(judgeResult: "omit" | "use-hitl") {
-	return {
+	const judge = {
 		agentConfig: { messages: [] },
 		invokeStructuredOutput: vi.fn(async (_schema: z.ZodType) => ({
 			messages: [{
@@ -42,7 +42,8 @@ function createMockJudge(judgeResult: "omit" | "use-hitl") {
 				structuredOutput: { judgeResult }
 			}]
 		}))
-	} as any;
+	};
+	return judge as any;
 }
 
 describe("AutoPilotHITL events", () => {
@@ -95,5 +96,37 @@ describe("AutoPilotHITL events", () => {
 
 		respond(sent[0].id, { type: "tool-approval", answer: "allow" });
 		await expect(approval).resolves.toEqual({ answer: "allow", reason: "user_answer" });
+	});
+
+	it("judges an acceptance request and omits it without contacting the adapter", async () => {
+		const { adapter, sent } = createMockAdapter();
+		const judge = createMockJudge("omit");
+		const hitl = new AutoPilotHITL(judge, {
+			adapter,
+			engageJudgeInEmittingAccetpance: { instruction: "Only ask for approval when strictly necessary." }
+		});
+
+		await expect(hitl.emitAcceptance("Run the cleanup?", "Removes temporary files.")).resolves.toBe("deny");
+		expect(sent).toHaveLength(0);
+		expect(judge.invokeStructuredOutput).toHaveBeenCalledTimes(1);
+	});
+
+	it("continues with acceptance when its judge returns use-hitl", async () => {
+		const { adapter, sent, respond } = createMockAdapter();
+		const hitl = new AutoPilotHITL(createMockJudge("use-hitl"), {
+			adapter,
+			engageJudgeInEmittingAccetpance: true
+		});
+
+		const acceptance = hitl.emitAcceptance("Deploy this change?");
+		await vi.waitFor(() => expect(sent).toHaveLength(1));
+		expect(sent[0].request).toEqual({
+			type: "acceptance",
+			question: "Deploy this change?",
+			context: undefined
+		});
+
+		respond(sent[0].id, { type: "acceptance-answer", answer: "allow" });
+		await expect(acceptance).resolves.toBe("allow");
 	});
 });

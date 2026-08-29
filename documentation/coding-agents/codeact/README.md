@@ -84,6 +84,8 @@ const codeAct = new CodeActAgent({
 
 ```
 
+> `hitlPreConfig` preloads the HITL tools for `CodeActAgent`
+
 `model`, `codingTools`, `codingMemory`, `nodeSandbox`, `pythonSandbox`, and
 `ui` are application-provided values. With `hitlStrategy: "use-hitl"`, CodeAct
 uses the configured `AutoPilotHITL` instance when a default CodeAct operation,
