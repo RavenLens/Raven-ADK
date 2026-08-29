@@ -152,7 +152,7 @@ export interface ReActAgentPluginSpec {
      * @param executionPlace - it's singular place from where execution happens - it can be singular atime
      * @returns Execution status and changed/unchanged state of agent is assigned in place of prior state, When success is `false` then doesn't use a result to override the agent state
     */
-    execute<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema>(
+    execute<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema<any>>(
         executionFrom: ExecutionFrom,
         agentConfig: ReActAgentConfig<Skills, Memory, HITL>,
         graphState: AgentMessagesGraphState
@@ -173,7 +173,7 @@ export type PluginResultEvent =
     | { status: "success"; result: PluginExecutionResult }
     | { status: "error"; error: unknown };
 
-export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema> {
+export interface ReActAgentConfig<Skills extends SchemaSkillStore, Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>, HITL extends HITLTransportSchema<any>> {
     model: AgentModel;
     systemPrompt: string;
     messages: MessagesVariations[];
@@ -972,12 +972,12 @@ export class ReActAgent
 <
     Skills extends SchemaSkillStore,
     Memory extends DeterministicMemorySchema | ToolBasedMemorySchema<any, any>,
-    HITL extends HITLTransportSchema,
+    HITL extends HITLTransportSchema<any>,
     SkillsSandbox extends CodeExecutionSandboxSchema
 > {
     private AgentGraph: Graph<AgentMessagesGraphState>;
     private readonly abortable: ReActAgentAbortable;
-    private EventsListeners: Record<string, (...args: any[]) => void | Promise<void>> = {};
+    private EventsListeners: Record<string, ((...args: any[]) => void | Promise<void>)[]> = {};
     private AnyEventListeners: Set<ReActAgentAnyEventListener> = new Set();
     private StreamListeners: Set<ReActAgentStreamListener> = new Set();
     private readonly ReActAgentMemoryInterface: ReActAgentMemory<Memory>;
@@ -2590,12 +2590,7 @@ export class ReActAgent
         eventName: EventName,
         eventListener: ReActAgentEvents[EventName]
     ): this {
-        if (this.EventsListeners[eventName]) {
-            console.warn(`Event listener for "${eventName}" is already registered. Only one listener per event name is allowed.`);
-            return this;
-        }
-
-        this.EventsListeners[eventName] = eventListener;
+        (this.EventsListeners[eventName] ??= []).push(eventListener);
         return this;
     }
 
@@ -2621,17 +2616,17 @@ export class ReActAgent
             this.emitStreamEvent(streamEvent);
         }
 
-        const eventListener = this.EventsListeners[eventName];
+        const eventListeners = this.EventsListeners[eventName];
 
-        if (!eventListener) {
+        if (!eventListeners) {
             return;
         }
 
-        const listener = eventListener as unknown as ReActAgentEvents[EventName];
-
-        void Promise.resolve((listener as any)(...eventArgs)).catch((error) => {
-            console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
-        });
+        for (const eventListener of eventListeners) {
+            void Promise.resolve((eventListener as any)(...eventArgs)).catch((error) => {
+                console.warn(`Event listener for "${String(eventName)}" failed during execution.`, error);
+            });
+        }
     }
 
     calculateUsedTokens(llmAnswer: LLMAnswer) {

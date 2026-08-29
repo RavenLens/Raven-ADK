@@ -569,13 +569,17 @@ describe("ReActAgent abort", () => {
             abort: abortController.signal
         });
         const abortListener = vi.fn();
+        const secondAbortListener = vi.fn();
         agent.onEvent("abort", abortListener);
+        agent.onEvent("abort", abortListener);
+        agent.onEvent("abort", secondAbortListener);
 
         const result = await agent.invoke();
 
         expect(invoke).not.toHaveBeenCalled();
         expect(result.state.isAborted).toBe(true);
-        expect(abortListener).toHaveBeenCalledOnce();
+        expect(abortListener).toHaveBeenCalledTimes(2);
+        expect(secondAbortListener).toHaveBeenCalledOnce();
     });
 
     it("returns immediately when the model is still pending", async () => {
